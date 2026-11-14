@@ -1,0 +1,30 @@
+# Library Doctor - example Docker Compose file. Change the three things marked CHANGE.
+services:
+  library-doctor:
+    image: ghcr.io/spikey1965/library-doctor:latest
+    container_name: library-doctor
+    restart: unless-stopped
+    # CHANGE: the user:group that owns your media folders (find it with: ls -ln /path/to/media)
+    user: "1000:1000"
+    ports:
+      - "8790:8790"
+    environment:
+      - TZ=Europe/London            # CHANGE: your time zone (the nightly scan runs at 03:00 local time)
+      - LD_SCAN_HOUR=3              # hour of the nightly scan
+      - LD_TRASH_DAYS=7             # how long cleaned-up files stay in the trash before they're deleted
+      # - LD_AUTH=off               # only if another login (Authentik, Authelia, your proxy) protects this page
+      # - LD_CLAMD_HOST=clamav      # optional: your ClamAV (clamd) for the Virus Scan check
+      # - LD_CLAMD_PORT=3310
+      # - LD_CLAM_ROOT=/scandir     # where ClamAV sees the same media folder
+    volumes:
+      - ./config:/config            # settings, password and the database live here
+      # CHANGE: your media folder. Mount it read-write: clean-up moves files into a .library-doctor-trash folder
+      # inside it (same disk, so it's instant and nothing is copied).
+      - /path/to/media:/media
+      # Optional: Agregarr's config/bin folder, for "Update yt-dlp" and picking Coming Soon trailers
+      # - /path/to/agregarr/config/bin:/agregarr-bin
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

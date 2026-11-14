@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z' fill='%232bc6b4'/%3E%3Cpath d='M15 34h9l4-9 6 17 4-8h11' fill='none' stroke='%230d1830' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='49' cy='34' r='3.4' fill='%23ff8b3d'/%3E%3C/svg%3E">
+<title>Library Doctor</title><meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;800&display=swap">
+<style>
+:root { --bg:#0d1830; --panel:#14213a; --card:#1b2c49; --line2:#3a5583; --fg:#eef3fb; --mut:#9fb0c9; --teal:#2bc6b4; --teal-bg:#123e45; --red:#ff7b7b; --red-bg:#3e1d27;
+  --head:"Outfit",system-ui,-apple-system,"Segoe UI",sans-serif; --font:system-ui,-apple-system,"Segoe UI",sans-serif; color-scheme:dark; }
+* { box-sizing:border-box; } [hidden] { display:none !important; }
+body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--fg); font:15px/1.5 var(--font); padding:16px; }
+.box { width:100%; max-width:380px; background:var(--panel); border-radius:18px; padding:26px 24px; display:flex; flex-direction:column; gap:14px; }
+.logo { display:flex; align-items:center; gap:10px; font:800 22px var(--head); } .logo svg { width:30px; height:30px; }
+h1 { margin:0; font:800 20px var(--head); } p { margin:0; color:var(--mut); font-size:14px; }
+label { display:flex; flex-direction:column; gap:5px; font-size:12px; font-weight:700; color:var(--mut); }
+input { font:inherit; font-size:15px; background:var(--card); color:var(--fg); border:1px solid var(--line2); border-radius:11px; padding:10px 12px; width:100%; }
+input:focus, button:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+button { font:700 15px var(--font); background:var(--teal); color:var(--bg); border:0; border-radius:11px; padding:11px 14px; cursor:pointer; }
+button:disabled { opacity:.6; cursor:default; }
+.msg { font-size:13px; border-radius:10px; padding:8px 11px; background:var(--red-bg); color:var(--red); } .msg[hidden] { display:none; }
+</style></head>
+<body>
+<form class="box" id="f" autocomplete="on">
+  <div class="logo"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z" fill="#2bc6b4"/><path d="M15 34h9l4-9 6 17 4-8h11" fill="none" stroke="#0d1830" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="49" cy="34" r="3.4" fill="#ff8b3d"/></svg>Library Doctor</div>
+  <h1 id="h">Log in</h1>
+  <p id="sub">Enter your Library Doctor password.</p>
+  <input type="text" name="username" value="library-doctor" autocomplete="username" hidden>
+  <label id="l1">Password<input type="password" id="pw" autocomplete="current-password" required></label>
+  <label id="l2" hidden>Type it again<input type="password" id="pw2" autocomplete="new-password"></label>
+  <div class="msg" id="msg" role="alert" hidden></div>
+  <button id="go">Log in</button>
+</form>
+<script>
+(async function () {
+  const $ = id => document.getElementById(id);
+  let setup = false;
+  try { const a = await (await fetch("/api/auth", { cache: "no-store" })).json();
+    if (a.in) { location.replace("/"); return; }
+    setup = a.on && !a.has_password; } catch (e) {}
+  if (setup) {
+    $("h").textContent = "Create a password"; $("sub").textContent = "This protects Library Doctor, because it can move files. Use at least 10 characters.";
+    $("pw").autocomplete = "new-password"; $("l2").hidden = false; $("pw2").required = true; $("go").textContent = "Create password";
+  }
+  $("pw").focus();
+  $("f").onsubmit = async ev => {
+    ev.preventDefault(); const m = $("msg"); m.hidden = true;
+    if (setup && $("pw").value !== $("pw2").value) { m.textContent = "The two passwords don't match."; m.hidden = false; return; }
+    $("go").disabled = true;
+    try {
+      const r = await fetch(setup ? "/api/auth/setup" : "/api/login", { method: "POST", headers: { "Content-Type": "application/json", "X-LD": "1" }, body: JSON.stringify({ password: $("pw").value }) });
+      const j = await r.json();
+      if (j.ok) { location.replace("/"); return; }
+      m.textContent = j.msg || "That didn't work."; m.hidden = false;
+    } catch (e) { m.textContent = "Can't reach Library Doctor."; m.hidden = false; }
+    $("go").disabled = false;
+  };
+})();
+</script>
+</body></html>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="Library Doctor">
+  <rect width="64" height="64" rx="14" fill="#0d1830"/>
+  <g transform="translate(7 7) scale(0.78125)">
+    <path d="M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z" fill="#2bc6b4"/>
+    <path d="M15 34h9l4-9 6 17 4-8h11" fill="none" stroke="#0d1830" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="49" cy="34" r="3.4" fill="#ff8b3d"/>
+  </g>
+</svg>

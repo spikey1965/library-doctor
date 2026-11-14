@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z' fill='%232bc6b4'/%3E%3Cpath d='M15 34h9l4-9 6 17 4-8h11' fill='none' stroke='%230d1830' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='49' cy='34' r='3.4' fill='%23ff8b3d'/%3E%3C/svg%3E">
+<title>Library Doctor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap">
+<style>
+/* Same look as the demo: dark navy, teal = healthy, orange = needs a look, red = problem */
+:root { --bg:#0d1830; --panel:#14213a; --card:#1b2c49; --line:#22355a; --line2:#3a5583; --fg:#eef3fb; --mut:#9fb0c9;
+  --teal:#2bc6b4; --teal-bg:#123e45; --orange:#ff8b3d; --orange-bg:#40281a; --red:#ff7b7b; --red-bg:#3e1d27;
+  --head:"Outfit",system-ui,-apple-system,"Segoe UI",sans-serif; --font:system-ui,-apple-system,"Segoe UI",sans-serif; color-scheme:dark; }
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+html,body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 var(--font); }
+body { padding:0 max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe-area-inset-left,0px)); }
+.wrap { max-width:1180px; margin:0 auto; }
+.nav { display:flex; flex-wrap:wrap; gap:10px 20px; align-items:center; padding:14px 0; border-bottom:1px solid var(--line); margin-bottom:16px; }
+.logo { display:flex; align-items:center; gap:9px; font:700 20px var(--head); }
+.logo svg { width:28px; height:28px; }
+.tabs { display:flex; gap:16px; font-size:14px; } .tabs span { color:var(--mut); padding:4px 0; } .tabs span.on { color:var(--fg); box-shadow:inset 0 -2px 0 var(--teal); }
+.ro { margin-left:auto; font:700 11px var(--font); letter-spacing:.07em; text-transform:uppercase; color:var(--teal); border:1px solid var(--teal); border-radius:999px; padding:3px 9px; }
+.grid { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:16px; }
+@media (max-width:860px) { .grid { grid-template-columns:minmax(0,1fr); } }
+.col { display:flex; flex-direction:column; gap:16px; min-width:0; }
+.panel { background:var(--panel); border-radius:16px; padding:16px; min-width:0; }
+.hero { display:flex; flex-wrap:wrap; gap:18px; align-items:center; }
+.ring { width:118px; height:118px; position:relative; flex:none; } .ring svg { width:100%; height:100%; transform:rotate(-90deg); }
+.ring b { position:absolute; inset:0; display:grid; place-items:center; font:800 25px var(--head); font-variant-numeric:tabular-nums; }
+.rings2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:16px; }
+.rcard { display:flex; align-items:center; gap:14px; text-align:left; color:var(--fg); background:var(--card); border:1px solid transparent; border-radius:14px; padding:12px 14px; cursor:pointer; font-family:var(--font); min-width:0; }
+.rcard:hover { border-color:var(--line); } .rcard:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+.ring.sm { width:84px; height:84px; } .ring.sm b { font-size:17px; line-height:1.05; text-align:center; } .ring.sm b small { display:block; font:600 10px var(--font); color:var(--mut); }
+.rcard .rt { min-width:0; display:flex; flex-direction:column; gap:3px; } .rcard .rl { font:700 15px var(--head); }
+.rcard .rs { font-size:12px; color:var(--mut); line-height:1.35; } .rcard .rs b { color:var(--fg); font-weight:700; }
+.lg { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:0; }
+@media (max-width:560px) { .rings2 { grid-template-columns:minmax(0,1fr); } }
+.hero h1 { margin:0; font:800 clamp(22px,4vw,30px)/1.15 var(--head); }
+.hero p { margin:4px 0 0; color:var(--mut); font-size:14px; }
+.meta { display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:8px; font-size:13px; color:var(--mut); font-variant-numeric:tabular-nums; } .meta b { color:var(--fg); }
+.bar { height:6px; border-radius:3px; background:var(--card); overflow:hidden; margin-top:10px; } .bar i { display:block; height:100%; background:var(--teal); transition:width .3s; }
+.checks { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin-top:16px; }
+.check { text-align:left; display:flex; flex-direction:column; gap:6px; color:var(--fg); background:var(--card); border:1px solid transparent; border-radius:14px; padding:12px; cursor:pointer; font-family:var(--font); min-width:0; }
+.check[aria-pressed="true"] { border-color:var(--teal); box-shadow:0 0 0 1px var(--teal); }
+.check:disabled { cursor:default; opacity:.55; }
+.ico { width:34px; height:34px; border-radius:50%; display:grid; place-items:center; background:var(--teal); color:var(--bg); } .check.att .ico { background:var(--orange); } .check.bad .ico { background:var(--red); }
+.ico svg { width:18px; height:18px; }
+.check .l { font:700 15px var(--head); } .check .s { font-size:12px; color:var(--mut); }
+.h { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin:0 0 12px; } .h h2 { margin:0; font:800 19px var(--head); }
+.filters { display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:13px; color:var(--mut); }
+select { font:inherit; background:var(--card); color:var(--fg); border:1px solid var(--line2); border-radius:9px; padding:5px 8px; }
+.list { display:flex; flex-direction:column; gap:10px; }
+.item { background:var(--card); border-radius:12px; padding:12px 13px; border-left:4px solid var(--orange); display:flex; flex-direction:column; gap:8px; min-width:0; }
+.item.bad { border-left-color:var(--red); } .item.ign { border-left-color:var(--line2); opacity:.7; }
+.item h3 { margin:0; font:700 15px var(--head); display:flex; gap:8px; flex-wrap:wrap; align-items:baseline; }
+.pill { font:700 11px var(--font); border-radius:999px; padding:2px 8px; background:var(--orange-bg); color:var(--orange); white-space:nowrap; } .pill.bad { background:var(--red-bg); color:var(--red); } .pill.lib { background:var(--bg); color:var(--mut); }
+.det { margin:0; font-size:13px; color:var(--mut); word-break:break-word; }
+.vers { display:flex; flex-direction:column; gap:6px; margin:0; padding:0; list-style:none; }
+.vers li { background:var(--bg); border-radius:9px; padding:7px 9px; font-size:13px; min-width:0; }
+.vers b { font-variant-numeric:tabular-nums; } .vers code, .det code { font:12px ui-monospace,Menlo,monospace; color:var(--mut); word-break:break-all; display:block; margin-top:2px; }
+.vers .hint { color:var(--orange); font-weight:700; }
+.acts { display:flex; flex-wrap:wrap; gap:8px; }
+button, a.btn { font:700 14px var(--font); border-radius:11px; padding:8px 13px; cursor:pointer; border:1px solid transparent; text-decoration:none; display:inline-flex; align-items:center; gap:7px; }
+.b-teal { background:var(--teal); color:var(--bg); } .b-line { background:transparent; color:var(--fg); border-color:var(--line2); }
+button:disabled { opacity:.5; cursor:default; }
+button:focus-visible, a.btn:focus-visible, .check:focus-visible, select:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+.empty { color:var(--mut); font-size:14px; padding:6px 2px; }
+.empty b { color:var(--teal); }
+.scans { display:flex; flex-direction:column; gap:8px; }
+.sc { background:var(--card); border-radius:12px; padding:10px; font-size:13px; } .sc:first-child { background:var(--teal); color:var(--bg); }
+.sc b { display:block; font:700 14px var(--head); } .sc small { color:var(--mut); } .sc:first-child small { color:var(--bg); opacity:.8; }
+.note { font-size:13px; color:var(--mut); }
+.note b { color:var(--fg); }
+.badge { font:700 11px var(--font); border-radius:999px; padding:2px 8px; margin-right:6px; white-space:nowrap; }
+.badge.keep { background:var(--teal-bg); color:var(--teal); } .badge.remove { background:var(--orange-bg); color:var(--orange); } .badge.plex { background:var(--bg); color:var(--mut); border:1px solid var(--line2); }
+.vers li.keep { box-shadow:inset 3px 0 0 var(--teal); } .vers li.remove { box-shadow:inset 3px 0 0 var(--orange); opacity:.92; }
+.why { display:block; font-size:12px; color:var(--mut); margin-top:2px; }
+.confirm { background:var(--orange-bg); border-radius:10px; padding:10px 12px; font-size:13px; display:flex; flex-direction:column; gap:8px; }
+.confirm ul { margin:0; padding-left:18px; } .confirm code { font:12px ui-monospace,Menlo,monospace; word-break:break-all; color:var(--fg); }
+.b-orange { background:var(--orange); color:var(--bg); }
+.msg { font-size:13px; border-radius:10px; padding:8px 11px; background:var(--teal-bg); color:var(--teal); }
+.msg.err { background:var(--red-bg); color:var(--red); }
+.tr { background:var(--card); border-radius:12px; padding:10px; font-size:13px; display:flex; flex-direction:column; gap:4px; min-width:0; }
+.tr b { font:700 14px var(--head); } .tr code { font:11px ui-monospace,Menlo,monospace; color:var(--mut); word-break:break-all; } .tr small { color:var(--mut); }
+.trash { display:flex; flex-direction:column; gap:8px; max-height:420px; overflow:auto; }
+.ev { font-size:13px; color:var(--mut); display:flex; flex-direction:column; gap:6px; } .ev b { color:var(--fg); font-weight:600; }
+.pill.sure { background:var(--teal-bg); color:var(--teal); }
+button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
+.tab { font:inherit; font-size:14px; background:none; border:0; color:var(--mut); padding:4px 0; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+.tab svg { width:16px; height:16px; } .tab.on { color:var(--fg); box-shadow:inset 0 -2px 0 var(--teal); }
+.count { font:700 11px var(--font); background:var(--orange); color:var(--bg); border-radius:999px; padding:1px 7px; }
+#openTrash svg, .tb button svg { width:16px; height:16px; }
+.bin { display:flex; flex-direction:column; gap:14px; }
+.set { display:flex; flex-direction:column; gap:14px; max-width:880px; }
+.set .intro { color:var(--mut); font-size:14px; margin:0; } .set h2 { margin:6px 0 0; font:800 20px var(--head); } .set h2 small { font:500 13px var(--font); color:var(--mut); margin-left:6px; }
+.start { background:var(--orange-bg, #40281a); color:var(--fg); border:1px solid var(--orange); border-radius:14px; padding:12px 14px; font-size:14px; } .start b { color:var(--orange); }
+.app { background:var(--panel); border-radius:16px; padding:14px 16px; display:flex; flex-direction:column; gap:10px; min-width:0; }
+.app h3 { margin:0; font:800 17px var(--head); display:flex; align-items:center; gap:8px; flex-wrap:wrap; } .app h3 .opt { font:600 11px var(--font); letter-spacing:.06em; text-transform:uppercase; color:var(--mut); border:1px solid var(--line2); border-radius:999px; padding:2px 8px; }
+.app .help { margin:0; font-size:13px; color:var(--mut); }
+.fl { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+.fl label { display:flex; flex-direction:column; gap:4px; font-size:12px; font-weight:700; color:var(--mut); min-width:0; }
+.fl input, .fl select, .pm input { font:inherit; font-size:14px; font-weight:400; background:var(--card); color:var(--fg); border:1px solid var(--line2); border-radius:10px; padding:8px 10px; min-width:0; width:100%; box-sizing:border-box; }
+.fl input:focus, .fl select:focus, .pm input:focus { outline:2px solid var(--teal); outline-offset:1px; }
+.pm { display:flex; flex-direction:column; gap:6px; background:var(--card); border-radius:12px; padding:10px 12px; }
+.pm .ph { font-size:12px; font-weight:700; color:var(--mut); } .pm .pr { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto; gap:8px; align-items:center; } .pm .pr span { color:var(--mut); }
+.pm p { margin:0; font-size:13px; color:var(--mut); }
+.app .acts { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.tres2 { font-size:13px; border-radius:10px; padding:7px 10px; } .tres2.ok { background:var(--teal-bg); color:var(--teal); } .tres2.bad { background:var(--red-bg, #3e1d27); color:var(--red); }
+.savebar { position:sticky; bottom:0; display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:var(--bg); border-top:1px solid var(--line); padding:12px 0; }
+@media (max-width:560px) { .pm .pr { grid-template-columns:minmax(0,1fr) auto; } .pm .pr span { display:none; } }
+.binhead { display:flex; flex-wrap:wrap; gap:22px; align-items:center; background:var(--panel); border-radius:20px; padding:18px 22px; }
+.bigbin { width:132px; height:140px; flex:none; overflow:visible; }
+.bigbin .b-shadow { fill:#000; opacity:.28; }
+.bigbin .b-body { fill:var(--card); stroke:var(--line2); stroke-width:3; }
+.bigbin .b-ribs { stroke:var(--line2); stroke-width:5; stroke-linecap:round; fill:none; }
+.bigbin .b-lidbar { fill:var(--teal); }
+.bigbin .b-handle { fill:none; stroke:var(--teal); stroke-width:5; stroke-linecap:round; }
+.bigbin .b-sheet { fill:#eef3fb; stroke:#c9d6ea; stroke-width:2; } .bigbin .b-sheet2 { fill:#dfe9f7; }
+.bigbin .b-film { fill:var(--orange); stroke:#c96a2c; stroke-width:2; }
+.bigbin .b-lines { stroke:#9fb0c9; stroke-width:3; stroke-linecap:round; fill:none; }
+.bigbin .b-lid { transform-origin:128px 50px; transition:transform .45s cubic-bezier(.3,1.4,.5,1); }
+.bigbin .b-papers { opacity:0; transform:translateY(30px); transition:opacity .3s, transform .45s; }
+.binhead.full .b-lid { transform:rotate(16deg) translate(6px,-14px); }
+.binhead.full .b-papers { opacity:1; transform:none; }
+.binmeta { flex:1 1 220px; min-width:0; }
+.binmeta h1 { margin:0; font:800 30px var(--head); }
+.binbig { font:800 clamp(22px,4vw,34px) var(--head); color:var(--teal); font-variant-numeric:tabular-nums; margin-top:2px; }
+.binhead:not(.full) .binbig { color:var(--mut); }
+.binmeta p { margin:4px 0 0; color:var(--mut); font-size:14px; }
+.deskbin { display:flex; align-items:center; gap:16px; width:100%; text-align:left; background:var(--panel); border:1px solid transparent; border-radius:20px; padding:14px 18px; color:inherit; font:inherit; cursor:pointer; transition:border-color .2s, transform .2s; }
+.deskbin:hover, .deskbin:focus-visible { border-color:var(--teal); transform:translateY(-2px); }
+.deskbin .bigbin { width:84px; height:90px; }
+.deskbin.full .b-lid, .deskbin:hover .b-lid { transform:rotate(16deg) translate(6px,-14px); }
+.deskbin.full .b-papers { opacity:1; transform:none; }
+.deskbin .dm { flex:1; min-width:0; }
+.deskbin .dm b { display:block; font:800 20px var(--head); }
+.deskbin .dm span { display:block; white-space:nowrap; font:800 18px var(--head); color:var(--mut); margin-top:2px; font-variant-numeric:tabular-nums; }
+.deskbin.full .dm span { color:var(--teal); }
+.deskbin .dm small { display:block; color:var(--mut); font-size:13px; margin-top:4px; }
+.deskbin .go { display:none; }
+.deskbin .dm small::after { content:" · Open →"; color:var(--teal); font-weight:700; }
+@media (prefers-reduced-motion: reduce) { .bigbin .b-lid, .bigbin .b-papers, .deskbin { transition:none; } }
+.tb { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.tb input[type=search] { font:inherit; font-size:14px; background:var(--card); color:var(--fg); border:1px solid var(--line2); border-radius:10px; padding:7px 10px; min-width:0; flex:1 1 200px; }
+.tb .sp { flex:1 1 auto; }
+.b-red { background:var(--red-bg); color:var(--red); border-color:var(--red); }
+.files { display:flex; flex-direction:column; border-radius:14px; overflow:hidden; border:1px solid var(--line); }
+.frow { display:grid; grid-template-columns:28px 38px minmax(0,1fr) 92px 120px 110px; gap:10px; align-items:center; padding:10px 12px; background:var(--panel); border-top:1px solid var(--line); cursor:pointer; }
+.frow:first-child { border-top:0; } .frow.hd { background:var(--card); cursor:default; font:700 11px var(--font); letter-spacing:.06em; text-transform:uppercase; color:var(--mut); }
+.frow.sel { background:var(--teal-bg); }
+.frow input { width:17px; height:17px; accent-color:var(--teal); }
+.ftype { width:38px; height:44px; border-radius:7px; background:var(--card); border:1px solid var(--line2); display:grid; place-items:end center; padding-bottom:5px; font:800 9px var(--font); color:var(--teal); text-transform:uppercase; }
+.ftype.side { color:var(--mut); }
+.fname { min-width:0; } .fname b { display:block; font-size:14px; word-break:break-word; } .fname small { display:block; color:var(--mut); font-size:12px; word-break:break-all; }
+.fname .rs { color:var(--orange); }
+.fnum { font-size:13px; font-variant-numeric:tabular-nums; color:var(--fg); } .fnum small { display:block; color:var(--mut); font-size:12px; }
+.fnum.soon { color:var(--orange); }
+.bincols { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+.binempty { text-align:center; padding:40px 16px; color:var(--mut); } .binempty svg { width:64px; height:64px; color:var(--line2); }
+@media (max-width:720px) { .frow { grid-template-columns:28px 38px minmax(0,1fr); } .frow .fnum { grid-column:3; } .frow.hd .fnum { display:none; } }
+.done { display:flex; flex-direction:column; gap:10px; margin-top:6px; }
+.doneh { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-top:18px; }
+.doneh h3 { margin:0; font:800 17px var(--head); }
+.dn { background:var(--card); border-radius:12px; padding:11px 13px; display:flex; flex-direction:column; gap:6px; border-left:4px solid var(--line2); min-width:0; }
+.dn.ok { border-left-color:var(--teal); } .dn.warn { border-left-color:var(--orange); }
+.dn b { font:700 15px var(--head); } .dn .st { font-size:13px; font-weight:700; } .dn.ok .st { color:var(--teal); } .dn.warn .st { color:var(--orange); } .dn.checking .st, .dn.waiting .st { color:var(--mut); } .dn.waiting { border-left-color:var(--line2); border-left-style:dashed; }
+.sched2 { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:6px; }
+.dn small { color:var(--mut); font-size:12px; word-break:break-all; display:block; }
+.tdl summary { cursor:pointer; font-size:13px; color:var(--mut); }
+.tdl ul { list-style:none; margin:6px 0 0; padding:0; display:flex; flex-direction:column; gap:3px; font-size:12.5px; }
+.tdl li { display:flex; justify-content:space-between; gap:10px; } .tdl li span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tdl li span:last-child { flex:none; color:var(--mut); font-variant-numeric:tabular-nums; } .tdl li.done span:last-child { color:var(--teal); } .tdl li.converting span:last-child { color:var(--fg); } .tdl li.failed span:last-child, .tdl li.notin span:last-child { color:var(--orange); }
+.eps { margin:8px 0 0; } .eps summary { cursor:pointer; color:var(--teal); font-weight:600; font-size:13px; }
+.eps table { width:100%; border-collapse:collapse; margin-top:6px; font-size:13px; }
+.eps td { padding:4px 8px 4px 0; border-top:1px solid var(--line); vertical-align:top; }
+.eps td:first-child { color:var(--mut); white-space:nowrap; font-variant-numeric:tabular-nums; } .eps s { color:var(--mut); }
+.epsw { overflow-x:auto; }
+.vstat { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; margin-bottom:12px; }
+.vstat > div { background:var(--card); border-radius:12px; padding:10px 14px; min-width:0; }
+.vstat small { display:block; color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+.vstat b { display:block; font:700 15px var(--head); margin-top:2px; } .vstat span { display:block; color:var(--mut); font-size:13px; margin-top:2px; }
+.vstat .bad b { color:var(--orange); }
+.wl { list-style:none; margin:8px 0 0; padding:0; display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:4px 16px; font-size:13px; color:var(--mut); }
+.wl b { display:inline-block; min-width:38px; color:var(--fg); font-variant-numeric:tabular-nums; }
+.tpick { margin-top:10px; background:var(--card); border-radius:12px; padding:12px; }
+.tpick form { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; } .tpick input { flex:1; min-width:180px; font:14px var(--font); padding:8px 10px; border-radius:10px; border:1px solid var(--line2); background:var(--panel); color:var(--fg); }
+.tres { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; }
+.tres > div { background:var(--panel); border-radius:10px; overflow:hidden; display:flex; flex-direction:column; min-width:0; }
+.tres img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:var(--bg); }
+.tres .tt { padding:8px 10px 0; font-size:13px; font-weight:700; line-height:1.3; word-break:break-word; } .tres .tm { padding:2px 10px 0; font-size:12px; color:var(--mut); }
+.tres .tm .long { color:var(--orange); font-weight:700; } .tres .acts { padding:8px 10px 10px; margin-top:auto; }
+.sres { display:flex; flex-direction:column; gap:8px; }
+.sres > div { background:var(--panel); border-radius:10px; padding:10px 12px; display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; min-width:0; }
+.sres .st { flex:1 1 260px; min-width:0; font-size:13px; font-weight:700; word-break:break-all; } .sres .sm2 { font-size:12px; color:var(--mut); flex:1 1 100%; }
+.sres .sv { color:var(--teal); font-weight:700; } .sres .fl { display:inline-block; background:var(--bg); border-radius:999px; padding:1px 7px; margin-right:4px; font-size:11px; color:var(--fg); }
+.uw { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+.uw td { padding:5px 8px 5px 0; border-top:1px solid var(--line); vertical-align:middle; } .uw td.n { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--mut); }
+.uw td.a { text-align:right; white-space:nowrap; } .uw a { color:var(--fg); }
+.uww { overflow-x:auto; max-height:420px; overflow-y:auto; }
+.rvbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="nav">
+    <div class="logo"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z" fill="#2bc6b4"/><path d="M15 34h9l4-9 6 17 4-8h11" fill="none" stroke="#0d1830" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="49" cy="34" r="3.4" fill="#ff8b3d"/></svg>Library Doctor</div>
+    <div class="tabs" role="tablist"><button class="tab on" id="tabScan" role="tab" aria-selected="true">Scan Library</button><button class="tab" id="tabTrash" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Trash <span class="count" id="trashCount" hidden></span></button><button class="tab" id="tabSet" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M5.5 18.5l1.8-1.8M16.7 7.3l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Settings</button></div>
+    <span class="ro" title="Nothing is deleted straight away: clean-up moves copies to the trash, which you can restore for 7 days.">Nothing deleted without asking</span>
+    <button class="b-line sm" id="logout" hidden style="margin-left:10px">Log out</button>
+  </div>
+  <div class="grid" id="scanView">
+    <div class="col">
+      <div class="panel">
+        <div class="hero">
+          <div class="ring" aria-hidden="true"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--orange)" stroke-width="12"/><circle id="arc" cx="60" cy="60" r="50" fill="none" stroke="var(--teal)" stroke-width="12" stroke-linecap="round" stroke-dasharray="0 999"/></svg><b id="ringN">–</b></div>
+          <div style="flex:1 1 240px;min-width:0">
+            <h1>Library Health <span id="score">–</span></h1>
+            <p id="last">Loading…</p>
+            <div class="meta"><span><b id="nItems">–</b> items</span><span><b id="nFiles">–</b> files checked</span><span><b id="nOpen">–</b> to look at</span><span><b id="nIgn">0</b> ignored</span></div>
+            <div class="bar" id="barWrap" hidden><i id="bar" style="width:0"></i></div>
+          </div>
+          <button class="b-teal" id="scanBtn">Scan now</button>
+        </div>
+        <div class="rings2">
+          <button class="rcard" id="rSpace" title="Open Quality &amp; Space"><div class="ring sm" aria-hidden="true"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--panel)" stroke-width="14"/><circle id="arcSp" cx="60" cy="60" r="50" fill="none" stroke="var(--teal)" stroke-opacity=".4" stroke-width="14" stroke-dasharray="0 999"/><circle id="arcSf" cx="60" cy="60" r="50" fill="none" stroke="var(--teal)" stroke-width="14" stroke-dasharray="0 999"/></svg><b id="ringSp">–</b></div>
+            <span class="rt"><span class="rl">Space saved</span><span class="rs" id="spaceTxt">–</span></span></button>
+          <button class="rcard" id="rJobs" title="Go to the next job"><div class="ring sm" aria-hidden="true"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--panel)" stroke-width="14"/><circle id="arcJo" cx="60" cy="60" r="50" fill="none" stroke="var(--orange)" stroke-width="14" stroke-dasharray="0 999"/><circle id="arcJb" cx="60" cy="60" r="50" fill="none" stroke="#6aa8ff" stroke-width="14" stroke-dasharray="0 999"/><circle id="arcJd" cx="60" cy="60" r="50" fill="none" stroke="var(--teal)" stroke-width="14" stroke-dasharray="0 999"/></svg><b id="ringJ">–</b></div>
+            <span class="rt"><span class="rl">Jobs left</span><span class="rs" id="jobsTxt" title="Episodes are counted one by one, so this can be higher than the number of cards. Unwatched isn't counted: it's information, not a job.">–</span></span></button>
+        </div>
+        <div class="checks" id="checks" role="group" aria-label="Checks"></div>
+      </div>
+      <div class="panel">
+        <div class="h"><h2 id="listTitle">Duplicates</h2>
+          <div class="filters"><label for="lib">Library</label><select id="lib"><option value="">All</option></select>
+            <label><input type="checkbox" id="showIgn"> Show ignored</label></div></div>
+        <div class="list" id="list" aria-live="polite"></div>
+      </div>
+    </div>
+    <div class="col">
+      <button class="deskbin" id="deskBin" aria-label="Open the Trash"><span id="deskBinArt"></span><span class="dm"><b>Trash</b><span id="deskBinN">Empty</span><small id="deskBinSub">Clean-ups land here first</small></span><span class="go">Open →</span></button>
+      <div class="panel"><div class="h"><h2>Scans</h2></div><div class="scans" id="scans"></div>
+        <p class="note" id="sched"></p></div>
+</div>
+    </div>
+  </div>
+  <section class="set" id="setView" hidden aria-label="Settings"></section>
+  <section class="bin" id="trashView" hidden aria-label="Trash">
+    <div class="binhead" id="binHead">
+      <svg class="bigbin" viewBox="0 0 160 170" role="img" aria-label="Trash">
+        <ellipse cx="80" cy="160" rx="54" ry="7" class="b-shadow"/>
+        <g class="b-papers">
+          <rect x="44" y="34" width="34" height="44" rx="4" transform="rotate(-14 61 56)" class="b-sheet"/>
+          <rect x="70" y="26" width="34" height="44" rx="4" transform="rotate(9 87 48)" class="b-sheet b-sheet2"/>
+          <rect x="88" y="38" width="26" height="34" rx="4" transform="rotate(24 101 55)" class="b-film"/>
+          <path d="M78 36h18M78 44h14M78 52h18" transform="rotate(9 87 48)" class="b-lines"/>
+        </g>
+        <path d="M30 58h100l-9 92a8 8 0 0 1-8 7H47a8 8 0 0 1-8-7z" class="b-body"/>
+        <path d="M58 76l3 62M80 76v62M102 76l-3 62" class="b-ribs"/>
+        <g class="b-lid">
+          <rect x="22" y="44" width="116" height="14" rx="7" class="b-lidbar"/>
+          <path d="M64 44v-6a5 5 0 0 1 5-5h22a5 5 0 0 1 5 5v6" class="b-handle"/>
+        </g>
+      </svg>
+      <div class="binmeta"><h1>Trash</h1><div class="binbig" id="binBig">0 items</div><p id="binSub"></p></div>
+    </div>
+    <div class="tb">
+      <input type="search" id="binSearch" placeholder="Search the trash" aria-label="Search the trash">
+      <select id="binSort" aria-label="Sort"><option value="date">Newest first</option><option value="size">Biggest first</option><option value="name">Name</option><option value="expires">Deleted soonest</option></select>
+      <span class="sp"></span>
+      <button class="b-teal" id="binRestore" disabled>Put Back</button>
+      <button class="b-red" id="binDelete" disabled>Delete Immediately</button>
+      <button class="b-line" id="binEmpty">Empty Trash</button>
+    </div>
+    <div id="binMsg"></div>
+    <div class="files" id="binList"></div>
+    <div class="bincols">
+      <div class="panel"><div class="h"><h2>Activity</h2></div><div class="ev" id="events"></div></div>
+      <div class="panel"><div class="h"><h2>How clean-up works</h2></div>
+        <p class="note"><b>Clean up</b> never deletes. It moves the copies marked Remove into this trash, then asks Plex and Radarr/Sonarr to rescan, so they don't go looking for them. <b>Put Back</b> returns a file to where it was. The trash empties itself after <span id="tdays">7</span> days. Plex's own converted copies are left alone: remove those in Plex.</p></div>
+    </div>
+  </section>
+</div>
+<script>
+(function () {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const esc = t => String(t == null ? "" : t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const IC = {
+    missing: '<path d="M4 7h6l2 2h8v10H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m10 12 4 4m0-4-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    dupes: '<rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 4H6a2 2 0 0 0-2 2v10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    meta: '<path d="M4 4h9l7 7-9 9-7-7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="8.5" cy="8.5" r="1.6" fill="currentColor"/>',
+    health: '<path d="M3 12h4l2-5 4 10 2-5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    subs: '<rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 13h4m2 0h4M7 16h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    virus: '<path d="M12 3 5 6v5.5c0 4.4 3 8.2 7 9.5 4-1.3 7-5.1 7-9.5V6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 8v5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="16.3" r="1.3" fill="currentColor"/>',
+    coming: '<rect x="3" y="9" width="18" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="m3.5 9 1-4.5 16 3.5-1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m10 12.5 4 2.5-4 2.5z" fill="currentColor"/>',
+    quality: '<path d="M4 18h16M6 18V9m4 9V5m4 13v-7m4 7v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    unwatched: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/><path d="M4 4l16 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    ok: '<path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
+  };
+  const svg = k => '<svg viewBox="0 0 24 24" aria-hidden="true">' + IC[k] + "</svg>";
+  const CHECKS = [
+    { id: "missing", label: "Missing Files", sev: "bad", unit: "missing", live: true },
+    { id: "dupes", label: "Duplicates", sev: "att", unit: "to review", live: true },
+    { id: "meta", label: "Metadata Gaps", sev: "att", unit: "to fix", live: true }, { id: "health", label: "File Health", sev: "bad", unit: "to replace", live: true },
+    { id: "subs", label: "Subtitles", sev: "att", unit: "to fix", live: true }, { id: "virus", label: "Virus Scan", sev: "bad", unit: "found", live: true },
+    { id: "coming", label: "Coming Soon", sev: "att", unit: "to fix", live: true },
+    { id: "quality", label: "Quality & Space", sev: "att", unit: "to look at", live: true },
+    { id: "unwatched", label: "Unwatched", sev: "att", unit: "unwatched", live: true }
+  ];
+  let addedAway = false;   // set when you open an "Add in Radarr/Sonarr" link; coming back to this tab rescans
+  window.addEventListener("focus", async () => {
+    if (!addedAway || !S || S.running) return;
+    addedAway = false; flash = { text: "Welcome back. Scanning again so anything you just added drops off the list." };
+    try { await api("/api/scan", {}); } catch (e) {} load();
+  });
+  let pick = null, small = null;   // small = open smaller-copy picker: {id, busy, err, results, cur, msg, ask}   // open trailer picker: {id, q, results, busy, err}
+  let S = null, filter = null, poll = null, confirmId = null, confirmAll = false, purgeAsk = false, flash = null, review = null;
+  const overrides = {};
+  const human = n => { n = +n || 0; for (const u of ["B", "KB", "MB", "GB", "TB"]) { if (n < 1024 || u === "TB") return u === "B" ? n + " B" : n.toFixed(1) + " " + u; n /= 1024; } };
+  const base = p => String(p || "").split("/").pop();
+  const removable = i => eff(i).filter(v => v.action === "remove");
+  async function api(path, body) {
+    const r = await fetch(path, body === undefined ? { cache: "no-store" } : { method: "POST", headers: { "Content-Type": "application/json", "X-LD": "1" }, body: JSON.stringify(body) });
+    if (r.status === 401) { location.href = "/login"; throw new Error("Logged out"); }
+    if (!r.ok && r.status !== 409) throw new Error(path + " " + r.status);
+    return r.json();
+  }
+  // Space saved + Jobs left rings. seg(): one coloured arc starting at `from` (0-1) and `len` long.
+  function seg(el, from, len) { const C = 2 * Math.PI * 50; $(el).setAttribute("stroke-dasharray", "0 " + (C * from) + " " + (C * len) + " " + C); }
+  function rings2(st) {
+    if (!st) return;
+    const tot = st.saved + st.possible, fs = tot ? st.freed / tot : 0, ps = tot ? st.pending / tot : 0;
+    seg("arcSf", 0, fs); seg("arcSp", fs, ps);
+    const big = human(st.saved).split(" ");
+    $("ringSp").innerHTML = `<span>${esc(big[0])}<small>${esc(big[1] || "")}</small></span>`;
+    $("spaceTxt").innerHTML = (st.saved ? `<span class="lg" style="background:var(--teal)"></span><b>${human(st.freed)}</b> freed` + (st.pending ? ` · <span class="lg" style="background:var(--teal);opacity:.4"></span><b>${human(st.pending)}</b> still in a trash or recycle bin` : "") : "Nothing saved yet")
+      + (st.possible > 1 << 20 ? `<br>About <b>${human(st.possible)}</b> more could be saved` : "");
+    const j = st.jobs, jt = j.open + j.busy + j.done;
+    seg("arcJd", 0, jt ? j.done / jt : 0); seg("arcJb", jt ? j.done / jt : 0, jt ? j.busy / jt : 0); seg("arcJo", jt ? (j.done + j.busy) / jt : 0, jt ? j.open / jt : 0);
+    $("ringJ").innerHTML = j.open ? `<span>${j.open}<small>left</small></span>` : `<span>✓<small>all done</small></span>`;
+    $("jobsTxt").innerHTML = `<span class="lg" style="background:var(--teal)"></span><b>${j.done}</b> done (30 days)` + (j.busy ? ` · <span class="lg" style="background:#6aa8ff"></span><b>${j.busy}</b> in progress` : "")
+      + ` · <span class="lg" style="background:var(--orange)"></span><b>${j.open}</b> to do` + (j.warn ? `<br><b style="color:var(--orange)">${j.warn} need${j.warn === 1 ? "s" : ""} a look</b> (see Done)` : "");
+  }
+  function fmt(iso) { if (!iso) return "–"; const d = new Date(iso); return d.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); }
+  function render() {
+    const scan = S.scans.find(s => s.ok) || null;
+    const open = S.issues.filter(i => !i.ignored), ign = S.issues.length - open.length;
+    if (!filter) filter = open.some(i => i.chk === "missing") ? "missing" : "dupes";
+    const files = scan ? scan.files : 0, bad = new Set(open.filter(i => !["meta", "subs", "coming", "quality", "unwatched"].includes(i.chk)).flatMap(i => i.detail.versions ? i.detail.versions.filter(v => v.action !== "keep").map(v => v.path) : [i.detail.path]));
+    const score = files ? Math.max(0, 100 - bad.size / files * 100) : 0;
+    $("score").textContent = $("ringN").textContent = scan ? (score >= 99.95 ? "100%" : score.toFixed(1) + "%") : "–";
+    const C = 2 * Math.PI * 50; $("arc").setAttribute("stroke-dasharray", (C * score / 100) + " " + C);
+    rings2(S.stats);
+    $("nItems").textContent = scan ? scan.items.toLocaleString("en-GB") : "–";
+    $("nFiles").textContent = scan ? scan.files.toLocaleString("en-GB") : "–";
+    $("nOpen").textContent = open.length; $("nIgn").textContent = ign;
+    $("last").textContent = S.running ? (S.step || "Scanning") + "…" : scan ? "Last scan: " + fmt(scan.finished) : "No scan yet. Press Scan now.";
+    $("barWrap").hidden = !S.running; $("bar").style.width = Math.round((S.progress || 0) * 100) + "%";
+    $("scanBtn").disabled = S.running; $("scanBtn").textContent = S.running ? "Scanning…" : "Scan now";
+    $("checks").innerHTML = CHECKS.map(c => {
+      if (!c.live) return `<button class="check" disabled><span class="ico">${svg(c.id)}</span><span class="l">${esc(c.label)}</span><span class="s">Coming in stage ${c.stage}</span></button>`;
+      const n = c.id === "unwatched" ? open.filter(i => i.chk === c.id).reduce((a, i) => a + (i.detail.count || 0), 0) : open.filter(i => i.chk === c.id).length;
+      return `<button class="check ${n ? c.sev : ""}" data-c="${c.id}" aria-pressed="${filter === c.id}"><span class="ico">${svg(n ? c.id : "ok")}</span><span class="l">${esc(c.label)}</span><span class="s">${n ? n + " " + c.unit : "All clear"}</span></button>`;
+    }).join("");
+    $("checks").querySelectorAll("[data-c]").forEach(b => b.onclick = () => { filter = b.dataset.c; render(); });
+    const libs = [...new Set(S.issues.map(i => i.library))].sort(), cur = $("lib").value;
+    $("lib").innerHTML = '<option value="">All libraries</option>' + libs.map(l => `<option ${l === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
+    list();
+    $("scans").innerHTML = S.scans.slice(0, 6).map(s => `<div class="sc"><b>${s.ok ? "Scan completed" : "Scan failed"}</b>${s.ok ? `${s.issues} to look at · ${s.items.toLocaleString("en-GB")} items` : esc(s.note)}<br><small>${fmt(s.finished)}</small></div>`).join("") || '<p class="empty">No scans yet.</p>';
+    $("sched").innerHTML = "Scans automatically every night at " + String(S.scan_hour).padStart(2, "0") + ":00." +
+      `<span class="sched2">${S.gotify ? "Phone summary via Gotify after the scan, only when there's news." : "Gotify phone summary: not set up."}${S.gotify ? '<button class="b-line sm" id="gTest">Send a test</button>' : ""}</span>`;
+    const gt = $("gTest"); if (gt) gt.onclick = async () => { gt.disabled = true; gt.textContent = "Sending…";
+      const r = await api("/api/gotifytest", {}); gt.textContent = r.ok ? "Sent ✓" : "Failed"; if (!r.ok) flash = { err: true, text: "Gotify: " + r.error }; setTimeout(() => { gt.disabled = false; gt.textContent = "Send a test"; }, 4000); };
+    trashPanel();
+  }
+  const LBL = { keep: "Keep", remove: "Remove", plex: "Plex copy" };
+  // your choice of keeper per duplicate (index into its copies); the app's pick is only a suggestion
+  function eff(i) {
+    const vs = i.detail.versions || [], k = overrides[i.id];
+    if (k == null) return vs;
+    return vs.map((v, j) => v.action === "plex" ? v : Object.assign({}, v, j === k
+      ? { action: "keep", reason: "You chose to keep this one" } : { action: "remove", reason: "You chose to keep another copy" }));
+  }
+  const isSure = i => overrides[i.id] == null && i.detail.confidence === "sure";
+  function shown() {
+    const lib = $("lib").value, showIgn = $("showIgn").checked;
+    const busy = new Set((S.done || []).filter(x => x.status === "checking").map(x => x.issue_id));
+    return S.issues.filter(i => i.chk === filter && !busy.has(i.id) && (!lib || i.library === lib) && (showIgn || !i.ignored));
+  }
+  function card(i, inReview) {
+    const d = i.detail, vs = eff(i), rm = removable(i), lo = overrides[i.id] == null ? (d.leftovers || []) : [];
+    const vers = d.versions ? '<ul class="vers">' + vs.map((v, j) => `<li class="${esc(v.action)}"><span class="badge ${esc(v.action)}">${LBL[v.action] || ""}</span><b>${esc(v.desc)}</b><span class="why">${esc(v.reason)}</span><code>${esc(v.path)}</code>${
+        !i.ignored && v.action !== "keep" && v.action !== "plex" ? `<div class="acts" style="margin-top:6px"><button class="b-line sm" data-keep="${esc(i.id)}|${j}">Keep this one instead</button></div>` : ""}</li>`).join("") + "</ul>" : "";
+    const path = d.path ? `<code>${esc(d.path)}</code>` : "";
+    const links = i.links.map(l => `<a class="btn b-line" href="${esc(l.url)}" target="_blank" rel="noopener"${l.label.startsWith("Add in ") ? " data-added=\"1\"" : ""}>${esc(l.label)}</a>`).join("");
+    const plexBtn = vs.some(v => v.action === "plex") ? `<a class="btn b-line" href="${esc(S.plex_settings)}" target="_blank" rel="noopener">Plex optimized versions</a>` : "";
+    const loLine = lo.length ? `<p class="det">Also tidies ${lo.length} leftover side file${lo.length === 1 ? "" : "s"} (${[...new Set(lo.map(x => "." + x.path.split(".").pop()))].join(", ")}).</p>`
+                 : (overrides[i.id] != null ? '<p class="det">Leftover side files are worked out again for your choice when you clean up.</p>' : "");
+    const dbl = d.kind === "double", meta = i.chk === "meta";
+    const eps = meta && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} title${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td><s>${esc(e.plex)}</s> → ${esc(e.real)}</td></tr>`).join("")}</table></div></details>` : "";
+    const FIX = { titles: "Use Sonarr's titles", refresh: "Refresh in Plex", posters: "Pick posters" };
+    const seas = meta && d.seasons ? `<p class="det">${d.seasons.map(x => esc(x.t)).join(" · ")}</p>` : "";
+    const sb = i.chk === "subs", SFX = { replace: "Replace with a real subtitle", rename: "Rename to match", trash: "Remove", searchall: "Search all now" };
+    const wanted = sb && d.kind === "wanted" ? `<ul class="wl">${(d.top || []).map(x => `<li><b>${x.n}</b> ${esc(x.t)}</li>`).join("")}${(d.films || []).map(t => `<li><b>Film</b> ${esc(t)}</li>`).join("")}</ul>` : "";
+    const hl = i.chk === "health";
+    const conf = hl ? (d.confidence === "sure" ? '<span class="pill sure">Sure</span>' : '<span class="pill">Check</span>') : dbl ? '<span class="pill">Plex glitch</span>' : i.chk === "dupes" && rm.length ? (isSure(i) ? '<span class="pill sure">Sure</span>' : '<span class="pill">Check</span>') : "";
+    const reset = overrides[i.id] != null ? `<button class="b-line" data-reset="${esc(i.id)}">Use the suggestion</button>` : "";
+    const size = human(rm.reduce((a, v) => a + (v.size || 0), 0));
+    let act = "";
+    if (i.chk === "quality" && !i.ignored) {
+      const QF = { tdarr: d.kind === "tdarrmissed" ? `Send all ${d.count} to Tdarr` : "Convert with Tdarr", remux: "Convert to MKV", search: d.kind === "odd" ? "Search for better copies" : "Search for a better copy" };
+      act = (d.fixes || []).map(h => h === "smaller" ? (small && small.id === i.id ? "" : `<button class="b-teal" data-small="${esc(i.id)}">Find a smaller copy</button>`)
+            : `<button class="b-teal" data-qfix="${esc(i.id)}|${h}">${QF[h]}</button>`).join("");
+    } else if (i.chk === "coming" && !i.ignored) {
+      const CF = { refresh: "Refresh in Plex", remove: "Remove placeholder", ytdlp: "Update yt-dlp" };
+      act = (d.fixes || []).map(h => h === "trailer" ? (pick && pick.id === i.id ? "" : `<button class="b-teal" data-tpick="${esc(i.id)}">Pick trailer</button>`)
+            : `<button class="${h === "remove" ? "b-orange" : "b-teal"}" data-cfix="${esc(i.id)}|${h}">${CF[h]}</button>`).join("");
+    } else if (i.chk === "virus" && !i.ignored) {
+      act = `<button class="b-orange" data-vrm="${esc(i.id)}">Remove</button>`;
+    } else if (sb && !i.ignored && (d.fixes || []).length) {
+      act = d.fixes.map(h => `<button class="b-teal" data-sub="${esc(i.id)}|${h}">${SFX[h]}</button>`).join("");
+    } else if (hl && !i.ignored && (d.fixes || []).length) {
+      const side = "Any leftover .edl/.ffmeta files go with it.";
+      act = confirmId === i.id ? `<div class="confirm"><b>Replace this file?</b><ul><li><code>${esc(base(d.path))}</code> (${human(d.size)})</li></ul>
+             It moves to the trash (you can put it back for ${S.trash_days} days) and ${esc(d.ref.arr)} searches for a good copy, which downloads in the night window. ${side}
+             <div class="acts"><button class="b-orange" data-replace="${esc(i.id)}">Replace</button><button class="b-line" data-no="1">Cancel</button></div></div>`
+           : `<button class="b-teal" data-clean="${esc(i.id)}">Replace</button>`;
+    } else if (meta && !i.ignored && (d.fixes || []).length) {
+      act = d.fixes.map((h, n) => `<button class="${n ? "b-line" : "b-teal"}" data-meta="${esc(i.id)}|${h}">${FIX[h]}</button>`).join("");
+    } else if (dbl && !i.ignored) {
+      act = `<button class="b-teal" data-fixdouble="${esc(i.id)}">Fix Plex's listing</button>`;
+    } else if (!i.ignored && rm.length) {
+      if (inReview) act = `<button class="b-orange" data-yes="${esc(i.id)}">Move ${rm.length} to trash &amp; next</button><button class="b-line" id="rvSkip">Skip</button><button class="b-line" data-ign="${esc(i.id)}" data-t="${esc(i.title)}" data-next="1">Ignore &amp; next</button>`;
+      else if (confirmId === i.id) act = `<div class="confirm"><b>Move ${rm.length === 1 ? "this copy" : "these " + rm.length + " copies"} to the trash?</b><ul>${rm.map(v => `<li><code>${esc(base(v.path))}</code> (${human(v.size)})</li>`).join("")}${lo.map(x => `<li><code>${esc(base(x.path))}</code> (leftover side file)</li>`).join("")}</ul>
+             It stays in the trash for ${S.trash_days} days and can be put back. Plex and Radarr/Sonarr are told to rescan.
+             <div class="acts"><button class="b-orange" data-yes="${esc(i.id)}">Move to trash</button><button class="b-line" data-no="1">Cancel</button></div></div>`;
+      else act = `<button class="b-teal" data-clean="${esc(i.id)}">Clean up (${rm.length} cop${rm.length === 1 ? "y" : "ies"}, ${size})</button>`;
+    } else if (inReview) act = `<button class="b-line" id="rvSkip">Next</button>`;
+    const block = act.startsWith("<div") ? act : "", inline = act.startsWith("<div") ? "" : act;
+    return `<div class="item ${i.ignored ? "ign" : i.sev === "bad" ? "bad" : ""}"><h3>${esc(i.title)} <span class="pill lib">${esc(i.library)}</span>${conf}${i.ignored ? '<span class="pill lib">Ignored</span>' : ""}</h3>
+      <p class="det">${esc(d.text)}${d.note ? " " + esc(d.note) : ""}${path}</p>${pick && pick.id === i.id ? pickHtml() : ""}${small && small.id === i.id ? smallHtml() : ""}${i.chk === "quality" && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td>${esc(e.res)}</td></tr>`).join("")}</table></div></details>` : ""}${i.chk === "unwatched" ? uwHtml(i) : ""}${d.kind === "tdarrmissed" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.name)}">${esc(x.name.split("/").length === 2 ? x.name.split("/")[0] : x.name.split("/").pop())}</td><td class="n">${esc(x.codec.toUpperCase())}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div>${d.count > d.items.length ? `<p class="det">…and ${d.count - d.items.length} smaller.</p>` : ""}</details>` : ""}${eps}${seas}${wanted}${dbl ? `<p class="det">The fix moves the file out for a moment so Plex drops both entries, then puts it straight back so Plex adds it once. The file never leaves the disk. It takes 1–3 minutes; the result shows under Done.</p>` : vers}${loLine}${block}
+      <div class="acts">${inline}${reset}${plexBtn}${links}${inReview ? "" : `<button class="b-line" data-${i.ignored ? "un" : ""}ign="${esc(i.id)}" data-t="${esc(i.title)}">${i.ignored ? "Stop ignoring" : "Ignore"}</button>`}</div></div>`;
+  }
+  const mmss = n => n ? Math.floor(n / 60) + ":" + String(n % 60).padStart(2, "0") : "?";
+  function pickHtml() {
+    const r = pick.results || [];
+    return `<div class="tpick"><form id="tpForm"><input id="tpQ" value="${esc(pick.q || "")}" aria-label="Search YouTube"><button class="b-line" type="submit" ${pick.busy ? "disabled" : ""}>${pick.busy === "search" ? "Searching…" : "Search"}</button><button class="b-line" type="button" id="tpClose">Close</button></form>` +
+      (pick.err ? `<div class="msg err">${esc(pick.err)}</div>` : "") +
+      (pick.busy === "search" && !r.length ? '<p class="det">Asking YouTube…</p>' : "") +
+      (r.length ? `<div class="tres">${r.map(v => `<div><img src="https://i.ytimg.com/vi/${esc(v.id)}/mqdefault.jpg" alt="" loading="lazy"><div class="tt">${esc(v.title)}</div>
+        <div class="tm">${esc(v.channel || "")} · ${mmss(v.secs)}${v.secs > 210 ? ' <span class="long">longer than Agregarr allows, still fine</span>' : ""}</div>
+        <div class="acts"><button class="b-teal sm" data-tuse="${esc(v.id)}" ${pick.busy ? "disabled" : ""}>Use this</button><a class="btn b-line sm" href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener">Watch</a></div></div>`).join("")}</div>
+        <p class="det" style="margin-top:8px">Pick the official one (studio or distributor channel). It downloads in 1080p and replaces the clip in the same file, so Agregarr and Plex carry on as before.</p>` : "") + "</div>";
+  }
+  function smallHtml() {
+    const r = small.results || [], ago = n => n == null ? "" : n < 1 ? "today" : n + " day" + (n === 1 ? "" : "s") + " old";
+    let h = `<div class="tpick">`;
+    if (small.busy === "search") h += `<p class="det">Asking ${esc(small.arr || "Radarr")} to search every indexer… this takes up to a minute. Nothing downloads.</p>`;
+    if (small.err) h += `<div class="msg err">${esc(small.err)}</div>`;
+    if (small.msg) h += `<p class="det">${esc(small.msg)}</p>`;
+    if (r.length) h += `<p class="det" style="margin-bottom:8px">Now ${human(small.cur)}. Same resolution, at least 25% smaller, best first (the order ${esc(small.arr || "Radarr")} would pick):</p><div class="sres">` + r.map(v => `<div>
+        <span class="st">${esc(v.title)}</span><span><b>${human(v.size)}</b> · <span class="sv">saves ${human(v.saves)}</span></span>
+        <span class="sm2">${v.flags.map(f => `<span class="fl">${esc(f)}</span>`).join("")}${esc(v.quality)} · ${v.protocol === "torrent" ? "torrent, " + (v.seeders || 0) + " seeders" : "Usenet"} · ${esc(v.indexer)}${v.age != null ? " · " + ago(v.age) : ""}</span>
+        ${small.ask === v.key ? `<div class="confirm" style="flex:1 1 100%"><b>Download this one?</b>${esc(small.arr || "Radarr")} downloads it in the night window. The current file stays until the new one is in, then goes to ${esc(small.arr || "Radarr")}'s recycle bin for 7 days.
+          <div class="acts"><button class="b-orange" data-sgo="${esc(v.key)}" ${small.busy ? "disabled" : ""}>${small.busy === "grab" ? "Asking…" : "Download"}</button><button class="b-line" data-sno="1">Cancel</button></div></div>`
+          : `<button class="b-teal sm" data-sask="${esc(v.key)}">Download this</button>`}</div>`).join("") + `</div>`;
+    return h + `<div class="acts" style="margin-top:8px"><button class="b-line sm" id="smClose">Close</button></div></div>`;
+  }
+  function comingPanel() {
+    const c = S.coming || {}, y = c.ytdlp || {}, ph = S.issues.filter(i => i.chk === "coming" && i.detail.kind === "generic" && !i.ignored).length;
+    const old = y.ok && (y.days > y.old_days || (y.newer && y.days > 30));
+    return `<div class="vstat">
+      <div class="${!y.ok || old ? "bad" : ""}"><small>yt-dlp (Agregarr uses it)</small><b>${y.ok ? esc(y.version) : "Not working"}</b><span>${y.ok ? (y.days != null ? y.days + " days old" : "") + (y.latest ? (y.newer ? " · " + esc(y.latest) + " is out" : " · the latest") : "") : esc(y.error || "")}</span></div>
+      <div class="${ph ? "bad" : ""}"><small>Placeholders</small><b>${ph ? ph + " with the generic clip" : "All real trailers"}</b><span>${c.busy ? "A trailer is downloading now…" : "Checked every scan"}</span></div>
+    </div><div class="acts"><button class="b-line" id="ytUp" ${c.updating || (y.ok === false && !y.writable) ? "disabled" : ""}>${c.updating ? "Updating yt-dlp…" : "Update yt-dlp now"}</button></div>`;
+  }
+  function uwHtml(i) {
+    const d = i.detail, more = d.count - d.items.length;
+    return `<div class="uww"><table class="uw">${d.items.map(x => `<tr><td><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.t)}</a></td><td class="n">${human(x.size)}</td><td class="n">${x.plays ? "played " + x.plays + "×, last " + fmt(new Date(x.last * 1000).toISOString()).split(",")[0] : "never played"}</td><td class="a"><button class="b-line sm" data-keepu="${esc(x.id)}" data-t="${esc(x.t)}" title="Hide it for ${keepTxt()}; it comes back after that if it's still unwatched">Keep</button></td></tr>`).join("")}</table></div>${more > 0 ? `<p class="det">…and ${more} smaller one${more === 1 ? "" : "s"}.</p>` : ""}${keptHtml(d)}`;
+  }
+  function keepTxt() { const n = (S && S.keep_days) || 182; return n === 182 ? "6 months" : n + " days"; }
+  function keptHtml(d) {
+    const k = d.kept || []; if (!k.length) return "";
+    const day = iso => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    return `<details class="eps"><summary>Kept (${k.length}): hidden from this list</summary><div class="uww"><table class="uw">${k.map(x => `<tr><td><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.t)}</a></td><td class="n">${human(x.size)}</td><td class="n">${x.until ? "back on " + day(x.until) : "kept for good"}</td>
+      <td class="a"><button class="b-line sm" data-uwshow="${esc(x.id)}" data-t="${esc(x.t)}">Show again</button> ${x.until ? `<button class="b-line sm" data-uwgood="${esc(x.id)}" data-t="${esc(x.t)}">Keep for good</button>` : `<button class="b-line sm" data-uwkeep="${esc(x.id)}" data-t="${esc(x.t)}">${keepTxt()} only</button>`}</td></tr>`).join("")}</table></div></details>`;
+  }
+  function doneHtml() {
+    const ds = (S.done || []).filter(x => (x.chk || "dupes") === filter);
+    if (!ds.length) return "";
+    const IC = { ok: "✓", warn: "⚠", checking: "⏳", waiting: "⏳" };
+    const waiting = ds.filter(x => x.status === "waiting" || x.status === "checking").length;
+    return `<div class="doneh"><h3>Done (${ds.length})</h3>${(filter === "health" || filter === "quality") && waiting ? `<span class="note">${waiting} waiting · ${filter === "quality" && ds.some(x => x.tdarr && x.status === "waiting") ? "Tdarr checked every 10 minutes, other fixes every hour" : "checked every hour"}, warned after ${S.follow_days} days</span><button class="b-line sm" id="fuNow">Check now</button>` : ""}<button class="b-line sm" id="doneClear">Clear list</button></div><div class="done">` +
+      ds.map(x => { const plex = (x.links || []).find(l => l.label === "Open in Plex");
+        const TI = { done: "✓", converting: "⏳", failed: "⚠", notin: "⚠", queued: "·" };
+        const tl = x.tdarr && x.tdarr.length > 1 ? `<details class="tdl"><summary>${x.tdarr.filter(t => t.state === "done").length} of ${x.tdarr.length} films converted</summary><ul>${
+          x.tdarr.slice().sort((a, b) => ({ done: 0, converting: 1, failed: 2, notin: 3, queued: 4 }[a.state] ?? 5) - ({ done: 0, converting: 1, failed: 2, notin: 3, queued: 4 }[b.state] ?? 5)).map(t =>
+            `<li class="${esc(t.state)}"><span>${TI[t.state] || "·"} ${esc(t.name)}</span><span>${t.state === "done" ? human(t.size) + " → " + human(t.after) : t.state === "converting" ? (t.pct ?? 0) + "%" : t.state === "failed" ? "failed" : t.state === "notin" ? "not in Tdarr" : "waiting"}</span></li>`).join("")}</ul></details>` : "";
+        return `<div class="dn ${esc(x.status)}"><b>${IC[x.status] || ""} ${esc(x.title)}</b><span class="st">${esc(x.note)}</span>${tl}
+          ${x.kept ? `<small>Kept: ${esc(base(x.kept))}</small>` : ""}${x.moved.map(m => `<small>To the trash: ${esc(base(m))}</small>`).join("")}<small>${fmt(x.at)}</small>
+          <div class="acts">${plex ? `<a class="btn b-line" href="${esc(plex.url)}" target="_blank" rel="noopener">Open in Plex</a>` : ""}${
+            x.trash_ids.length ? `<button class="b-line" data-putback="${x.trash_ids.join(",")}">Put back</button>` : x.chk === "meta" ? "" : `<span class="note">Put back or emptied</span>`}</div></div>`; }).join("") + "</div>";
+  }
+  function list() {
+    const c = CHECKS.find(x => x.id === filter); $("listTitle").textContent = review ? "Review duplicates" : c.label;
+    let top = flash ? `<div class="msg ${flash.err ? "err" : ""}">${esc(flash.text)}</div>` : "";
+    if (review) {
+      const live = review.ids.map(id => S.issues.find(i => i.id === id)).filter(Boolean);
+      while (review.pos < review.ids.length && !S.issues.find(i => i.id === review.ids[review.pos] && !i.ignored && removable(i).length)) review.pos++;
+      if (review.pos >= review.ids.length) { flash = { text: "Review finished: " + review.done + " cleaned up, " + review.skipped + " skipped." }; review = null; return list(); }
+      const cur = S.issues.find(i => i.id === review.ids[review.pos]);
+      $("list").innerHTML = top + `<div class="rvbar"><b>${review.pos + 1} of ${review.ids.length}</b><div class="bar" style="flex:1;margin:0"><i style="width:${Math.round(review.pos / review.ids.length * 100)}%"></i></div><button class="b-line" id="rvStop">Stop reviewing</button></div>` + card(cur, true);
+      return wire();
+    }
+    const rows = shown(), open = rows.filter(i => !i.ignored && removable(i).length);
+    if (filter === "dupes" && open.length) {
+      const sure = open.filter(isSure), sz = l => human(l.flatMap(removable).reduce((a, v) => a + (v.size || 0), 0));
+      if (confirmAll) {
+        const set = confirmAll === "sure" ? sure : open, files = set.flatMap(removable);
+        top += `<div class="confirm"><b>Move ${files.length} copies (${sz(set)}) from ${set.length} ${confirmAll === "sure" ? "sure " : ""}items to the trash?</b>Each item keeps the copy marked Keep. You can put any of them back for ${S.trash_days} days.
+          <div class="acts"><button class="b-orange" id="allYes">Move ${files.length} copies to the trash</button><button class="b-line" id="allNo">Cancel</button></div></div>`;
+      } else {
+        top += `<div class="acts"><button class="b-teal" id="rvGo">Review one by one (${open.length})</button>` +
+          (sure.length ? `<button class="b-line" id="sureGo">Clean up the ${sure.length} sure one${sure.length === 1 ? "" : "s"} (${sz(sure)})</button>` : "") +
+          (open.length > 1 ? `<button class="b-line" id="allGo">Clean up all ${open.length} (${sz(open)})</button>` : "") + `</div>`;
+      }
+    }
+    if (filter === "health") {
+      const ok = rows.filter(i => !i.ignored && (i.detail.fixes || []).length), sure = ok.filter(i => i.detail.confidence === "sure");
+      if (confirmAll === "health") top += `<div class="confirm"><b>Replace ${sure.length} broken file${sure.length === 1 ? "" : "s"}?</b>They move to the trash (you can put them back for ${S.trash_days} days) and Radarr/Sonarr search for good copies, which download in the night window. The ones marked Check are left for you to look at.
+          <div class="acts"><button class="b-orange" id="hAllYes">Replace ${sure.length}</button><button class="b-line" id="allNo">Cancel</button></div></div>`;
+      else if (sure.length > 1) top += `<div class="acts"><button class="b-teal" id="hAllGo">Replace the ${sure.length} sure ones</button></div>`;
+    }
+    if (filter === "virus" && S.virus) {
+      const v = S.virus, c = v.clam || {}, l = v.last, fu = v.full;
+      const dbd = c.db_date ? new Date(c.db_date) : null;
+      top += `<div class="vstat">
+        <div class="${c.ok ? "" : "bad"}"><small>ClamAV</small><b>${c.ok ? esc(c.version) : "Not reachable"}</b><span>${c.ok ? "Signatures " + esc(c.db) + (dbd && !isNaN(dbd) ? " · " + fmt(dbd.toISOString()) : "") : esc(c.error || "")}</span></div>
+        <div><small>Every scan</small><b>${l ? l.files.toLocaleString("en-GB") + " files checked" : "Not run yet"}</b><span>${l ? `For programs and fakes. ClamAV read the ${l.checked} new or changed file${l.checked === 1 ? "" : "s"}${l.errors ? ` (${l.errors} unreadable)` : ""}. ${fmt(l.at)}` : "Runs with the next scan."}</span></div>
+        <div class="${fu && fu.infected ? "bad" : ""}"><small>Full ClamAV scan</small><b>${v.full_running ? "Running…" : fu ? (fu.ok ? (fu.infected ? fu.infected + " infected" : "Clean") : "Failed") : "Not run from here"}</b><span>${v.full_running ? "Started " + fmt(v.full_started) + ". Takes about 30 minutes." : fu ? (fu.ok ? fmt(fu.at) + " · " + Math.round(fu.secs / 60) + " min" : esc(fu.error || "")) : "Your weekly job also runs Wednesdays at 03:00."}</span></div>
+      </div><div class="acts"><button class="b-line" id="vFull" ${v.full_running || !c.ok ? "disabled" : ""}>${v.full_running ? "Full scan running…" : "Full scan now (about 30 min)"}</button></div>`;
+    }
+    if (filter === "coming") top += comingPanel();
+    if (filter === "quality") {
+      const hogs = rows.filter(i => !i.ignored && i.detail.kind === "hog"), ex = hogs.reduce((a, i) => a + (i.detail.extra || 0), 0);
+      if (hogs.length) top += `<div class="msg">${hogs.length} space hog${hogs.length === 1 ? "" : "s"} use about <b>${human(ex)}</b> more than files like them usually do.</div>`;
+    }
+    if (filter === "subs") {
+      const fx = rows.filter(i => !i.ignored && ["advert", "unlinked", "spare", "orphan"].includes(i.detail.kind));
+      if (fx.length > 1) top += `<div class="acts"><button class="b-teal" id="subsAll">Fix all ${fx.length} subtitle files</button></div>`;
+    }
+    if (filter === "meta") {
+      const tl = rows.filter(i => !i.ignored && i.detail.kind === "titles"), n = tl.reduce((a, i) => a + i.detail.eps.length, 0);
+      if (tl.length > 1) top += `<div class="acts"><button class="b-teal" id="titlesAll" data-ids="${tl.map(i => esc(i.id)).join(",")}">Use Sonarr's titles for all ${tl.length} shows (${n} episodes)</button></div>`;
+      const sp = rows.filter(i => !i.ignored && i.detail.kind === "seasonposters"), ns = sp.reduce((a, i) => a + i.detail.seasons.length, 0);
+      if (sp.length > 1) top += `<div class="acts"><button class="b-teal" id="postersAll" data-ids="${sp.map(i => esc(i.id)).join(",")}">Pick posters for all ${sp.length} shows (${ns} seasons)</button></div>`;
+    }
+    const EMPTY = { missing: "Every file Plex, Radarr and Sonarr list is on the disk.", dupes: "No duplicates found.",
+                    health: "No broken or cut-short files: every file plays for about as long as Radarr and Sonarr expect.",
+                    virus: "Nothing found: no programs, archives or fake videos in your libraries, and ClamAV found nothing in the new files.",
+                    subs: "No advert-only, mis-named or stray subtitle files, and Bazarr isn't missing anything.",
+                    meta: "Everything is matched, has a poster, and its titles and year agree with Radarr and Sonarr.",
+                    coming: "Every Coming Soon placeholder plays its real trailer, sits in the right library, and yt-dlp is up to date.",
+                    quality: "No files far bigger than usual, no old formats that make Plex convert, and no seasons with odd low-quality episodes.",
+                    unwatched: "Everything has been watched recently, or you've marked it Keep." };
+    if (!rows.length) { $("list").innerHTML = top + `<p class="empty"><b>All clear.</b> ${EMPTY[filter]}</p>` + doneHtml(); return wire(); }
+    $("list").innerHTML = top + rows.map(i => card(i, false)).join("") + doneHtml();
+    wire();
+  }
+  function wire() {
+    const L = $("list");
+    L.querySelectorAll("[data-ign]").forEach(b => b.onclick = async () => { await api("/api/ignore", { id: b.dataset.ign, title: b.dataset.t }); if (b.dataset.next && review) review.skipped++; load(); });
+    L.querySelectorAll("[data-unign]").forEach(b => b.onclick = async () => { await api("/api/unignore", { id: b.dataset.unign }); load(); });
+    L.querySelectorAll("[data-clean]").forEach(b => b.onclick = () => { confirmId = b.dataset.clean; confirmAll = false; flash = null; list(); });
+    L.querySelectorAll("[data-no]").forEach(b => b.onclick = () => { confirmId = null; list(); });
+    L.querySelectorAll("[data-yes]").forEach(b => b.onclick = () => doClean([b.dataset.yes], b));
+    L.querySelectorAll("[data-keep]").forEach(b => b.onclick = () => { const [id, j] = b.dataset.keep.split("|"); overrides[id] = +j; confirmId = null; list(); });
+    L.querySelectorAll("[data-reset]").forEach(b => b.onclick = () => { delete overrides[b.dataset.reset]; confirmId = null; list(); });
+    const on = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
+    L.querySelectorAll("[data-fixdouble]").forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = "Fixing…";
+      const r = await api("/api/fixdouble", { id: b.dataset.fixdouble });
+      flash = { err: !r.ok, text: r.ok ? "Fixing Plex's listing. This takes 1–3 minutes; watch the Done list below." : r.error }; load(); });
+    L.querySelectorAll("[data-putback]").forEach(b => b.onclick = async () => { b.disabled = true;
+      const r = await api("/api/restore", { ids: b.dataset.putback.split(",").map(Number) });
+      flash = { err: !r.ok, text: r.ok ? `Put back ${r.restored} file${r.restored === 1 ? "" : "s"}. Plex is rescanning; press Scan now to see the duplicate again.` : r.errors.join(" ") }; load(); });
+    const metaGo = async (ids, how, b) => { if (b) { b.disabled = true; b.textContent = "Working…"; }
+      const r = await api("/api/metafix", { ids, how });
+      flash = { err: !r.ok, text: r.ok ? (how === "titles" ? "Copying titles into Plex. " : how === "posters" ? "Picking season posters. " : "Asked Plex to refresh. ") + "The result shows under Done below." : r.errors.join(" ") };
+      load(); setTimeout(load, 8000); setTimeout(load, 30000); setTimeout(load, 120000); };
+    L.querySelectorAll("[data-meta]").forEach(b => b.onclick = () => { const [id, how] = b.dataset.meta.split("|"); metaGo([id], how, b); });
+    const replaceGo = async (ids, b) => { if (b) { b.disabled = true; b.textContent = "Replacing…"; }
+      const r = await api("/api/replace", { ids }); confirmId = null; confirmAll = false;
+      flash = { err: !r.ok, text: r.ok ? `Moved ${r.started} file${r.started === 1 ? "" : "s"} to the trash and asked for new copies. Progress shows under Done below.` + (r.errors.length ? " Problems: " + r.errors.join(" ") : "") : r.errors.join(" ") };
+      load(); setTimeout(load, 15000); setTimeout(load, 70000); };
+    L.querySelectorAll("[data-replace]").forEach(b => b.onclick = () => replaceGo([b.dataset.replace], b));
+    on("hAllGo", () => { confirmAll = "health"; confirmId = null; flash = null; list(); });
+    on("hAllYes", () => replaceGo(shown().filter(i => !i.ignored && (i.detail.fixes || []).length && i.detail.confidence === "sure").map(i => i.id), $("hAllYes")));
+    const subGo = async (pairs, b) => { if (b) { b.disabled = true; b.textContent = "Working…"; }
+      const by = {}; pairs.forEach(([id, how]) => (by[how] = by[how] || []).push(id));
+      let n = 0, errs = [];
+      for (const how of Object.keys(by)) { const r = await api("/api/subfix", { ids: by[how], how }); n += r.started; errs = errs.concat(r.errors); }
+      flash = { err: !n, text: (n ? `Done ${n}. Progress shows under Done below.` : "") + (errs.length ? " " + errs.join(" ") : "") };
+      load(); setTimeout(load, 20000); setTimeout(load, 90000); };
+    L.querySelectorAll("[data-sub]").forEach(b => b.onclick = () => subGo([b.dataset.sub.split("|")], b));
+    on("subsAll", () => subGo(shown().filter(i => !i.ignored && ["advert", "unlinked", "spare", "orphan"].includes(i.detail.kind)).map(i => [i.id, i.detail.fixes[0]]), $("subsAll")));
+    L.querySelectorAll("[data-vrm]").forEach(b => b.onclick = async () => { b.disabled = true;
+      const r = await api("/api/virusfix", { ids: [b.dataset.vrm] });
+      flash = { err: !r.ok, text: r.ok ? "Moved to the trash. It shows under Done below." : r.errors.join(" ") }; load(); });
+    on("vFull", async () => { const r = await api("/api/virusfull", {});
+      flash = { err: !r.ok, text: r.ok ? "Full ClamAV scan started. It takes about 30 minutes; you can close this page." : r.error }; load(); });
+    const tSearch = async q => { pick.busy = "search"; pick.err = null; pick.results = []; list();
+      const r = await api("/api/trailer/search", { id: pick.id, q }); if (!pick) return;
+      pick.busy = null; pick.q = r.q || q; if (r.ok) pick.results = r.results; else pick.err = r.error; list(); };
+    L.querySelectorAll("[data-tpick]").forEach(b => b.onclick = () => { const it = S.issues.find(x => x.id === b.dataset.tpick);
+      pick = { id: b.dataset.tpick, q: it ? it.detail.query : "", results: [] }; tSearch(pick.q); });
+    const tq = $("tpQ"); if (tq) tq.oninput = () => { pick.q = tq.value; };
+    const tf = $("tpForm"); if (tf) tf.onsubmit = e => { e.preventDefault(); tSearch($("tpQ").value); };
+    on("tpClose", () => { pick = null; list(); });
+    L.querySelectorAll("[data-tuse]").forEach(b => b.onclick = async () => { pick.busy = "use"; list();
+      const r = await api("/api/trailer/use", { id: pick.id, vid: b.dataset.tuse });
+      if (r.ok) { pick = null; flash = { text: "Downloading the trailer. It takes about a minute; the result shows under Done below." }; }
+      else { pick.busy = null; pick.err = r.error; }
+      load(); });
+    L.querySelectorAll("[data-cfix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.cfix.split("|"); b.disabled = true; b.textContent = "Working…";
+      const r = await api("/api/comingfix", { ids: [id], how });
+      flash = { err: !r.ok, text: r.ok ? "Done. It shows under Done below." : r.errors.join(" ") }; load(); });
+    L.querySelectorAll("[data-small]").forEach(b => b.onclick = async () => { const id = b.dataset.small;
+      small = { id, busy: "search", results: [] }; list();
+      const r = await api("/api/smaller/search", { id }); if (!small || small.id !== id) return;
+      small.busy = null; if (r.ok) { small.results = r.results; small.cur = r.cur; small.arr = r.arr; small.msg = r.msg; } else small.err = r.error; list(); });
+    L.querySelectorAll("[data-sask]").forEach(b => b.onclick = () => { small.ask = b.dataset.sask; list(); });
+    L.querySelectorAll("[data-sno]").forEach(b => b.onclick = () => { small.ask = null; list(); });
+    L.querySelectorAll("[data-sgo]").forEach(b => b.onclick = async () => { small.busy = "grab"; list();
+      const r = await api("/api/smaller/grab", { id: small.id, key: b.dataset.sgo });
+      if (r.ok) { small = null; flash = { text: "Asked for the smaller copy. It downloads tonight; progress shows under Done below, checked every hour." }; }
+      else { small.busy = null; small.err = r.error; }
+      load(); });
+    on("smClose", () => { small = null; list(); });
+    L.querySelectorAll("[data-qfix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.qfix.split("|"); b.disabled = true; b.textContent = how === "remux" ? "Converting…" : how === "tdarr" ? "Sending…" : "Asking…";
+      const r = await api("/api/qualityfix", { ids: [id], how });
+      flash = { err: !r.ok, text: r.ok ? (how === "remux" ? "Converting. It takes under a minute; the result shows under Done below." : how === "tdarr" ? "Sent to Tdarr. It converts in its own queue; progress shows under Done below, checked every hour." : "Asked for better copies. It shows under Done below.") : r.errors.join(" ") };
+      load(); setTimeout(load, 15000); setTimeout(load, 60000); });
+    const uw = async (b, path, body, text) => { b.disabled = true; await api(path, Object.assign({ title: b.dataset.t, uw: 1 }, body)); flash = { text: text }; load(); };
+    L.querySelectorAll("[data-keepu]").forEach(b => b.onclick = () => uw(b, "/api/ignore", { id: b.dataset.keepu, days: (S && S.keep_days) || 182 }, b.dataset.t + " is kept for " + keepTxt() + ". It's under Kept at the bottom of this card if you change your mind."));
+    L.querySelectorAll("[data-uwkeep]").forEach(b => b.onclick = () => uw(b, "/api/ignore", { id: b.dataset.uwkeep, days: (S && S.keep_days) || 182 }, b.dataset.t + " comes back on the list in " + keepTxt() + " if it's still unwatched."));
+    L.querySelectorAll("[data-uwgood]").forEach(b => b.onclick = () => uw(b, "/api/ignore", { id: b.dataset.uwgood }, b.dataset.t + " is kept for good."));
+    L.querySelectorAll("[data-uwshow]").forEach(b => b.onclick = () => uw(b, "/api/unignore", { id: b.dataset.uwshow }, b.dataset.t + " is back on the list."));
+    on("ytUp", async () => { const b = $("ytUp"); b.disabled = true; b.textContent = "Updating yt-dlp…";
+      const r = await api("/api/ytdlp/update", {});
+      flash = { err: !r.ok, text: r.ok ? (r.old === r.new ? "yt-dlp " + r.new + " was already the latest (downloaded and checked again)." : "Updated yt-dlp " + (r.old || "?") + " → " + r.new + ". Agregarr uses it from its next download.") : r.error }; load(); });
+    on("titlesAll", () => metaGo($("titlesAll").dataset.ids.split(","), "titles", $("titlesAll")));
+    on("postersAll", () => metaGo($("postersAll").dataset.ids.split(","), "posters", $("postersAll")));
+    L.querySelectorAll("[data-added]").forEach(a => a.addEventListener("click", () => { addedAway = true; }));
+    on("fuNow", async () => { const b = $("fuNow"); b.disabled = true; b.textContent = "Checking…"; await api("/api/followup", {}); setTimeout(load, 6000); setTimeout(load, 20000); });
+    on("doneClear", async () => { await api("/api/done/clear", { chk: filter }); load(); });
+    on("rvGo", () => { const ids = shown().filter(i => !i.ignored && removable(i).length).sort((a, b) => (isSure(b) - isSure(a))).map(i => i.id);
+                       review = { ids, pos: 0, done: 0, skipped: 0 }; flash = null; confirmId = null; list(); window.scrollTo({ top: $("list").getBoundingClientRect().top + scrollY - 80 }); });
+    on("rvStop", () => { flash = { text: "Stopped reviewing: " + review.done + " cleaned up." }; review = null; list(); });
+    on("rvSkip", () => { review.pos++; review.skipped++; flash = null; list(); });
+    on("sureGo", () => { confirmAll = "sure"; confirmId = null; flash = null; list(); });
+    on("allGo", () => { confirmAll = "all"; confirmId = null; flash = null; list(); });
+    on("allNo", () => { confirmAll = false; list(); });
+    on("allYes", () => { const open = shown().filter(i => !i.ignored && removable(i).length);
+                         doClean((confirmAll === "sure" ? open.filter(isSure) : open).map(i => i.id), $("allYes")); });
+  }
+  async function doClean(ids, btn) {
+    btn.disabled = true; btn.textContent = "Moving…";
+    const keep = {}; ids.forEach(id => { if (overrides[id] != null) keep[id] = overrides[id]; });
+    try {
+      const r = await api("/api/cleanup", { ids, keep });
+      const ok = r.results.filter(x => x.ok), bad = r.results.filter(x => !x.ok);
+      const moved = ok.reduce((a, x) => a + x.moved, 0), side = ok.reduce((a, x) => a + (x.side_files || 0), 0);
+      ok.forEach(x => delete overrides[x.id]);
+      if (review) { review.done += ok.length; review.pos++; }
+      flash = { err: !ok.length, text: (moved ? `Moved ${moved} cop${moved === 1 ? "y" : "ies"}${side ? ` and ${side} leftover side file${side === 1 ? "" : "s"}` : ""} to the trash. Plex and Radarr/Sonarr are rescanning.` : "Nothing was moved.") + (bad.length ? " " + bad.map(x => x.error).join(" ") : "") };
+    } catch (e) { flash = { err: true, text: "Clean-up failed: " + e.message }; }
+    confirmId = null; confirmAll = false; load();
+  }
+  // ---- Trash: a bin you can go into, like the Mac Bin or Windows Recycle Bin ----
+  let view = "scan", binSel = new Set(), binAsk = null, binMsg = null;
+  function setView(v) {
+    view = v; $("scanView").hidden = v !== "scan"; $("trashView").hidden = v !== "trash"; $("setView").hidden = v !== "settings";
+    for (const [id, k] of [["tabScan", "scan"], ["tabTrash", "trash"], ["tabSet", "settings"]]) { $(id).classList.toggle("on", v === k); $(id).setAttribute("aria-selected", v === k); }
+    try { history.replaceState(null, "", v === "trash" ? "#trash" : v === "settings" ? "#settings" : location.pathname); } catch (e) {}
+    if (v === "settings") settingsOpen();
+    if (S) trashPanel();
+  }
+  function daysLeft(t) { return Math.max(0, Math.ceil((new Date(t.empties) - Date.now()) / 86400000)); }
+  function trashPanel() {
+    const total = S.trash.reduce((a, t) => a + (t.size || 0), 0), n = S.trash.length;
+    $("trashCount").hidden = !n; $("trashCount").textContent = n;
+    $("tdays").textContent = S.trash_days;
+    $("events").innerHTML = (S.events || []).slice(0, 8).map(e => `<div><b>${esc(e.text)}</b><br><small>${fmt(e.at)}</small></div>`).join("") || '<p class="empty">Nothing yet.</p>';
+    $("deskBin").classList.toggle("full", n > 0);
+    $("deskBinN").textContent = n ? `${n} item${n === 1 ? "" : "s"} · ${human(total)}` : "Empty";
+    $("deskBinSub").textContent = n ? `Deleted for good after ${S.trash_days} days` : "Clean-ups land here first";
+    if (view !== "trash") return;
+    // keep only selections that still exist
+    binSel = new Set([...binSel].filter(id => S.trash.some(t => t.id === id)));
+    $("binHead").classList.toggle("full", n > 0);
+    $("binBig").textContent = n ? `${n} item${n === 1 ? "" : "s"} · ${human(total)}` : "Empty";
+    $("binSub").textContent = n ? `Deleted for good ${S.trash_days} days after they're moved. Put Back returns a file to where it was.` : "Nothing in the trash. Clean-ups land here first, so you can always put things back.";
+    const q = $("binSearch").value.trim().toLowerCase(), sort = $("binSort").value;
+    let rows = S.trash.filter(t => !q || (t.src + " " + t.title + " " + t.reason).toLowerCase().includes(q));
+    rows.sort(sort === "size" ? (a, b) => b.size - a.size : sort === "name" ? (a, b) => base(a.src).localeCompare(base(b.src)) :
+              sort === "expires" ? (a, b) => new Date(a.empties) - new Date(b.empties) : (a, b) => new Date(b.moved_at) - new Date(a.moved_at));
+    const sel = [...binSel], selSize = S.trash.filter(t => binSel.has(t.id)).reduce((a, t) => a + (t.size || 0), 0);
+    $("binRestore").disabled = !sel.length; $("binDelete").disabled = !sel.length; $("binEmpty").disabled = !n;
+    $("binRestore").textContent = sel.length ? `Put Back (${sel.length})` : "Put Back";
+    $("binDelete").textContent = sel.length ? `Delete Immediately (${sel.length})` : "Delete Immediately";
+    let msg = binMsg ? `<div class="msg ${binMsg.err ? "err" : ""}">${esc(binMsg.text)}</div>` : "";
+    if (binAsk === "delete") msg += `<div class="confirm"><b>Delete ${sel.length} item${sel.length === 1 ? "" : "s"} (${human(selSize)}) for good?</b>You can't undo this.<div class="acts"><button class="b-orange" id="binYes">Delete for good</button><button class="b-line" id="binNo">Cancel</button></div></div>`;
+    if (binAsk === "empty") msg += `<div class="confirm"><b>Empty the trash? ${n} item${n === 1 ? "" : "s"} (${human(total)}) will be deleted for good.</b>You can't undo this.<div class="acts"><button class="b-orange" id="binYes">Empty Trash</button><button class="b-line" id="binNo">Cancel</button></div></div>`;
+    $("binMsg").innerHTML = msg;
+    if (!n) { $("binList").innerHTML = `<div class="binempty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><p>The trash is empty.</p></div>`; return wireBin(); }
+    if (!rows.length) { $("binList").innerHTML = '<div class="binempty"><p>Nothing in the trash matches that search.</p></div>'; return wireBin(); }
+    const allOn = rows.every(t => binSel.has(t.id));
+    $("binList").innerHTML = `<div class="frow hd"><input type="checkbox" id="binAll" aria-label="Select all" ${allOn ? "checked" : ""}><span></span><span>Name</span><span class="fnum">Size</span><span class="fnum">Moved</span><span class="fnum">Deleted in</span></div>` +
+      rows.map(t => { const ext = (base(t.src).split(".").pop() || "").slice(0, 5), side = t.reason === "Leftover side file", dl = daysLeft(t);
+        return `<div class="frow ${binSel.has(t.id) ? "sel" : ""}" data-row="${t.id}"><input type="checkbox" data-pick="${t.id}" aria-label="Select ${esc(base(t.src))}" ${binSel.has(t.id) ? "checked" : ""}>
+          <span class="ftype ${side ? "side" : ""}">${esc(ext)}</span>
+          <span class="fname"><b>${esc(base(t.src))}</b><small>from ${esc(t.src.slice(0, t.src.lastIndexOf("/")).replace(/^\/media\//, ""))}</small><small class="rs">${esc(t.reason)}</small></span>
+          <span class="fnum">${human(t.size)}</span><span class="fnum">${fmt(t.moved_at)}</span>
+          <span class="fnum ${dl <= 1 ? "soon" : ""}">${dl === 0 ? "today" : dl === 1 ? "1 day" : dl + " days"}<small>${fmt(t.empties)}</small></span></div>`; }).join("");
+    wireBin(rows);
+  }
+  function wireBin(rows) {
+    document.querySelectorAll("[data-row]").forEach(r => r.onclick = e => { if (e.target.tagName === "INPUT") return; const id = +r.dataset.row; binSel.has(id) ? binSel.delete(id) : binSel.add(id); binAsk = null; trashPanel(); });
+    document.querySelectorAll("[data-pick]").forEach(c => c.onchange = () => { const id = +c.dataset.pick; c.checked ? binSel.add(id) : binSel.delete(id); binAsk = null; trashPanel(); });
+    const all = $("binAll"); if (all) all.onchange = () => { (rows || []).forEach(t => all.checked ? binSel.add(t.id) : binSel.delete(t.id)); trashPanel(); };
+    const yes = $("binYes"), no = $("binNo");
+    if (no) no.onclick = () => { binAsk = null; trashPanel(); };
+    if (yes) yes.onclick = async () => {
+      yes.disabled = true;
+      const r = await api("/api/purge", binAsk === "delete" ? { ids: [...binSel] } : {});
+      binMsg = { text: `Deleted ${r.deleted} item${r.deleted === 1 ? "" : "s"} for good, ${r.freed} freed.` }; binAsk = null; binSel.clear(); load();
+    };
+  }
+  $("tabScan").onclick = () => setView("scan");
+  $("tabTrash").onclick = () => { binMsg = null; setView("trash"); };
+  { const art = document.querySelector("#binHead .bigbin").cloneNode(true); art.removeAttribute("role"); art.setAttribute("aria-hidden", "true"); $("deskBinArt").replaceWith(art); }
+  $("deskBin").onclick = () => { binMsg = null; setView("trash"); window.scrollTo(0, 0); };
+  $("binSearch").oninput = () => trashPanel(); $("binSort").onchange = () => trashPanel();
+  $("binDelete").onclick = () => { binAsk = "delete"; binMsg = null; trashPanel(); };
+  $("binEmpty").onclick = () => { binAsk = "empty"; binMsg = null; trashPanel(); };
+  $("binRestore").onclick = async () => {
+    $("binRestore").disabled = true;
+    const r = await api("/api/restore", { ids: [...binSel] });
+    binMsg = { err: !r.ok, text: r.ok ? `Put back ${r.restored} item${r.restored === 1 ? "" : "s"}. Plex is rescanning those folders.` + (r.errors.length ? " " + r.errors.join(" ") : "") : r.errors.join(" ") };
+    binSel.clear(); binAsk = null; load();
+  };
+  window.addEventListener("hashchange", () => setView(location.hash === "#trash" ? "trash" : "scan"));
+  // ---------------- Settings ----------------
+  let SC = null, SCmsg = null, SCbusy = false; const TR = {};      // SC = settings being edited; TR[key] = last Test/Detect result
+  const APPS = {
+    plex: { t: "Plex", need: true, files: true, secret: ["token", "Plex token"], url: "http://192.168.1.10:32400",
+      help: 'Library Doctor reads your libraries from Plex. <a href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/" target="_blank" rel="noopener">How to find your Plex token</a>.' },
+    arrs: { t: "Radarr / Sonarr", need: true, files: true, list: true, secret: ["key", "API key"], url: "http://192.168.1.10:7878",
+      help: "Add each Radarr and Sonarr you have (a 4K copy counts as its own). The API key is in each app under Settings → General." },
+    bazarr: { t: "Bazarr", list: true, files: true, secret: ["key", "API key"], url: "http://192.168.1.10:6767", help: "For the Subtitles check. API key: Bazarr → Settings → General." },
+    tautulli: { t: "Tautulli", secret: ["key", "API key"], url: "http://192.168.1.10:8181", help: "For the Unwatched check. API key: Tautulli → Settings → Web Interface." },
+    tdarr: { t: "Tdarr", files: true, secret: ["key", "API key"], url: "http://192.168.1.10:8265", help: "For Convert with Tdarr. Leave the key empty if Tdarr has no login." },
+    sportarr: { t: "Sportarr", files: true, secret: ["key", "API key"], url: "http://192.168.1.10:1867", help: "For sports libraries managed by Sportarr." },
+    gotify: { t: "Gotify", secret: ["token", "App token"], url: "http://192.168.1.10:8070", help: "A phone message after the nightly scan, only when there's news. Make an app in Gotify and paste its token." }
+  };
+  let AUTH = null, PWmsg = null;
+  async function settingsOpen() { if (!SC) { const r = await api("/api/settings"); SC = r.settings; SC.arrs = SC.arrs || []; SC.bazarr = SC.bazarr || []; SC._conf = r.configured; SC._root = r.media_root; }
+    try { AUTH = await api("/api/auth"); } catch (e) {} settingsDraw(); }
+  function pwHtml() {
+    if (!AUTH) return "";
+    if (!AUTH.on) return `<h2>Login</h2><div class="app"><p class="help">The login is switched off (LD_AUTH=off), so anyone who can reach this page can use it. Only do this when another login (Authentik, your proxy) sits in front of Library Doctor.</p></div>`;
+    return `<h2>Login</h2><div class="app"><p class="help">Changing the password logs out every other browser.</p><div class="fl">
+      <label>Current password<input type="password" id="pwOld" autocomplete="current-password"></label>
+      <label>New password (10+ characters)<input type="password" id="pwNew" autocomplete="new-password"></label>
+      <label>New password again<input type="password" id="pwNew2" autocomplete="new-password"></label></div>
+      ${PWmsg ? `<div class="tres2 ${PWmsg.ok ? "ok" : "bad"}">${esc(PWmsg.msg)}</div>` : ""}<div class="acts"><button class="b-teal sm" id="pwGo">Change password</button></div></div>`;
+  }
+  const fv = (e, k) => esc(e[k] == null ? "" : e[k]);
+  function entryHtml(kind, e, i) {
+    const A = APPS[kind], key = kind + (i == null ? "" : ":" + i), tr = TR[key], sec = A.secret;
+    const arrNames = SC.arrs.map(a => a.name).filter(Boolean);
+    const sel = (f, opts) => `<select data-f="${f}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(e[f] || "") === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+    let fields = "";
+    if (kind === "arrs") fields += `<label>Name<input data-f="name" value="${fv(e, "name")}" placeholder="Radarr 4K"></label><label>Type${sel("kind", [["radarr", "Radarr"], ["sonarr", "Sonarr"]])}</label>`;
+    if (kind === "bazarr") fields += `<label>Name<input data-f="name" value="${fv(e, "name")}" placeholder="Bazarr"></label>`;
+    fields += `<label>Address<input data-f="url" value="${fv(e, "url")}" placeholder="${A.url}" inputmode="url" autocomplete="off"></label>`;
+    fields += `<label>${sec[1]}<input data-f="${sec[0]}" type="password" autocomplete="new-password" value="${fv(e, sec[0])}" placeholder="${e[sec[0] + "_set"] ? "Saved. Leave empty to keep it" : ""}"></label>`;
+    if (kind === "gotify") fields += `<label>Link in the message (optional)<input data-f="click" value="${fv(e, "click")}" placeholder="https://librarydoctor.example.com"></label>`;
+    else if (kind !== "plex") fields += `<label>Address in your browser (optional)<input data-f="public" value="${fv(e, "public")}" placeholder="for the Open in ${esc(A.t.split(" ")[0])} buttons"></label>`;
+    if (kind === "bazarr") fields += `<label>Its Radarr${sel("radarr", [["", "None"]].concat(arrNames.map(n => [n, n])))}</label><label>Its Sonarr${sel("sonarr", [["", "None"]].concat(arrNames.map(n => [n, n])))}</label>`;
+    const ps = e.paths || [], nm = esc(e.name || (kind === "arrs" ? (e.kind === "sonarr" ? "Sonarr" : "Radarr") : A.t));
+    const pm = A.files ? `<div class="pm"><span class="ph">Folders</span>${ps.length ? ps.map((m, j) => `<div class="pr"><input data-p="${j}" data-pf="from" value="${esc(m.from)}" placeholder="${esc(kind === "plex" ? "/data" : "/movies")}" aria-label="Folder in ${nm}"><span>→</span><input data-p="${j}" data-pf="to" value="${esc(m.to)}" placeholder="${esc(SC._root)}" aria-label="Same folder in Library Doctor"><button class="b-line sm" data-prm="${j}">Remove</button></div>`).join("") + `<p>Left: the folder as ${nm} sees it. Right: the same folder in Library Doctor.</p>`
+      : `<p>Same folders as Library Doctor (nothing to change). If ${nm} sees your media somewhere else, press Detect folders.</p>`}<div class="acts"><button class="b-line sm" data-det="1">Detect folders</button><button class="b-line sm" data-padd="1">Add by hand</button></div></div>` : "";
+    return `<div class="app" data-kind="${kind}" ${i == null ? "" : `data-i="${i}"`}><h3>${esc(kind === "arrs" || kind === "bazarr" ? (e.name || (kind === "arrs" ? (e.kind === "sonarr" ? "Sonarr" : "Radarr") : "Bazarr")) : A.t)}${A.need ? "" : '<span class="opt">Optional</span>'}</h3>
+      ${i == null || i === 0 ? `<p class="help">${A.help}</p>` : ""}<div class="fl">${fields}</div>${pm}
+      ${tr ? `<div class="tres2 ${tr.ok ? "ok" : "bad"}">${esc(tr.msg)}</div>` : ""}
+      <div class="acts"><button class="b-teal sm" data-test="1">Test</button>${A.need && !A.list ? "" : `<button class="b-line sm" data-rm="1">Remove</button>`}</div></div>`;
+  }
+  function settingsDraw() {
+    const el = $("setView"); if (!SC) { el.innerHTML = "<p class='intro'>Loading…</p>"; return; }
+    let h = `<h2>Settings</h2><p class="intro">Library Doctor only reads from these apps until you press a fix button. API keys stay on this server and are never shown again after saving.</p>`;
+    if (!SC._conf) h += `<div class="start"><b>Start here:</b> add Plex and at least one Radarr or Sonarr, press Test on each, then Save. The first scan runs when you press Scan now.</div>`;
+    h += entryHtml("plex", SC.plex || (SC.plex = { url: "", public: "https://app.plex.tv" }), null);
+    h += `<h2>Radarr and Sonarr</h2>` + SC.arrs.map((e, i) => entryHtml("arrs", e, i)).join("") + `<div class="acts"><button class="b-line" data-add="arrs:radarr">+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">+ Add Sonarr</button></div>`;
+    h += `<h2>Optional <small>each one switches on its own checks</small></h2>`;
+    h += SC.bazarr.map((e, i) => entryHtml("bazarr", e, i)).join("");
+    for (const k of ["tautulli", "tdarr", "sportarr", "gotify"]) if (SC[k]) h += entryHtml(k, SC[k], null);
+    const missing = ["bazarr", "tautulli", "tdarr", "sportarr", "gotify"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
+    if (missing.length) h += `<div class="acts">${missing.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}${SC.bazarr.length ? `<button class="b-line" data-add="bazarr">+ Another Bazarr</button>` : ""}</div>`;
+    else if (SC.bazarr.length) h += `<div class="acts"><button class="b-line" data-add="bazarr">+ Another Bazarr</button></div>`;
+    h += pwHtml();
+    h += `<div class="savebar"><button class="b-teal" id="setSave" ${SCbusy ? "disabled" : ""}>${SCbusy ? "Saving…" : "Save settings"}</button><button class="b-line" id="setUndo">Undo changes</button>${SCmsg ? `<div class="tres2 ${SCmsg.ok ? "ok" : "bad"}">${esc(SCmsg.msg)}</div>` : ""}</div>`;
+    el.innerHTML = h; settingsWire();
+  }
+  function entryOf(node) { const a = node.closest(".app"), k = a.dataset.kind, i = a.dataset.i; return [k, i == null ? null : +i, i == null ? SC[k] : SC[k][+i]]; }
+  function settingsWire() {
+    const el = $("setView"), on = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
+    el.querySelectorAll("[data-f]").forEach(n => n.oninput = n.onchange = () => { const [k, i, e] = entryOf(n); e[n.dataset.f] = n.value; if (n.dataset.f === "name" || n.dataset.f === "kind") { const h = n.closest(".app").querySelector("h3"); if (h && n.dataset.f === "name") h.firstChild.nodeValue = n.value || h.firstChild.nodeValue; } });
+    el.querySelectorAll("[data-p]").forEach(n => n.oninput = () => { const [, , e] = entryOf(n); e.paths[+n.dataset.p][n.dataset.pf] = n.value; });
+    el.querySelectorAll("[data-prm]").forEach(n => n.onclick = () => { const [, , e] = entryOf(n); e.paths.splice(+n.dataset.prm, 1); settingsDraw(); });
+    el.querySelectorAll("[data-padd]").forEach(n => n.onclick = () => { const [, , e] = entryOf(n); (e.paths = e.paths || []).push({ from: "", to: SC._root }); settingsDraw(); });
+    el.querySelectorAll("[data-rm]").forEach(n => n.onclick = () => { const [k, i] = entryOf(n); if (i == null) delete SC[k]; else SC[k].splice(i, 1); Object.keys(TR).forEach(x => delete TR[x]); settingsDraw(); });
+    el.querySelectorAll("[data-add]").forEach(n => n.onclick = () => { const [k, sub] = n.dataset.add.split(":");
+      if (k === "arrs") SC.arrs.push({ name: sub === "sonarr" ? (SC.arrs.some(a => a.name === "Sonarr") ? "Sonarr 2" : "Sonarr") : (SC.arrs.some(a => a.name === "Radarr") ? "Radarr 2" : "Radarr"), kind: sub, url: "", paths: [] });
+      else if (k === "bazarr") SC.bazarr.push({ name: SC.bazarr.length ? "Bazarr " + (SC.bazarr.length + 1) : "Bazarr", url: "", paths: [] });
+      else SC[k] = { url: "", paths: [] }; settingsDraw(); });
+    el.querySelectorAll("[data-test],[data-det]").forEach(n => n.onclick = async () => { const [k, i, e] = entryOf(n), det = !!n.dataset.det, key = k + (i == null ? "" : ":" + i);
+      n.disabled = true; n.textContent = det ? "Looking…" : "Testing…";
+      const r = await api(det ? "/api/settings/detect" : "/api/settings/test", { kind: k, cfg: e });
+      if (det && r.ok) e.paths = r.paths;
+      TR[key] = { ok: r.ok, msg: r.msg || r.error || "No answer." }; settingsDraw(); });
+    on("pwGo", async () => { const o = $("pwOld").value, a = $("pwNew").value, b = $("pwNew2").value;
+      if (a !== b) { PWmsg = { ok: false, msg: "The new passwords don't match." }; return settingsDraw(); }
+      const r = await api("/api/auth/change", { old: o, new: a }); PWmsg = { ok: r.ok, msg: r.ok ? "Password changed. Other browsers are logged out." : r.msg }; settingsDraw(); });
+    on("setUndo", () => { SC = null; SCmsg = null; Object.keys(TR).forEach(x => delete TR[x]); settingsOpen(); });
+    on("setSave", async () => { SCbusy = true; SCmsg = null; settingsDraw();
+      const body = {}; for (const k of ["plex", "tautulli", "tdarr", "sportarr", "gotify", "arrs", "bazarr"]) if (SC[k]) body[k] = SC[k];
+      const r = await api("/api/settings/save", { settings: body }); SCbusy = false;
+      if (r.ok) { SCmsg = { ok: true, msg: r.configured ? "Saved. Library Doctor is using the new settings now." : "Saved. Add Plex and at least one Radarr or Sonarr to start scanning." }; const keep = SCmsg; SC = null; await settingsOpen(); SCmsg = keep; settingsDraw(); load(); }
+      else { SCmsg = { ok: false, msg: r.msg || r.error || "Couldn't save." }; settingsDraw(); } });
+  }
+  $("tabSet").onclick = () => setView("settings");
+  api("/api/auth").then(a => { if (a && a.on) $("logout").hidden = false; }).catch(() => {});
+  $("logout").onclick = async () => { await api("/api/logout", {}); location.href = "/login"; };
+  async function load() {
+    try { S = await api("/api/state"); if (S && S.configured === false && view === "scan" && !load.sent) { load.sent = true; setView("settings"); } render(); }
+    catch (e) { $("last").textContent = "Can't reach Library Doctor: " + e.message; }
+    const checking = S && (S.done || []).some(x => x.status === "checking");
+    clearTimeout(poll); poll = setTimeout(load, S && (S.running || checking) ? 1500 : 30000);
+  }
+  if (location.hash === "#trash") setView("trash"); else if (location.hash === "#settings") setView("settings");
+  $("rSpace").onclick = () => { filter = "quality"; render(); $("checks").scrollIntoView({ behavior: "smooth", block: "start" }); };
+  $("rJobs").onclick = () => {     // first check (in tile order) that still has a job; Unwatched isn't a job
+    const open = S ? S.issues.filter(i => !i.ignored && i.chk !== "unwatched") : [];
+    const c = CHECKS.find(k => k.live && open.some(i => i.chk === k.id)); if (c) { filter = c.id; render(); $("checks").scrollIntoView({ behavior: "smooth", block: "start" }); }
+  };
+  $("scanBtn").onclick = async () => { $("scanBtn").disabled = true; await api("/api/scan", {}); load(); };
+  $("lib").onchange = list; $("showIgn").onchange = list;
+  load();
+})();
+</script>
+</body>
+</html>
