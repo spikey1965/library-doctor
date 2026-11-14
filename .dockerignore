@@ -1,0 +1,7 @@
+devconfig/
+devconfig-*/
+*.bak*
+.git
+.github
+README.md
+docs/
