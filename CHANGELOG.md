@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 (beta)
+
+- The Space saved and Jobs left rings update straight after a scan or a fix (they could lag by up to 30 seconds).
+- If your media is spread over several disks or datasets, the main screen now says so, and clean-up explains why a file can't be moved instead of showing a raw "cross-device link" error.
+- README: a Known limitations section.
+
 ## 0.1.0 (beta)
 
 First public version.

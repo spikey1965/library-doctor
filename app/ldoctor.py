@@ -29,12 +29,12 @@ Safety: the page only sends an issue id. The server takes the file list from its
 is inside MEDIA_ROOT, never moves the kept file, and never leaves an item with no copy at all.
 Standard library only.
 """
-import hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, threading, time, urllib.parse, urllib.request
+import errno, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, threading, time, urllib.parse, urllib.request
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -115,6 +115,32 @@ def map_out(obj, cfg):
     pairs = _pairs(cfg, out=True)
     return _walk(obj, pairs, PATH_KEYS_OUT) if pairs else obj
 
+def move_file(src, dst):
+    """os.rename with a plain-English error when src and dst are on different disks/datasets (clean-up only ever renames)."""
+    try:
+        os.rename(src, dst)
+    except OSError as e:
+        if e.errno == errno.EXDEV:
+            raise OSError(e.errno, "%s is on a different disk or dataset from %s, so it can't be moved instantly. Library Doctor needs your media in one mount (see Known limitations in the README). Nothing was moved."
+                          % (src, os.path.dirname(dst) or dst)) from None
+        raise
+
+_SPLIT = {"t": 0, "v": []}
+def split_mounts():
+    """Folders under MEDIA_ROOT (two levels deep) that sit on another disk or dataset: clean-up can't move files from them."""
+    if time.time() - _SPLIT["t"] < 600: return _SPLIT["v"]
+    out = []
+    try:
+        d0 = os.stat(MEDIA_ROOT).st_dev
+        for a in os.scandir(MEDIA_ROOT):
+            if not a.is_dir(follow_symlinks=False) or a.name.startswith("."): continue
+            if os.stat(a.path).st_dev != d0: out.append(a.path); continue
+            try:
+                out += [b.path for b in os.scandir(a.path) if b.is_dir(follow_symlinks=False) and not b.name.startswith(".") and os.stat(b.path).st_dev != d0]
+            except OSError: pass
+    except OSError: pass
+    _SPLIT.update(t=time.time(), v=sorted(out)[:20]); return _SPLIT["v"]
+
 def log(msg):
     print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg, flush=True)
 
@@ -165,6 +191,7 @@ def init_db():
 def event(kind, text):
     with db() as c:
         c.execute("INSERT INTO events (at, kind, text) VALUES (?,?,?)", (now_iso(), kind, text))
+    _STATS["v"] = None                     # something changed: the Space saved / Jobs left rings recount
     log("%s: %s" % (kind, text))
 
 # ---------------- Plex ----------------
@@ -565,7 +592,7 @@ def scan():
             c.execute("INSERT INTO scans (started, finished, ok, items, files, issues, note) VALUES (?,?,?,?,?,?,?)",
                       (started, now_iso(), 0, n_items, n_files, 0, str(e)[:300]))
     finally:
-        STATE.update(running=False, step="", progress=1.0)
+        STATE.update(running=False, step="", progress=1.0); _STATS["v"] = None
         SCAN_LOCK.release()
     return True
 
@@ -673,7 +700,7 @@ def _dance_steps(done_id, issue_id, item_title, src, tmp, sec, ep_title):
         try:
             os.makedirs(os.path.dirname(tmp), exist_ok=True)
             size = os.path.getsize(src)
-            os.rename(src, tmp)
+            move_file(src, tmp)
             with db() as c:   # recorded like a trash item, so it can always be put back by hand if anything breaks
                 tid = c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
                                 (issue_id, item_title, src, tmp, size, "Plex fix in progress (moved back automatically)", now_iso())).lastrowid
@@ -687,7 +714,7 @@ def _dance_steps(done_id, issue_id, item_title, src, tmp, sec, ep_title):
                     except Exception as e: log("emptyTrash failed: %r" % e)
         finally:
             if os.path.exists(tmp) and not os.path.exists(src):
-                os.rename(tmp, src)
+                move_file(tmp, src)
                 with db() as c:
                     if tid: c.execute("UPDATE trash SET restored_at=? WHERE id=?", (now_iso(), tid))
     if not gone:
@@ -740,7 +767,7 @@ def cleanup(issue_id, keep_idx=None):
                 try:
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     size = os.path.getsize(src)
-                    os.rename(src, dst)        # same dataset: instant, nothing copied
+                    move_file(src, dst)        # same dataset: instant, nothing copied
                     with db() as c:
                         c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
                                   (issue_id, row["title"], src, dst, size, v.get("reason", ""), now_iso()))
@@ -757,7 +784,7 @@ def cleanup(issue_id, keep_idx=None):
             rel = os.path.relpath(os.path.realpath(src), MEDIA_ROOT)
             dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, rel)
             try:
-                os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); os.rename(src, dst)
+                os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
                 with db() as c:
                     c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
                               (issue_id, row["title"], src, dst, size, "Leftover side file", now_iso()))
@@ -794,7 +821,7 @@ def restore(trash_id):
         if os.path.exists(t["src"]): return {"ok": False, "error": "A file already exists at the original place, so nothing was changed."}
         if not os.path.isfile(t["dst"]): return {"ok": False, "error": "The file is no longer in the trash."}
         os.makedirs(os.path.dirname(t["src"]), exist_ok=True)
-        os.rename(t["dst"], t["src"])
+        move_file(t["dst"], t["src"])
         with db() as c:
             c.execute("UPDATE trash SET restored_at=? WHERE id=?", (now_iso(), trash_id))
         for sec in plex("/library/sections").get("Directory", []):
@@ -1178,7 +1205,7 @@ def health_fix(issue_id):
         for p, reason in [(src, "Broken file (replaced)" if d["kind"] == "broken" else "Too short (replaced)")] + [(x, "Leftover side file") for x in health_side_files(src)]:
             dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(p), MEDIA_ROOT))
             try:
-                os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(p); os.rename(p, dst)
+                os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(p); move_file(p, dst)
                 with db() as c:
                     tids.append(c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
                                           (issue_id, row["title"], p, dst, size, reason, now_iso())).lastrowid)
@@ -1373,13 +1400,13 @@ def subs_fix(issue_id, how):
                 dst = os.path.join(os.path.dirname(src), d["new"])
                 if os.path.dirname(os.path.realpath(dst)) != os.path.dirname(os.path.realpath(src)) or os.path.exists(dst):
                     return {"ok": False, "error": "A subtitle with that name already exists, so nothing was changed."}
-                os.rename(src, dst)
+                move_file(src, dst)
                 note, status = "Renamed to match the video. Plex links it after its folder scan.", "ok"
                 event("subtitles", "%s: renamed the subtitle to match its video." % row["title"])
             else:
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
-                os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); os.rename(src, dst)
+                os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
                 with db() as c:
                     tids.append(c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
                                           (issue_id, row["title"], src, dst, size, {"advert": "Advert-only subtitle"}.get(d["kind"], "Stray subtitle"), now_iso())).lastrowid)
@@ -1587,7 +1614,7 @@ def virus_fix(issue_id):
         if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where it was. Scan again."}
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
-        os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); os.rename(src, dst)
+        os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
         try: os.chmod(dst, 0o640)                    # never executable in the trash
         except OSError: pass
         reason = {"infected": "Virus (ClamAV)", "program": "Program file", "archive": "Leftover archive", "fakevideo": "Fake video"}.get(d["kind"], "Virus scan")
@@ -2045,7 +2072,7 @@ def coming_fix(issue_id, how):
         if not _safe_placeholder(src): return {"ok": False, "error": "The placeholder isn't where it was. Scan again."}
         with MOVE_LOCK:
             dst = os.path.join(TRASH_DIR, datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
-            os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); os.rename(src, dst)
+            os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
             with db() as c:
                 tids.append(c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
                                       (issue_id, row["title"], src, dst, size, "Coming Soon placeholder (film arrived)", now_iso())).lastrowid)
@@ -2266,12 +2293,12 @@ def _remux(done_id, issue_id, title, d):
         else:
             with MOVE_LOCK:
                 tdst = os.path.join(TRASH_DIR, datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
-                os.makedirs(os.path.dirname(tdst), exist_ok=True); size = os.path.getsize(src); os.rename(src, tdst)
+                os.makedirs(os.path.dirname(tdst), exist_ok=True); size = os.path.getsize(src); move_file(src, tdst)
                 with db() as c:
                     tids.append(c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
                                           (issue_id, title, src, tdst, size, "Old %s copy (now an .mkv)" % os.path.splitext(src)[1], now_iso())).lastrowid)
                 moved.append(src)
-                os.rename(tmp, dst)
+                move_file(tmp, dst)
             plex_refresh_folder(d.get("section"), os.path.dirname(src))
             arr_rescan(d.get("refs"))
             status = "ok"
@@ -3104,7 +3131,7 @@ def state():
     coming = {"ytdlp": ytdlp_status(), "busy": TRAILER_LOCK.locked(), "updating": YTDLP_LOCK.locked()}
     return {"gotify": bool((S.get("gotify") or {}).get("token")), "follow_days": FOLLOW_DAYS, "virus": virus, "coming": coming, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
             "scan_hour": SCAN_HOUR, "keep_days": KEEP_DAYS, "stats": stats(), "trash": trash, "trash_days": TRASH_DAYS, "events": events, "done": done,
-            "configured": configured(), "version": APP_VERSION,
+            "configured": configured(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT,
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
 
 class H(BaseHTTPRequestHandler):

@@ -52,6 +52,16 @@ Library Doctor needs to see your films and shows inside **one** mount (for examp
 
 Your apps may see the same files at different paths (Plex might say `/data/movies`, Radarr `/movies`, Library Doctor `/media/movies`). On each app's card in Settings, press **Detect folders**: Library Doctor looks at a few real files from that app, finds them under its own `/media`, and fills in the mapping. You can also add one by hand.
 
+## Known limitations
+
+This is a beta, so a few things are worth knowing before you start:
+
+- **One media mount.** Clean-up, Replace and Convert to MKV move files into `.library-doctor-trash` with a rename, which only works within one disk or dataset. If your films and shows are on different disks, scans still work but those fixes can't move files; Library Doctor shows a warning on its main screen when it spots this.
+- **Plex only.** Jellyfin and Emby aren't supported yet.
+- **Tested on TrueNAS so far.** Unraid, Synology, Raspberry Pi (ARM) and Docker Desktop haven't been tried by anyone yet. If you run one of those, an issue saying how it went (good or bad) really helps.
+- **Radarr/Sonarr v3 API.** It talks to the current Radarr and Sonarr (including Sonarr 5). Very old versions may not work.
+- **English and the author's library.** The checks were tuned on one real library of about 7,500 films and episodes. If a check flags something that's actually fine, press Ignore and please open an issue.
+
 ## Behind a reverse proxy or SSO
 
 Library Doctor has its own login. If Authentik, Authelia or your proxy already protects it, you can switch the built-in login off with `LD_AUTH=off`. Only do that when something else is in front: Library Doctor can move files.

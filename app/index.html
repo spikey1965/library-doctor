@@ -28,6 +28,8 @@ body { padding:0 max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe
 .hero { display:flex; flex-wrap:wrap; gap:18px; align-items:center; }
 .ring { width:118px; height:118px; position:relative; flex:none; } .ring svg { width:100%; height:100%; transform:rotate(-90deg); }
 .ring b { position:absolute; inset:0; display:grid; place-items:center; font:800 25px var(--head); font-variant-numeric:tabular-nums; }
+.splitw { margin-top:14px; background:var(--orange-bg); border:1px solid var(--orange); border-radius:12px; padding:10px 12px; font-size:13px; line-height:1.45; }
+.splitw b { color:var(--orange); } .splitw code { background:var(--bg); border-radius:5px; padding:1px 5px; font-size:12px; }
 .rings2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:16px; }
 .rcard { display:flex; align-items:center; gap:14px; text-align:left; color:var(--fg); background:var(--card); border:1px solid transparent; border-radius:14px; padding:12px 14px; cursor:pointer; font-family:var(--font); min-width:0; }
 .rcard:hover { border-color:var(--line); } .rcard:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
@@ -228,6 +230,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
           <button class="rcard" id="rJobs" title="Go to the next job"><div class="ring sm" aria-hidden="true"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--panel)" stroke-width="14"/><circle id="arcJo" cx="60" cy="60" r="50" fill="none" stroke="var(--orange)" stroke-width="14" stroke-dasharray="0 999"/><circle id="arcJb" cx="60" cy="60" r="50" fill="none" stroke="#6aa8ff" stroke-width="14" stroke-dasharray="0 999"/><circle id="arcJd" cx="60" cy="60" r="50" fill="none" stroke="var(--teal)" stroke-width="14" stroke-dasharray="0 999"/></svg><b id="ringJ">–</b></div>
             <span class="rt"><span class="rl">Jobs left</span><span class="rs" id="jobsTxt" title="Episodes are counted one by one, so this can be higher than the number of cards. Unwatched isn't counted: it's information, not a job.">–</span></span></button>
         </div>
+        <div class="splitw" id="splitWarn" role="note" hidden></div>
         <div class="checks" id="checks" role="group" aria-label="Checks"></div>
       </div>
       <div class="panel">
@@ -352,6 +355,9 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     $("score").textContent = $("ringN").textContent = scan ? (score >= 99.95 ? "100%" : score.toFixed(1) + "%") : "–";
     const C = 2 * Math.PI * 50; $("arc").setAttribute("stroke-dasharray", (C * score / 100) + " " + C);
     rings2(S.stats);
+    const sp = S.split_mounts || [];
+    $("splitWarn").hidden = !sp.length;
+    if (sp.length) $("splitWarn").innerHTML = `<b>Your media is on more than one disk.</b> ${sp.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")}${sp.length > 4 ? ` and ${sp.length - 4} more` : ""} ${sp.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. Scans work, but clean-up, Replace and Convert to MKV can't move files from there into the trash. Mount the folder that holds all your media as one volume instead (see Known limitations in the README).`;
     $("nItems").textContent = scan ? scan.items.toLocaleString("en-GB") : "–";
     $("nFiles").textContent = scan ? scan.files.toLocaleString("en-GB") : "–";
     $("nOpen").textContent = open.length; $("nIgn").textContent = ign;
@@ -800,6 +806,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
   function settingsDraw() {
     const el = $("setView"); if (!SC) { el.innerHTML = "<p class='intro'>Loading…</p>"; return; }
     let h = `<h2>Settings</h2><p class="intro">Library Doctor only reads from these apps until you press a fix button. API keys stay on this server and are never shown again after saving.</p>`;
+    if (S && (S.split_mounts || []).length) h += `<div class="splitw" role="note" style="margin-top:0"><b>Your media is on more than one disk.</b> ${S.split_mounts.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")} ${S.split_mounts.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. Scans will work, but clean-up can't move files from there. Mount the folder that holds all your media as one volume if you can (see Known limitations in the README).</div>`;
     if (!SC._conf) h += `<div class="start"><b>Start here:</b> add Plex and at least one Radarr or Sonarr, press Test on each, then Save. The first scan runs when you press Scan now.</div>`;
     h += entryHtml("plex", SC.plex || (SC.plex = { url: "", public: "https://app.plex.tv" }), null);
     h += `<h2>Radarr and Sonarr</h2>` + SC.arrs.map((e, i) => entryHtml("arrs", e, i)).join("") + `<div class="acts"><button class="b-line" data-add="arrs:radarr">+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">+ Add Sonarr</button></div>`;
