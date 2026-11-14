@@ -33,7 +33,7 @@ Tdarr (Convert with Tdarr), Sportarr (sports libraries) and Gotify (a phone mess
 ## Install (Docker Compose)
 
 1. Make a folder, save [`compose.yaml`](compose.yaml) in it and change the three lines marked `CHANGE`:
-   - `user:` the user and group that own your media (run `ls -ln /path/to/media`; the two numbers after the permissions)
+   - `PUID` and `PGID`: the user and group that own your media (run `ls -ln /path/to/media`; the two numbers after the permissions)
    - `TZ` your time zone
    - `/path/to/media` the folder that holds your films and shows
 2. Start it:

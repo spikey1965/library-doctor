@@ -4,11 +4,11 @@ services:
     image: ghcr.io/spikey1965/library-doctor:latest
     container_name: library-doctor
     restart: unless-stopped
-    # CHANGE: the user:group that owns your media folders (find it with: ls -ln /path/to/media)
-    user: "1000:1000"
     ports:
       - "8790:8790"
     environment:
+      - PUID=1000                   # CHANGE: the user and group that own your media folders
+      - PGID=1000                   #         (find them with: ls -ln /path/to/media)
       - TZ=Europe/London            # CHANGE: your time zone (the nightly scan runs at 03:00 local time)
       - LD_SCAN_HOUR=3              # hour of the nightly scan
       - LD_TRASH_DAYS=7             # how long cleaned-up files stay in the trash before they're deleted

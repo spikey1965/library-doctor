@@ -3274,7 +3274,12 @@ class H(BaseHTTPRequestHandler):
         self.send(404, {"error": "not found"})
 
 if __name__ == "__main__":
-    init_db()
+    try:
+        init_db()
+    except (OSError, sqlite3.OperationalError) as e:
+        log("Can't write to %s (%s). Library Doctor keeps its settings and database there. Mount a folder at %s that user %d can write to "
+            "(set PUID/PGID in compose to the folder's owner), then start it again." % (CONFIG_DIR, e, CONFIG_DIR, os.getuid()))
+        raise SystemExit(1)
     threading.Thread(target=nightly, daemon=True).start()
     log("Library Doctor listening on %s:%d (nightly scan at %02d:00, trash kept %d days)" % (LISTEN, PORT, SCAN_HOUR, TRASH_DAYS))
     ThreadingHTTPServer((LISTEN, PORT), H).serve_forever()
