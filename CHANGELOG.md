@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 (beta)
+
+- **More notifications:** besides Gotify, the nightly summary (and new Downloads problems) can go to Discord, Telegram, ntfy, any webhook (JSON POST) and email. Add them in Settings → Notifications, each with a Test button; every one you add gets the message.
+- **History panel:** space saved over the last 30 or 90 days, issues found and how long scans took, as three small charts with a tooltip per day. It's worked out from what Library Doctor already recorded, so it shows history straight away.
+- **Plex editions:** a Theatrical and a Director's Cut (`{edition-...}` or Plex's edition field) are no longer flagged as duplicates. Only copies of the same edition are compared.
+- **Automatic scan in Settings:** pick the time and the days of the week, or leave the time empty for no automatic scan. `LD_SCAN_HOUR` still works until you set one.
+
 ## 0.1.2 (beta)
 
 - **Downloads check (new tile):** reads every Radarr/Sonarr queue. Finished downloads they won't import by themselves get an **Import** button (only files Radarr/Sonarr has no objection to); torrents still at 0% after a day (or your night window) get **Remove & try another** (blocklist + a fresh search, even for unmonitored episodes). Checked hourly; new problems go to Gotify once a day.

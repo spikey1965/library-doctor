@@ -35,13 +35,13 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
 LISTEN = os.environ.get("LD_LISTEN", "0.0.0.0")
 PORT = int(os.environ.get("LD_PORT", "8790"))
-SCAN_HOUR = int(os.environ.get("LD_SCAN_HOUR", "3"))
+SCAN_HOUR = int(os.environ.get("LD_SCAN_HOUR", "3"))   # default; the Settings page can set time + days (v0.1.3)
 MEDIA_ROOT = os.path.realpath(os.environ.get("LD_MEDIA_ROOT", "/media"))
 TRASH_DIR = os.path.join(MEDIA_ROOT, ".library-doctor-trash")
 TRASH_DAYS = int(os.environ.get("LD_TRASH_DAYS", "7"))
@@ -75,6 +75,18 @@ def normalize(cfg):
     return cfg
 
 S = normalize(load_secrets())   # {"plex": {"url","token","public","paths"}, "arrs": [{"name","kind","url","key","public","paths"}], ...}
+
+def sched():
+    """v0.1.3: (hour, minute, days) of the automatic scan. Days are 0=Mon..6=Sun. From Settings, else LD_SCAN_HOUR every day."""
+    sc = S.get("schedule") or {}
+    try: h = int(sc.get("hour", SCAN_HOUR))
+    except (TypeError, ValueError): h = SCAN_HOUR
+    if not 0 <= h <= 23: h = -1                               # e.g. LD_SCAN_HOUR=99: no automatic scan
+    try: mi = min(59, max(0, int(sc.get("minute", 0))))
+    except (TypeError, ValueError): mi = 0
+    raw = sc.get("days")
+    days = sorted({int(d) for d in raw if str(d).isdigit() and 0 <= int(d) <= 6}) if isinstance(raw, list) else []
+    return h, mi, (days or list(range(7)))
 
 def configured():
     """Enough set up to scan: Plex plus at least one Radarr/Sonarr."""
@@ -274,6 +286,22 @@ def plex_refresh_folder(section, folder):
         return True
     except Exception as e:
         log("plex refresh failed: %r" % e); return False
+
+_EDITION_RE = re.compile(r"\{edition-([^}]+)\}", re.I)
+
+def edition_of(m=None, md=None):
+    """v0.1.3: Plex edition of an item or one of its copies ("Director's Cut"), from Plex's editionTitle or an
+    {edition-...} tag in the file/folder name. Different editions of a film are not duplicates."""
+    if md is not None:
+        f = ((md.get("Part") or [{}])[0].get("file") or "")
+        x = _EDITION_RE.search(f)
+        if x: return x.group(1).strip().lower()
+    if m is not None and m.get("editionTitle"): return str(m["editionTitle"]).strip().lower()
+    if m is not None:
+        for md2 in m.get("Media", []):
+            x = _EDITION_RE.search((md2.get("Part") or [{}])[0].get("file") or "")
+            if x: return x.group(1).strip().lower()
+    return ""
 
 def guids(m):
     out = {}
@@ -524,8 +552,16 @@ def scan():
                 # copies that are really on disk and not in our trash
                 live = [md for md in medias if md.get("Part") and all(os.path.exists(x.get("file", "")) and x.get("file") not in trashed
                         for x in md.get("Part", []))]
+                # v0.1.3: copies that are different editions (Theatrical + Director's Cut) aren't duplicates of each other:
+                # only copies of the SAME edition count (largest group), and none if every copy is a different edition
+                live_d = live
+                if len(live) > 1:
+                    eds = {}
+                    for md in live: eds.setdefault(edition_of(m, md) if _EDITION_RE.search((md.get("Part") or [{}])[0].get("file") or "") else "", []).append(md)
+                    if len(eds) > 1:
+                        live_d = max(eds.values(), key=len) if max(len(v) for v in eds.values()) > 1 else live[:1]
                 # --- duplicates: several versions in one item ---
-                if len(live) > 1 and len({(md.get("Part") or [{}])[0].get("file") for md in live}) == 1:
+                if len(live_d) > 1 and len({(md.get("Part") or [{}])[0].get("file") for md in live_d}) == 1:
                     f0 = live[0]["Part"][0]["file"]
                     issues.append(dict(id=iid("double", lib, m["ratingKey"]), chk="dupes", sev="amb", title=title, library=lib,
                                        detail={"text": "Plex lists the same file %d times. It's one file on disk, so there's nothing to delete." % len(live),
@@ -533,8 +569,8 @@ def scan():
                                                "section": sec["key"], "refs": refs, "confidence": "fix",
                                                "versions": [dict(version(live[0]), action="keep", reason="The one real file")]},
                                        links=links))
-                elif len(live) > 1:
-                    vers = [version(md) for md in live]
+                elif len(live_d) > 1:
+                    vers = [version(md) for md in live_d]
                     if kind == "show":
                         for a, it in arr_series: tracked |= sonarr_tracked(a, it["id"])
                     issues.append(dict(id=iid("dupe-item", lib, m["ratingKey"]), chk="dupes", sev="amb", title=title, library=lib,
@@ -543,7 +579,10 @@ def scan():
                                        links=links))
                 key = g.get("tmdb") or g.get("imdb") or g.get("tvdb")
                 if key and live:
-                    by_guid.setdefault(key if kind == "movie" else (key, m.get("parentIndex"), m.get("index")), []).append((m, title, links, refs, tracked, live, arr_series))
+                    gk = key if kind == "movie" else (key, m.get("parentIndex"), m.get("index"))
+                    ed = edition_of(m) if kind == "movie" else ""
+                    if ed: gk = (gk, "edition", ed)            # v0.1.3: each edition is its own group (ids unchanged when there's no edition)
+                    by_guid.setdefault(gk, []).append((m, title, links, refs, tracked, live, arr_series))
             # --- duplicates: the same film/episode as separate items in one library ---
             for k, lst in by_guid.items():
                 if len(lst) > 1:
@@ -1875,6 +1914,87 @@ def gotify_send(title, message, priority=5):
     except Exception as e:
         log("gotify send failed: %r" % e); return {"ok": False, "error": str(e)}
 
+# ---------------- more notification channels (v0.1.3) ----------------
+# Besides Gotify: Discord (webhook), Telegram (bot), ntfy, a plain JSON webhook and email. Standard library only.
+# notify() sends one message to every channel that's set up; it's "ok" if at least one got it.
+NOTIFY_KINDS = ("discord", "telegram", "ntfy", "webhook", "email")
+NOTIFY_DEFAULT_URL = {"discord": "https://discord.com", "telegram": "https://api.telegram.org"}
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+def _plain(t): return _MD_BOLD.sub(r"\1", t or "")
+
+def notify_one(kind, e, title, message, priority=5):
+    """Send to one channel config e. Returns {"ok", "error"?}. Raises nothing."""
+    try:
+        if kind == "gotify":
+            g = e
+            extras = {"client::display": {"contentType": "text/markdown"}}
+            if g.get("click"): extras["client::notification"] = {"click": {"url": g["click"]}}
+            http(g["url"].rstrip("/") + "/message", {"X-Gotify-Key": g.get("token", "")}, data={"title": title, "message": message, "priority": priority, "extras": extras}, method="POST", timeout=20)
+        elif kind == "discord":
+            hook = e.get("token", "")
+            if not hook.startswith("https://"): return {"ok": False, "error": "Paste the whole Discord webhook URL (Channel settings → Integrations → Webhooks)."}
+            text = ("**%s**\n%s" % (title, message))[:1990]
+            http(hook, {"User-Agent": "LibraryDoctor"}, data={"content": text, "username": "Library Doctor"}, method="POST", timeout=20)
+        elif kind == "telegram":
+            if not e.get("token") or not e.get("chat"): return {"ok": False, "error": "Fill in the bot token and the chat ID."}
+            http((e.get("url") or NOTIFY_DEFAULT_URL["telegram"]).rstrip("/") + "/bot%s/sendMessage" % e["token"], {},
+                 data={"chat_id": e["chat"], "text": ("%s\n\n%s" % (title, _plain(message)))[:4000], "disable_web_page_preview": True}, method="POST", timeout=20)
+        elif kind == "ntfy":
+            if not e.get("topic"): return {"ok": False, "error": "Fill in the topic."}
+            h = {"Title": title.encode("ascii", "replace").decode(), "Priority": str(min(5, max(1, priority // 2 + 1))), "Markdown": "yes", "Content-Type": "text/plain; charset=utf-8"}
+            if e.get("token"): h["Authorization"] = "Bearer " + e["token"]
+            req = urllib.request.Request(e["url"].rstrip("/") + "/" + urllib.parse.quote(e["topic"]), data=message.encode("utf-8"), headers=h, method="POST")
+            urllib.request.urlopen(req, timeout=20).read()
+        elif kind == "webhook":
+            h = {"User-Agent": "LibraryDoctor"}
+            if e.get("token"): h["Authorization"] = "Bearer " + e["token"]
+            http(e["url"], h, data={"title": title, "message": message, "text": _plain(message), "priority": priority, "source": "library-doctor"}, method="POST", timeout=20)
+        elif kind == "email":
+            import smtplib, ssl as _ssl
+            from email.message import EmailMessage
+            host, _, port = (e.get("url") or "").replace("smtp://", "").partition(":")
+            mode = e.get("tls") or "starttls"
+            port = int(port or (465 if mode == "ssl" else 587 if mode == "starttls" else 25))
+            to = [x.strip() for x in (e.get("to") or "").replace(";", ",").split(",") if x.strip()]
+            if not host or not to: return {"ok": False, "error": "Fill in the mail server and who to send to."}
+            msg = EmailMessage(); msg["Subject"] = title; msg["From"] = e.get("from") or e.get("user") or "library-doctor@localhost"; msg["To"] = ", ".join(to)
+            msg.set_content(_plain(message))
+            ctx = _ssl.create_default_context()
+            srv = smtplib.SMTP_SSL(host, port, timeout=20, context=ctx) if mode == "ssl" else smtplib.SMTP(host, port, timeout=20)
+            try:
+                if mode == "starttls": srv.starttls(context=ctx)
+                if e.get("user"): srv.login(e["user"], e.get("token", ""))
+                srv.send_message(msg)
+            finally:
+                try: srv.quit()
+                except Exception: pass
+        else:
+            return {"ok": False, "error": "Unknown channel."}
+        return {"ok": True}
+    except urllib.error.HTTPError as x:
+        return {"ok": False, "error": "%s said %d %s." % (kind.title(), x.code, x.reason)}
+    except Exception as x:
+        return {"ok": False, "error": "%s: %s" % (kind.title(), getattr(x, "reason", x))}
+
+def notify_channels():
+    out = []
+    g = S.get("gotify") or {}
+    if g.get("token") and g.get("url"): out.append(("gotify", g))
+    for k in NOTIFY_KINDS:
+        e = S.get(k)
+        if isinstance(e, dict) and e.get("url"): out.append((k, e))
+    return out
+
+def notify(title, message, priority=5):
+    chans = notify_channels()
+    if not chans: return {"ok": False, "error": "No notification channel is set up (Settings → Optional)."}
+    res = [(k, notify_one(k, e, title, message, priority)) for k, e in chans]
+    for k, r in res:
+        if not r.get("ok"): log("notify %s failed: %s" % (k, r.get("error")))
+    ok = [k for k, r in res if r.get("ok")]
+    return {"ok": bool(ok), "sent": ok, "error": "; ".join(r["error"] for k, r in res if not r.get("ok"))}
+
 CHK_NAMES = {"missing": "missing file", "dupes": "duplicate", "meta": "metadata gap", "health": "broken file", "subs": "subtitle problem", "virus": "virus / fake file", "coming": "Coming Soon problem", "quality": "quality/space item", "unwatched": "unwatched list", "queue": "download problem"}
 
 def nightly_summary():
@@ -1919,7 +2039,7 @@ def nightly_summary():
         log("nightly summary: nothing new, no message sent"); kv_set("gotify_last_summary", now_iso()); return {"ok": True, "sent": False}
     lines.append("Open now: %d to look at \u00b7 trash %d item%s (%s)" % (len(allopen), len(trash), "" if len(trash) == 1 else "s", human(sum(t["size"] or 0 for t in trash))))
     title = "Library Doctor: " + ("%d new to look at" % len(new) if new else "%d replaced file%s arrived" % (len(arrived), "" if len(arrived) == 1 else "s") if arrived else "nightly check")
-    r = gotify_send(title, "\n\n".join(lines), prio)
+    r = notify(title, "\n\n".join(lines), prio)
     if r.get("ok"): kv_set("gotify_last_summary", now_iso()); log("nightly summary sent: %s" % title)
     return dict(r, sent=r.get("ok"))
 
@@ -1928,7 +2048,8 @@ def nightly():
     while True:
         now = datetime.now()
         if not configured(): time.sleep(30); continue          # setup mode: nothing to do until Settings are saved
-        if now.hour == SCAN_HOUR and last != now.date():
+        sh, sm, sdays = sched()
+        if now.hour == sh and now.minute >= sm and now.weekday() in sdays and last != now.date():
             last = now.date()
             try: purge(TRASH_DAYS)
             except Exception as e: log("purge failed: %r" % e)
@@ -3271,8 +3392,8 @@ def queue_refresh(notify=False):
                       json.dumps(it["detail"]), json.dumps(it["links"]), seen.get(it["id"], now), now))
         hidden = hidden_ids(c)
     new = [it for it in cards if it["id"] not in seen and it["id"] not in hidden]
-    if notify and new and (S.get("gotify") or {}).get("token"):
-        try: gotify_send("Library Doctor: %d download%s need%s you" % (len(new), "" if len(new) == 1 else "s", "s" if len(new) == 1 else ""),
+    if notify and new and notify_channels():
+        try: globals()["notify"]("Library Doctor: %d download%s need%s you" % (len(new), "" if len(new) == 1 else "s", "s" if len(new) == 1 else ""),
                          "\n\n".join("**%s** (%s): %s" % (it["title"], it["library"], it["detail"]["text"][:200]) for it in new[:6]), 5)
         except Exception as e: log("queue gotify failed: %r" % e)
     return len(cards)
@@ -3503,7 +3624,7 @@ def session_end(tok, everyone=False):
 
 # ---------------- settings page ----------------
 SECRET_FIELDS = ("token", "key")
-SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "gotify")
+SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "gotify") + NOTIFY_KINDS
 LISTS = ("arrs", "bazarr")
 
 def settings_public():
@@ -3516,6 +3637,8 @@ def settings_public():
         return e
     out = {k: red(S[k]) for k in SINGLE if isinstance(S.get(k), dict)}
     for k in LISTS: out[k] = [red(e, i) for i, e in enumerate(S.get(k) or [])]
+    h, mi, days = sched()
+    out["schedule"] = {"hour": h, "minute": mi, "days": days}
     return {"settings": out, "configured": configured(), "media_root": MEDIA_ROOT}
 
 def _with_secrets(kind, e):
@@ -3532,6 +3655,7 @@ def _with_secrets(kind, e):
 
 def settings_test(kind, e):
     e = _with_secrets(kind, e)
+    if kind in NOTIFY_DEFAULT_URL and not e.get("url"): e["url"] = NOTIFY_DEFAULT_URL[kind]
     if not e.get("url"): return {"ok": False, "msg": "Fill in the address first."}
     u = e["url"]
     try:
@@ -3557,6 +3681,9 @@ def settings_test(kind, e):
         if kind == "sportarr":
             http(u + "/api/rootfolder", {"X-Api-Key": e.get("key", "")}, timeout=15)
             return {"ok": True, "msg": "Connected to Sportarr."}
+        if kind in NOTIFY_KINDS:
+            r = notify_one(kind, e, "Library Doctor", "Connected. Nightly summaries will come here.", 3)
+            return {"ok": r.get("ok"), "msg": "Sent a test message." if r.get("ok") else r.get("error")}
         if kind == "gotify":
             http(u + "/message", {"X-Gotify-Key": e.get("token", "")}, data={"title": "Library Doctor", "message": "Connected. Nightly summaries will come here.", "priority": 3}, method="POST", timeout=15)
             return {"ok": True, "msg": "Sent a test message to Gotify."}
@@ -3639,8 +3766,20 @@ def settings_detect(kind, e):
 def settings_save(new):
     """Validate and write config.json (owner-only), then apply it without a restart."""
     cfg = {}
+    sc = (new or {}).get("schedule")
+    if isinstance(sc, dict):
+        try:
+            days = sorted({int(d) for d in sc.get("days") or [] if 0 <= int(d) <= 6})
+            hr = int(sc.get("hour", SCAN_HOUR)); hr = hr if 0 <= hr <= 23 else -1     # -1 = no automatic scan
+            if not days and hr >= 0: return {"ok": False, "msg": "Pick at least one day for the automatic scan."}
+            cfg["schedule"] = {"hour": hr, "minute": min(59, max(0, int(sc.get("minute", 0)))), "days": days or list(range(7))}
+        except (TypeError, ValueError):
+            return {"ok": False, "msg": "The scan time isn't valid."}
+    elif S.get("schedule"):
+        cfg["schedule"] = S["schedule"]                      # a save without the schedule keeps the old one
     for k in SINGLE:
         e = (new or {}).get(k)
+        if isinstance(e, dict) and k in NOTIFY_DEFAULT_URL and not e.get("url"): e["url"] = NOTIFY_DEFAULT_URL[k]
         if isinstance(e, dict) and e.get("url"): cfg[k] = _with_secrets(k, e)
     for k in LISTS:
         cfg[k] = [_with_secrets(k, e) for e in (new or {}).get(k) or [] if isinstance(e, dict) and e.get("url")]
@@ -3665,6 +3804,41 @@ _SIZE_RE = re.compile(r"saved ([\d.]+) (B|KB|MB|GB|TB)\b")
 _UNITS = {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
 _STATS = {"at": 0, "v": None}
 TDARR_SAVE_GUESS = 0.30          # Tdarr's HEVC conversions here have saved 28-33%
+
+def history(days=30):
+    """v0.1.3 History panel: scans in the window (issues found, how long they took) and space saved per day.
+    Space saved is worked out from what's already recorded (files purged from the trash for good + the "saved X" of
+    smaller copies / Tdarr / remuxes, same rules as the Space saved ring), so it has history from day one."""
+    days = 90 if int(days or 30) > 30 else 30
+    start = datetime.now() - timedelta(days=days)
+    s0 = start.isoformat(timespec="seconds")
+    with db() as c:
+        scans = [dict(r) for r in c.execute("SELECT started, finished, issues, items FROM scans WHERE ok=1 AND started>=? ORDER BY id", (s0,))]
+        trash = [dict(r) for r in c.execute("SELECT size, reason, purged_at FROM trash WHERE purged_at IS NOT NULL AND restored_at IS NULL")]
+        done = [dict(r) for r in c.execute("SELECT note, at, chk FROM done WHERE chk='quality'")]
+    out_scans = []
+    for r in scans:
+        try: secs = max(0, (datetime.fromisoformat(r["finished"]) - datetime.fromisoformat(r["started"])).total_seconds())
+        except Exception: secs = 0
+        out_scans.append({"t": r["finished"] or r["started"], "issues": r["issues"] or 0, "items": r["items"] or 0, "secs": round(secs)})
+    ev = []
+    for t in trash:
+        rs = t["reason"] or ""
+        if "(replaced)" in rs or rs.startswith("Plex fix") or rs.startswith("Virus"): continue
+        ev.append((t["purged_at"][:10], t["size"] or 0))
+    for d in done:
+        m = _SIZE_RE.search(d["note"] or "")
+        if m and d["at"]: ev.append((d["at"][:10], float(m.group(1)) * _UNITS[m.group(2)]))
+    base = sum(b for dt, b in ev if dt < s0[:10])
+    per = {}
+    for dt, b in ev:
+        if dt >= s0[:10]: per[dt] = per.get(dt, 0) + b
+    space, run = [], base
+    for i in range(days + 1):
+        dt = (start + timedelta(days=i)).date().isoformat()
+        run += per.get(dt, 0)
+        space.append({"d": dt, "total": round(run), "day": round(per.get(dt, 0))})
+    return {"days": days, "scans": out_scans, "space": space}
 
 def stats():
     """Space saved and jobs left for the two extra rings on the main screen. Cached 30 s: state() is polled often."""
@@ -3752,8 +3926,8 @@ def state():
     virus = {"clam": clam_status(cached=True), "last": kv_get("virus_last_incremental"), "full": kv_get("virus_full_last"),
              "full_running": VIRUS_LOCK.locked(), "full_started": (kv_get("virus_full_running") or {}).get("at")}
     coming = {"ytdlp": ytdlp_status(), "busy": TRAILER_LOCK.locked(), "updating": YTDLP_LOCK.locked()}
-    return {"gotify": bool((S.get("gotify") or {}).get("token")), "follow_days": FOLLOW_DAYS, "virus": virus, "coming": coming, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
-            "scan_hour": SCAN_HOUR, "keep_days": KEEP_DAYS, "stats": stats(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
+    return {"gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "coming": coming, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
+            "scan_hour": sched()[0], "scan_minute": sched()[1], "scan_days": sched()[2], "keep_days": KEEP_DAYS, "stats": stats(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
             "configured": configured(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT,
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
 
@@ -3794,6 +3968,9 @@ class H(BaseHTTPRequestHandler):
             with open(os.path.join(APP_DIR, "index.html"), "rb") as f:
                 return self.send(200, f.read(), "text/html; charset=utf-8")
         if path == "/api/state": return self.send(200, state())
+        if path.startswith("/api/history"):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            return self.send(200, history(int((q.get("days") or ["30"])[0]) if (q.get("days") or ["30"])[0].isdigit() else 30))
         if path == "/api/settings": return self.send(200, settings_public())
         self.send(404, {"error": "not found"})
     def _redirect(self, to):
@@ -3907,7 +4084,7 @@ class H(BaseHTTPRequestHandler):
             if path == "/api/ytdlp/update":
                 return self.send(200, ytdlp_update())
             if path == "/api/gotifytest":
-                return self.send(200, gotify_send("Library Doctor: test", "This is a test from Library Doctor. After each nightly scan you get one message like this, but only when there's something new.", 4))
+                return self.send(200, notify("Library Doctor: test", "This is a test from Library Doctor. After each nightly scan you get one message like this, but only when there's something new.", 4))
             if path == "/api/followup":
                 threading.Thread(target=followup, daemon=True).start()
                 return self.send(200, {"ok": True})

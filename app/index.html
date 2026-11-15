@@ -207,6 +207,16 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
 .uw td.a { text-align:right; white-space:nowrap; } .uw a { color:var(--fg); }
 .uww { overflow-x:auto; max-height:420px; overflow-y:auto; }
 .rvbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-variant-numeric:tabular-nums; }
+.days { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; } .day { display:inline-flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line2); border-radius:10px; padding:6px 10px; font-size:13px; cursor:pointer; } .day input { accent-color:var(--teal); }
+#histP .h { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.hseg { display:inline-flex; border:1px solid var(--line2); border-radius:9px; overflow:hidden; }
+.hseg button { font:600 12px var(--font); background:transparent; color:var(--mut); border:0; border-radius:0; padding:4px 9px; cursor:pointer; }
+.hseg button.on { background:var(--teal-bg); color:var(--teal); }
+.hc { margin-top:12px; } .hc h3 { font:700 13px var(--font); margin:0 0 2px; color:var(--fg); } .hc .hv { font-size:12px; color:var(--mut); margin:0 0 4px; }
+.hc svg { width:100%; height:auto; display:block; overflow:visible; } .hc .ax { font:10px var(--font); fill:var(--mut); } .hc .gl { stroke:var(--line); stroke-width:1; }
+.hc .hit { fill:transparent; cursor:default; } .hc .hit:hover + .bar, .hc .hl { opacity:1; }
+#htip { position:fixed; pointer-events:none; z-index:60; background:#0b1426; color:var(--fg); border:1px solid var(--line2); border-radius:8px; padding:6px 9px; font:12px/1.35 var(--font); box-shadow:0 6px 18px rgba(0,0,0,.35); display:none; max-width:220px; }
+#htip b { display:block; font-weight:700; }
 </style>
 </head>
 <body>
@@ -250,6 +260,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       <button class="deskbin" id="deskBin" aria-label="Open the Trash"><span id="deskBinArt"></span><span class="dm"><b>Trash</b><span id="deskBinN">Empty</span><small id="deskBinSub">Clean-ups land here first</small></span><span class="go">Open →</span></button>
       <div class="panel"><div class="h"><h2>Scans</h2></div><div class="scans" id="scans"></div>
         <p class="note" id="sched"></p></div>
+      <div class="panel" id="histP"><div class="h"><h2>History</h2><div class="hseg" role="group" aria-label="Period"><button class="on" data-hd="30">30 days</button><button data-hd="90">90 days</button></div></div><div id="hist"><p class="note">Loading…</p></div></div>
 </div>
     </div>
   </div>
@@ -354,6 +365,59 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       + ` · <span class="lg" style="background:var(--orange)"></span><b>${j.open}</b> to do` + (j.warn ? `<br><b style="color:var(--orange)">${j.warn} need${j.warn === 1 ? "s" : ""} a look</b> (see Done)` : "");
   }
   function fmt(iso) { if (!iso) return "–"; const d = new Date(iso); return d.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); }
+
+  /* v0.1.3 History panel: three small single-series charts (teal marks, recessive grid, hover tooltips). */
+  const HIST = { days: 30, cache: {}, scanId: null };
+  function htip(ev, html) { let t = $("htip"); if (!t) { t = document.createElement("div"); t.id = "htip"; t.setAttribute("role", "tooltip"); document.body.appendChild(t); }
+    if (!html) { t.style.display = "none"; return; } t.innerHTML = html; t.style.display = "block";
+    const r = t.getBoundingClientRect(), x = Math.min(ev.clientX + 12, innerWidth - r.width - 8), y = ev.clientY - r.height - 12 < 8 ? ev.clientY + 16 : ev.clientY - r.height - 12; t.style.left = x + "px"; t.style.top = y + "px"; }
+  const fmtD = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const nice = m => { if (m <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(m))), f = m / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; };
+  function barPath(x, y, w, h, r) { if (h <= 0) return ""; r = Math.min(r, w / 2, h); return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`; }
+  // pts: [{d, v, tip}] one per day; kind "bar" | "line"; fmt formats the y-axis top label
+  function hchart(title, sub, pts, kind, fmt) {
+    const W = 280, H = 96, L = 4, T = 6, B = 16, ih = H - T - B, n = pts.length, max = nice(Math.max(...pts.map(p => p.v), 0)), step = W / n;
+    const y = v => T + ih - (v / max) * ih;
+    let g = `<line class="gl" x1="0" x2="${W}" y1="${T}" y2="${T}"/><line class="gl" x1="0" x2="${W}" y1="${T + ih / 2}" y2="${T + ih / 2}"/><line class="gl" x1="0" x2="${W}" y1="${T + ih}" y2="${T + ih}" style="stroke:var(--line2)"/>`;
+    g += `<text class="ax" x="${W}" y="${T - 1}" text-anchor="end">${esc(fmt(max))}</text>`;
+    g += `<text class="ax" x="0" y="${H - 2}">${esc(fmtD(pts[0].d))}</text><text class="ax" x="${W}" y="${H - 2}" text-anchor="end">${esc(fmtD(pts[n - 1].d))}</text>`;
+    let marks = "", hits = "";
+    if (kind === "bar") {
+      const bw = Math.max(1, step - 2);
+      pts.forEach((p, i) => { if (p.v > 0) marks += `<path d="${barPath(i * step + 1, y(p.v), bw, T + ih - y(p.v), 2)}" fill="var(--teal)"/>`;
+        hits += `<rect class="hit" x="${i * step}" y="${T}" width="${step}" height="${ih + 2}" data-tip="${esc(p.tip)}"/>`; });
+    } else {
+      const xy = pts.map((p, i) => [i * step + step / 2, y(p.v)]);
+      marks += `<path d="M${xy.map(q => q[0].toFixed(1) + "," + q[1].toFixed(1)).join("L")}" fill="none" stroke="var(--teal)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      marks += `<circle id="hdot" r="4" fill="var(--teal)" stroke="var(--panel)" stroke-width="2" cx="0" cy="0" style="display:none"/>`;
+      pts.forEach((p, i) => { hits += `<rect class="hit" x="${i * step}" y="${T}" width="${step}" height="${ih + 2}" data-tip="${esc(p.tip)}" data-cx="${xy[i][0]}" data-cy="${xy[i][1]}"/>`; });
+    }
+    return `<div class="hc"><h3>${esc(title)}</h3><p class="hv">${sub}</p><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}">${g}${marks}${hits}</svg></div>`;
+  }
+  async function histDraw(force) {
+    const el = $("hist"); if (!el || !S) return;
+    const sid = (S.scans && S.scans[0] && S.scans[0].id) || 0;
+    if (sid !== HIST.scanId) { HIST.cache = {}; HIST.scanId = sid; }
+    const key = sid + ":" + HIST.days; if (!force && HIST.drawn === key && el.querySelector(".hc")) return;
+    let h = HIST.cache[HIST.days];
+    if (!h) { try { h = HIST.cache[HIST.days] = await api("/api/history?days=" + HIST.days); } catch (e) { el.innerHTML = '<p class="note">Couldn\'t load the history.</p>'; return; } }
+    const days = h.space.map(x => x.d), byDay = {};
+    h.scans.forEach(sc => { const d = sc.t.slice(0, 10), o = byDay[d] || (byDay[d] = { issues: 0, secs: 0, n: 0, last: "" }); o.n++; if (sc.t >= o.last) { o.last = sc.t; o.issues = sc.issues; } o.secs = Math.max(o.secs, sc.secs); });
+    const mm = s2 => s2 >= 3600 ? (s2 / 3600).toFixed(1) + " h" : s2 >= 60 ? Math.round(s2 / 60) + " min" : s2 + " s";
+    const sp = h.space.map(x => ({ d: x.d, v: x.total, tip: `<b>${esc(fmtD(x.d))}</b>${human(x.total)} saved so far${x.day ? " (+" + human(x.day) + " that day)" : ""}` }));
+    const is = days.map(d => { const o = byDay[d]; return { d, v: o ? o.issues : 0, tip: o ? `<b>${esc(fmtD(d))}</b>${o.issues} to look at after the last scan (${o.n} scan${o.n === 1 ? "" : "s"})` : `<b>${esc(fmtD(d))}</b>No scan` }; });
+    const du = days.map(d => { const o = byDay[d]; return { d, v: o ? o.secs : 0, tip: o ? `<b>${esc(fmtD(d))}</b>Longest scan: ${mm(o.secs)}` : `<b>${esc(fmtD(d))}</b>No scan` }; });
+    const gained = h.space[h.space.length - 1].total - h.space[0].total, nsc = h.scans.length;
+    const last = h.scans[h.scans.length - 1];
+    el.innerHTML = hchart("Space saved", `<b>${human(gained)}</b> in the last ${h.days} days · ${human(h.space[h.space.length - 1].total)} in total`, sp, "line", v => human(v)) +
+      hchart("Issues found", nsc ? `${last.issues} after the last scan · ${nsc} scan${nsc === 1 ? "" : "s"} in ${h.days} days` : "No scans in this period yet", is, "bar", v => String(Math.round(v))) +
+      hchart("Scan time", nsc ? `longest scan each day · last one took ${mm(last.secs)}` : "", du, "bar", v => mm(v));
+    HIST.drawn = key;
+    el.querySelectorAll(".hit").forEach(r => { r.onmousemove = ev => { htip(ev, r.dataset.tip); if (r.dataset.cx) { const d = r.closest("svg").querySelector("#hdot"); d.setAttribute("cx", r.dataset.cx); d.setAttribute("cy", r.dataset.cy); d.style.display = ""; } };
+      r.onmouseleave = () => { htip(null, ""); const d = r.closest("svg").querySelector("#hdot"); if (d) d.style.display = "none"; }; });
+  }
+  document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-hd]"); if (!b) return;
+    HIST.days = +b.dataset.hd; document.querySelectorAll("[data-hd]").forEach(x => x.classList.toggle("on", x === b)); histDraw(); });
   function render() {
     const scan = S.scans.find(s => s.ok) || null;
     const open = S.issues.filter(i => !i.ignored), ign = S.issues.length - open.length;
@@ -382,10 +446,12 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     $("lib").innerHTML = '<option value="">All libraries</option>' + libs.map(l => `<option ${l === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
     list();
     $("scans").innerHTML = S.scans.slice(0, 6).map(s => `<div class="sc"><b>${s.ok ? "Scan completed" : "Scan failed"}</b>${s.ok ? `${s.issues} to look at · ${s.items.toLocaleString("en-GB")} items` : esc(s.note)}<br><small>${fmt(s.finished)}</small></div>`).join("") || '<p class="empty">No scans yet.</p>';
-    $("sched").innerHTML = "Scans automatically every night at " + String(S.scan_hour).padStart(2, "0") + ":00." +
-      `<span class="sched2">${S.gotify ? "Phone summary via Gotify after the scan, only when there's news." : "Gotify phone summary: not set up."}${S.gotify ? '<button class="b-line sm" id="gTest">Send a test</button>' : ""}</span>`;
+    const DN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], sd = S.scan_days || [0, 1, 2, 3, 4, 5, 6];
+    histDraw();
+    $("sched").innerHTML = (S.scan_hour < 0 ? "Automatic scan is off. Press Scan now to scan." : "Scans automatically " + (sd.length === 7 ? "every day" : "on " + sd.map(d => DN[d]).join(", ")) + " at " + String(S.scan_hour).padStart(2, "0") + ":" + String(S.scan_minute || 0).padStart(2, "0") + ".") +
+      `<span class="sched2">${S.gotify ? "Summary via " + (S.notify || []).map(k => APPS[k] ? APPS[k].t : k).join(", ") + " after the scan, only when there's news." : "Notifications: not set up (Settings → Notifications)."}${S.gotify ? '<button class="b-line sm" id="gTest">Send a test</button>' : ""}</span>`;
     const gt = $("gTest"); if (gt) gt.onclick = async () => { gt.disabled = true; gt.textContent = "Sending…";
-      const r = await api("/api/gotifytest", {}); gt.textContent = r.ok ? "Sent ✓" : "Failed"; if (!r.ok) flash = { err: true, text: "Gotify: " + r.error }; setTimeout(() => { gt.disabled = false; gt.textContent = "Send a test"; }, 4000); };
+      const r = await api("/api/gotifytest", {}); gt.textContent = r.ok ? "Sent ✓" : "Failed"; if (!r.ok) flash = { err: true, text: r.error || "Sending failed." }; setTimeout(() => { gt.disabled = false; gt.textContent = "Send a test"; }, 4000); };
     trashPanel();
   }
   const LBL = { keep: "Keep", remove: "Remove", plex: "Plex copy" };
@@ -789,7 +855,12 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     tautulli: { t: "Tautulli", secret: ["key", "API key"], url: "http://192.168.1.10:8181", help: "For the Unwatched check. API key: Tautulli → Settings → Web Interface." },
     tdarr: { t: "Tdarr", files: true, secret: ["key", "API key"], url: "http://192.168.1.10:8265", help: "For Convert with Tdarr. Leave the key empty if Tdarr has no login." },
     sportarr: { t: "Sportarr", files: true, secret: ["key", "API key"], url: "http://192.168.1.10:1867", help: "For sports libraries managed by Sportarr." },
-    gotify: { t: "Gotify", secret: ["token", "App token"], url: "http://192.168.1.10:8070", help: "A phone message after the nightly scan, only when there's news. Make an app in Gotify and paste its token." }
+    gotify: { t: "Gotify", secret: ["token", "App token"], url: "http://192.168.1.10:8070", help: "A phone message after the nightly scan, only when there's news. Make an app in Gotify and paste its token." },
+    discord: { t: "Discord", notify: true, fixedUrl: "https://discord.com", secret: ["token", "Webhook URL"], url: "", help: "Discord: Channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL." },
+    telegram: { t: "Telegram", notify: true, fixedUrl: "https://api.telegram.org", secret: ["token", "Bot token"], url: "", extra: [["chat", "Chat ID", "123456789"]], help: "Make a bot with @BotFather and paste its token. For the chat ID, send your bot a message, then open api.telegram.org/bot&lt;token&gt;/getUpdates and copy chat → id." },
+    ntfy: { t: "ntfy", notify: true, secret: ["token", "Access token (optional)"], url: "https://ntfy.sh", urlLabel: "Server", extra: [["topic", "Topic", "library-doctor-something-hard-to-guess"]], help: "ntfy.sh or your own ntfy server. Subscribe to the same topic in the ntfy app." },
+    webhook: { t: "Webhook", notify: true, secret: ["token", "Bearer token (optional)"], url: "https://example.com/hook", urlLabel: "Address", help: "Sends a JSON POST: {title, message, text, priority, source}. Works with Home Assistant, n8n, Node-RED, Apprise API and the like." },
+    email: { t: "Email", notify: true, secret: ["token", "Password"], url: "smtp.example.com:587", urlLabel: "Mail server (host:port)", extra: [["user", "Username", "you@example.com"], ["from", "From", "library-doctor@example.com"], ["to", "Send to (comma-separated)", "you@example.com"]], tls: true, help: "Any SMTP server. For Gmail use smtp.gmail.com:587 with an app password." }
   };
   let AUTH = null, PWmsg = null;
   async function settingsOpen() { if (!SC) { const r = await api("/api/settings"); SC = r.settings; SC.arrs = SC.arrs || []; SC.bazarr = SC.bazarr || []; SC._conf = r.configured; SC._root = r.media_root; }
@@ -811,10 +882,13 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     let fields = "";
     if (kind === "arrs") fields += `<label>Name<input data-f="name" value="${fv(e, "name")}" placeholder="Radarr 4K"></label><label>Type${sel("kind", [["radarr", "Radarr"], ["sonarr", "Sonarr"]])}</label>`;
     if (kind === "bazarr") fields += `<label>Name<input data-f="name" value="${fv(e, "name")}" placeholder="Bazarr"></label>`;
-    fields += `<label>Address<input data-f="url" value="${fv(e, "url")}" placeholder="${A.url}" inputmode="url" autocomplete="off"></label>`;
+    if (A.fixedUrl) e.url = e.url || A.fixedUrl;
+    else fields += `<label>${A.urlLabel || "Address"}<input data-f="url" value="${fv(e, "url")}" placeholder="${A.url}" inputmode="url" autocomplete="off"></label>`;
+    (A.extra || []).forEach(([f, l, ph]) => { fields += `<label>${l}<input data-f="${f}" value="${fv(e, f)}" placeholder="${esc(ph)}" autocomplete="off"></label>`; });
+    if (A.tls) fields += `<label>Security${sel("tls", [["starttls", "STARTTLS (port 587)"], ["ssl", "SSL/TLS (port 465)"], ["none", "None (port 25)"]])}</label>`;
     fields += `<label>${sec[1]}<input data-f="${sec[0]}" type="password" autocomplete="new-password" value="${fv(e, sec[0])}" placeholder="${e[sec[0] + "_set"] ? "Saved. Leave empty to keep it" : ""}"></label>`;
     if (kind === "gotify") fields += `<label>Link in the message (optional)<input data-f="click" value="${fv(e, "click")}" placeholder="https://librarydoctor.example.com"></label>`;
-    else if (kind !== "plex") fields += `<label>Address in your browser (optional)<input data-f="public" value="${fv(e, "public")}" placeholder="for the Open in ${esc(A.t.split(" ")[0])} buttons"></label>`;
+    else if (kind !== "plex" && !A.notify) fields += `<label>Address in your browser (optional)<input data-f="public" value="${fv(e, "public")}" placeholder="for the Open in ${esc(A.t.split(" ")[0])} buttons"></label>`;
     if (kind === "bazarr") fields += `<label>Its Radarr${sel("radarr", [["", "None"]].concat(arrNames.map(n => [n, n])))}</label><label>Its Sonarr${sel("sonarr", [["", "None"]].concat(arrNames.map(n => [n, n])))}</label>`;
     const ps = e.paths || [], nm = esc(e.name || (kind === "arrs" ? (e.kind === "sonarr" ? "Sonarr" : "Radarr") : A.t));
     const pm = A.files ? `<div class="pm"><span class="ph">Folders</span>${ps.length ? ps.map((m, j) => `<div class="pr"><input data-p="${j}" data-pf="from" value="${esc(m.from)}" placeholder="${esc(kind === "plex" ? "/data" : "/movies")}" aria-label="Folder in ${nm}"><span>→</span><input data-p="${j}" data-pf="to" value="${esc(m.to)}" placeholder="${esc(SC._root)}" aria-label="Same folder in Library Doctor"><button class="b-line sm" data-prm="${j}">Remove</button></div>`).join("") + `<p>Left: the folder as ${nm} sees it. Right: the same folder in Library Doctor.</p>`
@@ -833,10 +907,19 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     h += `<h2>Radarr and Sonarr</h2>` + SC.arrs.map((e, i) => entryHtml("arrs", e, i)).join("") + `<div class="acts"><button class="b-line" data-add="arrs:radarr">+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">+ Add Sonarr</button></div>`;
     h += `<h2>Optional <small>each one switches on its own checks</small></h2>`;
     h += SC.bazarr.map((e, i) => entryHtml("bazarr", e, i)).join("");
-    for (const k of ["tautulli", "tdarr", "sportarr", "gotify"]) if (SC[k]) h += entryHtml(k, SC[k], null);
-    const missing = ["bazarr", "tautulli", "tdarr", "sportarr", "gotify"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
+    for (const k of ["tautulli", "tdarr", "sportarr"]) if (SC[k]) h += entryHtml(k, SC[k], null);
+    const missing = ["bazarr", "tautulli", "tdarr", "sportarr"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
     if (missing.length) h += `<div class="acts">${missing.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}${SC.bazarr.length ? `<button class="b-line" data-add="bazarr">+ Another Bazarr</button>` : ""}</div>`;
     else if (SC.bazarr.length) h += `<div class="acts"><button class="b-line" data-add="bazarr">+ Another Bazarr</button></div>`;
+    const NK = ["gotify", "discord", "telegram", "ntfy", "webhook", "email"];
+    h += `<h2>Notifications <small>the nightly summary goes to every one you add</small></h2>`;
+    for (const k of NK) if (SC[k]) h += entryHtml(k, SC[k], null);
+    const nmiss = NK.filter(k => !SC[k]);
+    if (nmiss.length) h += `<div class="acts">${nmiss.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}</div>`;
+    const SCH = SC.schedule || (SC.schedule = { hour: 3, minute: 0, days: [0, 1, 2, 3, 4, 5, 6] });
+    h += `<h2>Automatic scan</h2><div class="app"><p class="help">When the scan runs by itself. Pick a quiet time (it reads every file's details from Plex and your apps). Scan now still works any time.</p>
+      <div class="fl"><label>Time (empty = no automatic scan)<input type="time" id="schTime" value="${SCH.hour < 0 ? "" : String(SCH.hour).padStart(2, "0") + ":" + String(SCH.minute).padStart(2, "0")}"></label></div>
+      <div class="days" role="group" aria-label="Days">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => `<label class="day"><input type="checkbox" data-day="${i}" ${SCH.days.includes(i) ? "checked" : ""}> ${d}</label>`).join("")}</div></div>`;
     h += pwHtml();
     h += `<div class="savebar"><button class="b-teal" id="setSave" ${SCbusy ? "disabled" : ""}>${SCbusy ? "Saving…" : "Save settings"}</button><button class="b-line" id="setUndo">Undo changes</button>${SCmsg ? `<div class="tres2 ${SCmsg.ok ? "ok" : "bad"}">${esc(SCmsg.msg)}</div>` : ""}</div>`;
     el.innerHTML = h; settingsWire();
@@ -852,7 +935,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     el.querySelectorAll("[data-add]").forEach(n => n.onclick = () => { const [k, sub] = n.dataset.add.split(":");
       if (k === "arrs") SC.arrs.push({ name: sub === "sonarr" ? (SC.arrs.some(a => a.name === "Sonarr") ? "Sonarr 2" : "Sonarr") : (SC.arrs.some(a => a.name === "Radarr") ? "Radarr 2" : "Radarr"), kind: sub, url: "", paths: [] });
       else if (k === "bazarr") SC.bazarr.push({ name: SC.bazarr.length ? "Bazarr " + (SC.bazarr.length + 1) : "Bazarr", url: "", paths: [] });
-      else SC[k] = { url: "", paths: [] }; settingsDraw(); });
+      else SC[k] = { url: APPS[k].fixedUrl || "", paths: [], ...(APPS[k].tls ? { tls: "starttls" } : {}) }; settingsDraw(); });
     el.querySelectorAll("[data-test],[data-det]").forEach(n => n.onclick = async () => { const [k, i, e] = entryOf(n), det = !!n.dataset.det, key = k + (i == null ? "" : ":" + i);
       n.disabled = true; n.textContent = det ? "Looking…" : "Testing…";
       const r = await api(det ? "/api/settings/detect" : "/api/settings/test", { kind: k, cfg: e });
@@ -861,9 +944,11 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     on("pwGo", async () => { const o = $("pwOld").value, a = $("pwNew").value, b = $("pwNew2").value;
       if (a !== b) { PWmsg = { ok: false, msg: "The new passwords don't match." }; return settingsDraw(); }
       const r = await api("/api/auth/change", { old: o, new: a }); PWmsg = { ok: r.ok, msg: r.ok ? "Password changed. Other browsers are logged out." : r.msg }; settingsDraw(); });
+    const st = $("schTime"); if (st) st.onchange = () => { if (!st.value) { SC.schedule.hour = -1; SC.schedule.minute = 0; return; } const [hh, mm] = st.value.split(":").map(Number); if (!isNaN(hh)) { SC.schedule.hour = hh; SC.schedule.minute = mm || 0; } };
+    el.querySelectorAll("[data-day]").forEach(n => n.onchange = () => { const d = +n.dataset.day, a = SC.schedule.days; if (n.checked) { if (!a.includes(d)) a.push(d); } else SC.schedule.days = a.filter(x => x !== d); SC.schedule.days.sort(); });
     on("setUndo", () => { SC = null; SCmsg = null; Object.keys(TR).forEach(x => delete TR[x]); settingsOpen(); });
     on("setSave", async () => { SCbusy = true; SCmsg = null; settingsDraw();
-      const body = {}; for (const k of ["plex", "tautulli", "tdarr", "sportarr", "gotify", "arrs", "bazarr"]) if (SC[k]) body[k] = SC[k];
+      const body = {}; for (const k of ["plex", "tautulli", "tdarr", "sportarr", "gotify", "discord", "telegram", "ntfy", "webhook", "email", "arrs", "bazarr", "schedule"]) if (SC[k]) body[k] = SC[k];
       const r = await api("/api/settings/save", { settings: body }); SCbusy = false;
       if (r.ok) { SCmsg = { ok: true, msg: r.configured ? "Saved. Library Doctor is using the new settings now." : "Saved. Add Plex and at least one Radarr or Sonarr to start scanning." }; const keep = SCmsg; SC = null; await settingsOpen(); SCmsg = keep; settingsDraw(); load(); }
       else { SCmsg = { ok: false, msg: r.msg || r.error || "Couldn't save." }; settingsDraw(); } });

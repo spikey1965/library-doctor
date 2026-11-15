@@ -13,7 +13,7 @@
 | Check | What it finds | Needs |
 |---|---|---|
 | Missing files | Plex, Radarr or Sonarr list a file that isn't on the disk | Plex + Radarr/Sonarr |
-| Duplicates | Two copies of the same film or episode, with which one to keep and why | Plex |
+| Duplicates | Two copies of the same film or episode, with which one to keep and why (different Plex editions, like Theatrical and Director's Cut, are never counted as duplicates) | Plex |
 | Metadata gaps | "Episode 5" titles Sonarr knows the name of, wrong years, things not in Radarr/Sonarr | Plex + Radarr/Sonarr |
 | File health | Broken files and files much shorter than they should be; Replace asks Radarr/Sonarr for a new copy | Plex + Radarr/Sonarr |
 | Quality & space | Files far bigger than usual, old .ts/.avi files (Convert to MKV, no re-encoding), episodes much worse than their season, Find a smaller copy | Plex + Radarr/Sonarr |
@@ -23,7 +23,7 @@
 | Coming Soon | Agregarr placeholders playing a generic clip instead of the real trailer | Agregarr (optional) |
 | Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), torrents stuck at 0% (Remove & try another) | Radarr/Sonarr |
 
-Tdarr (Convert with Tdarr), Sportarr (sports libraries) and Gotify (a phone message after the nightly scan) are optional too.
+Tdarr (Convert with Tdarr) and Sportarr (sports libraries) are optional too. For the nightly summary you can add any of Gotify, Discord, Telegram, ntfy, a webhook or email in Settings → Notifications.
 
 ## Nothing is deleted without asking
 
@@ -72,7 +72,7 @@ Library Doctor has its own login. If Authentik, Authelia or your proxy already p
 | Variable | Default | What it does |
 |---|---|---|
 | `TZ` | UTC | Time zone for the nightly scan |
-| `LD_SCAN_HOUR` | `3` | Hour of the nightly scan |
+| `LD_SCAN_HOUR` | `3` | Hour of the automatic scan until you set a time and days in Settings → Automatic scan (an out-of-range value like `99` turns it off) |
 | `LD_TRASH_DAYS` | `7` | Days before the trash empties itself |
 | `LD_KEEP_DAYS` | `182` | How long "Keep" hides an unwatched item |
 | `LD_AUTH` | `on` | `off` = no built-in login (only behind another login) |
@@ -81,7 +81,7 @@ Library Doctor has its own login. If Authentik, Authelia or your proxy already p
 | `LD_CLAM_ROOT` | `/scandir` | Where ClamAV sees the same media folder |
 | `LD_SNOOZE_DAYS` | `30` | After "Search for better copies" finds nothing, hide the card this long, then search again |
 | `LD_DOWNLOAD_WINDOW_END` | (unset) | If downloads only run at night, the hour the window ends (e.g. `7`); a torrent is "stuck" after a whole window at 0%. Unset = after 24 hours |
-| `LD_QUEUE_NOTIFY_HOUR` | `8` | Hour the Downloads check tells Gotify about new problems (the window end, if set) |
+| `LD_QUEUE_NOTIFY_HOUR` | `8` | Hour the Downloads check sends new problems to your notifications (the window end, if set) |
 | `LD_PROTECT_TAGS` | (empty) | qBittorrent tags never offered for removal, comma-separated (private torrents never are) |
 
 Everything else (apps, API keys, folder mapping) is set on the Settings page and saved in `/config/config.json`. API keys stay on your server and are never shown again after saving.
@@ -94,6 +94,6 @@ docker compose pull && docker compose up -d
 
 ## Thank you
 
-Library Doctor talks to Plex, Radarr, Sonarr, Bazarr, Tautulli, Tdarr, Sportarr, Agregarr, ClamAV and Gotify, and uses ffmpeg and yt-dlp. It isn't connected to any of those projects.
+Library Doctor talks to Plex, Radarr, Sonarr, Bazarr, Tautulli, Tdarr, Sportarr, Agregarr, ClamAV, Gotify, Discord, Telegram and ntfy, and uses ffmpeg and yt-dlp. It isn't connected to any of those projects.
 
 Made by [My Media Build](https://mymediabuild.uk). MIT licence.
