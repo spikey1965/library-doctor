@@ -30,11 +30,12 @@ is inside MEDIA_ROOT, never moves the kept file, and never leaves an item with n
 Standard library only.
 """
 import errno, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, threading, time, urllib.parse, urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -84,7 +85,7 @@ def configured():
 # Library Doctor: /media/movies). Every app config can carry "paths": [{"from": "<app's folder>", "to": "<Library Doctor's folder>"}].
 # Replies are translated as they arrive (map_in) and paths we send back are translated the other way (map_out),
 # so the rest of the code only ever sees Library Doctor's own paths. No "paths" = no change.
-PATH_KEYS_IN = {"file", "path", "folderPath", "rootFolderPath", "filePath", "folder"}
+PATH_KEYS_IN = {"file", "path", "folderPath", "rootFolderPath", "filePath", "folder", "recycleBin", "outputPath"}
 PATH_KEYS_OUT = {"path", "file", "folder", "arrayOrPath", "docID", "folderPath"}
 
 def _pairs(cfg, out=False):
@@ -180,6 +181,8 @@ def init_db():
         """)
         c.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
         c.execute("CREATE TABLE IF NOT EXISTS sessions (h TEXT PRIMARY KEY, created TEXT, expires TEXT, last_seen TEXT, ip TEXT)")
+        # v31: "Searched, nothing better yet" - hidden until `until`, then the nightly run searches again if it's still there
+        c.execute("CREATE TABLE IF NOT EXISTS snoozed (id TEXT PRIMARY KEY, title TEXT, until TEXT, searched_at TEXT, searches INTEGER DEFAULT 1)")
         cols = [r[1] for r in c.execute("PRAGMA table_info(done)")]
         if "chk" not in cols:
             c.execute("ALTER TABLE done ADD COLUMN chk TEXT DEFAULT 'dupes'")
@@ -187,6 +190,34 @@ def init_db():
             c.execute("ALTER TABLE done ADD COLUMN ref TEXT")
         if "until" not in [r[1] for r in c.execute("PRAGMA table_info(ignored)")]:
             c.execute("ALTER TABLE ignored ADD COLUMN until TEXT")      # Unwatched "Keep": back on the list after this date; NULL = for good
+
+SNOOZE_DAYS = int(os.environ.get("LD_SNOOZE_DAYS", "30"))
+
+def hidden_ids(c):
+    """Ignored issues plus ones snoozed after a search that found nothing better yet (still inside their 30 days)."""
+    now = now_iso()
+    return {r["id"] for r in c.execute("SELECT id FROM ignored")} | {r["id"] for r in c.execute("SELECT id FROM snoozed WHERE until > ?", (now,))}
+
+def snooze(c, issue_id, title, days=None, count=True):
+    old = c.execute("SELECT searches FROM snoozed WHERE id=?", (issue_id,)).fetchone()
+    until = (datetime.now() + timedelta(days=days or SNOOZE_DAYS)).isoformat(timespec="seconds")
+    n = ((old["searches"] + 1) if count else old["searches"]) if old else 1
+    c.execute("INSERT OR REPLACE INTO snoozed (id, title, until, searched_at, searches) VALUES (?,?,?,?,?)",
+              (issue_id, title, until, now_iso(), n))
+
+def snooze_due():
+    """Nightly, after the scan: snoozes that ran out. Still found by the scan -> search again (and snooze again); gone -> forget it."""
+    now = now_iso()
+    with db() as c:
+        due = [dict(r) for r in c.execute("SELECT * FROM snoozed WHERE until <= ?", (now,))]
+        live = {r["id"] for r in c.execute("SELECT id FROM issues")}
+        ign = {r["id"] for r in c.execute("SELECT id FROM ignored")}
+    for s_ in due:
+        if s_["id"] not in live or s_["id"] in ign:              # fixed, or you ignored it: no more searching
+            with db() as c: c.execute("DELETE FROM snoozed WHERE id=?", (s_["id"],))
+            continue
+        r = quality_fix(s_["id"], "search")
+        if not r.get("ok"): log("snooze re-search %s failed: %s" % (s_["title"], r.get("error")))
 
 def event(kind, text):
     with db() as c:
@@ -551,6 +582,10 @@ def scan():
         sizes = {}
         try:
             q, sizes = quality_scan(sections, movies, series, trashed); issues += q
+            try: monitor_state(q)                             # v32: Monitor button where Sonarr/Radarr won't upgrade by itself
+            except Exception as e: log("monitor check failed: %r" % e)
+            try: issues += queue_cards()                      # v33: Downloads (Radarr/Sonarr queues)
+            except Exception as e: log("queue check failed: %r" % e)
         except Exception as e:
             log("quality check failed: %r" % e)
         try:
@@ -870,6 +905,128 @@ def purge_ids(ids):
                 except OSError: pass
         if n: event("purge", "Deleted %d file%s from the trash for good (%s freed)." % (n, "" if n == 1 else "s", human(freed)))
         return {"ok": True, "deleted": n, "freed": human(freed)}
+
+# ---------------- Radarr/Sonarr recycle bins in the Trash screen (v29) ----------------
+# "Find a smaller copy" and Radarr upgrades put the old file in the arr's own recycle bin, not our trash. They are listed
+# in the Trash screen too (ids "rb<hash>") so Put Back / Delete Immediately / Empty Trash work on them. The arr empties
+# its bin itself after recycleBinCleanupDays; our 03:00 auto-purge never touches these files.
+_RB = {"at": 0, "bins": []}
+QBM_BIN_DAYS = int(os.environ.get("LD_QBM_BIN_DAYS", "14"))   # qbit_manage recyclebin.empty_after_x_days
+_RB_NOUTIME = set()
+
+def recycle_bins():
+    if time.time() - _RB["at"] < 600: return _RB["bins"]
+    bins = []
+    for a in S.get("arrs", []):
+        try:
+            mm = arr(a, "/config/mediamanagement")
+            raw = (mm.get("recycleBin") or "").rstrip("/")
+            root = os.path.realpath(raw) if raw else ""
+            if root and root.startswith(MEDIA_ROOT + os.sep) and not root.startswith(TRASH_DIR) and os.path.isdir(root):
+                bins.append({"arr": a, "root": root, "days": int(mm.get("recycleBinCleanupDays") or 7)})
+        except Exception as e:
+            log("recycle bin of %s: %r" % (a["name"], e))
+    # v34: qbit_manage's recycle bin (share-limit clean-up of public torrents) - files keep their path under downloads/
+    qroot = os.path.join(MEDIA_ROOT, "downloads", ".RecycleBin")
+    if os.path.isdir(qroot):
+        bins.append({"arr": {"name": "qbit_manage", "kind": "qbm"}, "root": os.path.realpath(qroot), "days": QBM_BIN_DAYS})
+    _RB.update(at=time.time(), bins=bins)
+    return bins
+
+def _rb_owners(a):
+    """folder name -> (id, path, title) for every film/series of this arr (cached 60 s)."""
+    ck = a.setdefault("_rbown", {"at": 0, "map": {}})
+    if time.time() - ck["at"] > 60:
+        items = arr(a, "/movie" if a["kind"] == "radarr" else "/series")
+        ck.update(at=time.time(), map={os.path.basename(x["path"].rstrip("/")): (x["id"], x["path"].rstrip("/"), x.get("title", ""))
+                                       for x in items if x.get("path")})
+    return ck["map"]
+
+def recycle_items():
+    out = []
+    for b in recycle_bins():
+        qbm = b["arr"]["kind"] == "qbm"
+        try: own = {} if qbm else _rb_owners(b["arr"])
+        except Exception as e:
+            log("recycle owners %s: %r" % (b["arr"]["name"], e)); own = {}
+        for dp, dirs, files in os.walk(b["root"]):
+            for f in files:
+                p = os.path.join(dp, f)
+                try: st = os.stat(p)
+                except OSError: continue
+                rel = os.path.relpath(p, b["root"]).split(os.sep)
+                o = ("qbm", os.path.join(MEDIA_ROOT, "downloads"), rel[0]) if qbm else (own.get(rel[0]) if len(rel) > 1 else None)
+                if not qbm and st.st_ctime - st.st_mtime > 86400 and p not in _RB_NOUTIME:
+                    # binned by a manual import, which keeps the old file date: the arr would purge it at its next clean-up.
+                    # Set the date to when it was binned so it really gets recycleBinCleanupDays.
+                    try:
+                        os.utime(p, (st.st_atime, st.st_ctime)); st = os.stat(p)
+                    except OSError as e:
+                        _RB_NOUTIME.add(p); log("recycle utime %s: %r (root-owned? the arr may purge it early)" % (p, e))
+                moved = datetime.fromtimestamp(max(st.st_ctime, st.st_mtime))      # ctime = when the arr moved it in
+                gone = datetime.fromtimestamp(st.st_mtime) + timedelta(days=b["days"])   # the arr's own clean-up goes by mtime
+                out.append({"id": "rb" + iid(p), "title": o[2] if o else rel[0], "path": p, "bin": b,
+                            "src": (os.path.join(o[1], *rel) if qbm else os.path.join(o[1], *rel[1:])) if o else os.path.join("/media", "(not in %s any more)" % b["arr"]["name"], f),
+                            "owner": o, "size": st.st_size, "reason": ("Finished torrent qbit_manage cleaned up (seeding goal met)" if qbm else "Old copy in %s's recycle bin" % b["arr"]["name"]),
+                            "moved_at": moved.isoformat(timespec="seconds"),
+                            "empties": gone.isoformat(timespec="seconds"), "rb": b["arr"]["name"]})
+    return out
+
+def _rb_tidy(root, d):
+    while d.startswith(root + os.sep) and os.path.isdir(d) and not os.listdir(d):
+        try: os.rmdir(d)
+        except OSError: break
+        d = os.path.dirname(d)
+
+def restore_recycle(rid, items=None):
+    with MOVE_LOCK:
+        it = next((x for x in (items or recycle_items()) if x["id"] == rid), None)
+        if not it: return {"ok": False, "error": "That file isn't in the recycle bin any more."}
+        if not it["owner"]:
+            return {"ok": False, "error": "%s: the film or show isn't in %s any more, so there's nowhere to put it back." % (os.path.basename(it["path"]), it["rb"])}
+        src, dst, a = it["path"], it["src"], it["bin"]["arr"]
+        if a["kind"] == "qbm" and not os.path.abspath(dst).startswith(os.path.join(MEDIA_ROOT, "downloads") + os.sep):
+            return {"ok": False, "error": "Refused: qbit_manage files only go back under downloads."}
+        if not os.path.realpath(src).startswith(it["bin"]["root"] + os.sep): return {"ok": False, "error": "Refused: not inside the recycle bin."}
+        if not os.path.abspath(dst).startswith(MEDIA_ROOT + os.sep) or os.path.abspath(dst).startswith(TRASH_DIR):
+            return {"ok": False, "error": "Refused: the original place is outside the media folder."}
+        if os.path.exists(dst): return {"ok": False, "error": "%s: a file already exists at the original place, so nothing was changed." % os.path.basename(dst)}
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        move_file(src, dst)
+        _rb_tidy(it["bin"]["root"], os.path.dirname(src))
+        note = ""
+        if a["kind"] == "qbm":
+            note = "The files are back in downloads, but qBittorrent no longer has the torrent; add it again there if you want it seeding."
+            event("restore", "Put back %s from qbit_manage's recycle bin. %s" % (os.path.basename(dst), note))
+            return {"ok": True, "note": note}
+        try:
+            if a["kind"] == "radarr":
+                cur = arr(a, "/movie/%d" % it["owner"][0])
+                if cur.get("hasFile") and dst.lower().endswith(VIDEO_EXT):
+                    note = "%s already had another copy, so both are in the folder now: the Duplicates check will offer to tidy one." % a["name"]
+                arr(a, "/command", {"name": "RescanMovie", "movieId": it["owner"][0]})
+            else:
+                arr(a, "/command", {"name": "RescanSeries", "seriesId": it["owner"][0]})
+        except Exception as e:
+            log("rescan after recycle put back: %r" % e)
+        for sec in plex("/library/sections").get("Directory", []):
+            if any(dst.startswith(l["path"].rstrip("/") + "/") for l in sec.get("Location", [])):
+                plex_refresh_folder(sec["key"], os.path.dirname(dst))
+        event("restore", "Put back %s from %s's recycle bin. %s" % (os.path.basename(dst), a["name"], note))
+        return {"ok": True, "note": note}
+
+def purge_recycle(ids=None):
+    """Delete recycle-bin files for good: chosen ids, or every one when ids is None (Empty Trash)."""
+    n, freed = 0, 0
+    with MOVE_LOCK:
+        for it in recycle_items():
+            if ids is not None and it["id"] not in ids: continue
+            p = os.path.realpath(it["path"])
+            if p.startswith(it["bin"]["root"] + os.sep) and os.path.isfile(p):
+                os.remove(p); n += 1; freed += it["size"]
+                _rb_tidy(it["bin"]["root"], os.path.dirname(p))
+    if n: event("purge", "Deleted %d file%s from the Radarr/Sonarr/qbit_manage recycle bins for good (%s freed)." % (n, "" if n == 1 else "s", human(freed)))
+    return n, freed
 
 # ---------------- metadata gaps (stage 2) ----------------
 GENERIC = re.compile(r"(?:episode|episodio|folge|\u00e9pisode)\s*#?\d+(?:\.\d+)?|tba|tbd|", re.I)
@@ -1703,6 +1860,8 @@ def followup():
             log("followup %s failed: %r" % (r["id"], e))
     smaller_followup()
     tdarr_followup()
+    try: search_followup()
+    except Exception as e: log("search followup failed: %r" % e)
 
 # ---------------- Gotify: one message after the nightly scan, only when there's news ----------------
 def gotify_send(title, message, priority=5):
@@ -1716,14 +1875,18 @@ def gotify_send(title, message, priority=5):
     except Exception as e:
         log("gotify send failed: %r" % e); return {"ok": False, "error": str(e)}
 
-CHK_NAMES = {"missing": "missing file", "dupes": "duplicate", "meta": "metadata gap", "health": "broken file", "subs": "subtitle problem", "virus": "virus / fake file", "coming": "Coming Soon problem", "quality": "quality/space item", "unwatched": "unwatched list"}
+CHK_NAMES = {"missing": "missing file", "dupes": "duplicate", "meta": "metadata gap", "health": "broken file", "subs": "subtitle problem", "virus": "virus / fake file", "coming": "Coming Soon problem", "quality": "quality/space item", "unwatched": "unwatched list", "queue": "download problem"}
 
 def nightly_summary():
     last = kv_get("gotify_last_summary") or (datetime.now() - timedelta(days=1)).isoformat(timespec="seconds")
     with db() as c:
         sc = c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1").fetchone()
-        ign = {r["id"] for r in c.execute("SELECT id FROM ignored")}
-        new = [dict(r) for r in c.execute("SELECT id, chk, title FROM issues WHERE first_seen > ?", (last,)) if r["id"] not in ign]
+        ign = hidden_ids(c)
+        fresh = [dict(r) for r in c.execute("SELECT id, chk, title, library, detail FROM issues WHERE first_seen > ?", (last,)) if r["id"] not in ign]
+        # v31: an issue that already has a Done row (a fix was tried, the scan found it again) isn't "new"
+        tried = {r["issue_id"] for r in c.execute("SELECT DISTINCT issue_id FROM done WHERE issue_id IS NOT NULL")}
+        new = [i for i in fresh if i["id"] not in tried]
+        back = [i for i in fresh if i["id"] in tried]
         allopen = [r["chk"] for r in c.execute("SELECT id, chk FROM issues") if r["id"] not in ign]
         done = [dict(r) for r in c.execute("SELECT title, status, note FROM done WHERE chk='health' AND checked_at > ? AND status IN ('ok','warn') AND (note LIKE '\u2713%' OR note LIKE 'No new copy%' OR note LIKE 'A new copy arrived%')", (last,))]
         trash = [dict(r) for r in c.execute("SELECT size, moved_at FROM trash WHERE restored_at IS NULL AND purged_at IS NULL")]
@@ -1738,6 +1901,14 @@ def nightly_summary():
         lines.append("**New to look at:** " + ", ".join("%d %s%s" % (n, CHK_NAMES.get(k, k), "" if n == 1 else "s") for k, n in by.items()))
         if by.get("virus"): prio = 8
         elif by.get("missing") or by.get("health"): prio = max(prio, 5)
+    for i in new:                                         # v31: say what Tdarr failed on, not just "1 quality/space item"
+        try: d = json.loads(i.get("detail") or "{}")
+        except Exception: d = {}
+        if d.get("kind") == "tdarrfail":
+            lines.append("**%s** (%s): %s" % (i["title"], i.get("library") or "Tdarr", d.get("text", "")))
+            prio = max(prio, 5)
+    if back:
+        lines.append("**Still there after a fix:** " + ", ".join(i["title"] for i in back[:6]) + (" and %d more" % (len(back) - 6) if len(back) > 6 else ""))
     arrived = [d for d in done if d["note"].startswith("\u2713")]
     failed = [d for d in done if not d["note"].startswith("\u2713")]
     if arrived: lines.append("**Replaced and re-downloaded:** " + ", ".join(d["title"] for d in arrived[:6]) + (" and %d more" % (len(arrived) - 6) if len(arrived) > 6 else ""))
@@ -1753,7 +1924,7 @@ def nightly_summary():
     return dict(r, sent=r.get("ok"))
 
 def nightly():
-    last, last_follow, last_tdarr = None, None, None
+    last, last_follow, last_tdarr, last_queue = None, None, None, None
     while True:
         now = datetime.now()
         if not configured(): time.sleep(30); continue          # setup mode: nothing to do until Settings are saved
@@ -1764,12 +1935,18 @@ def nightly():
             try: followup()
             except Exception as e: log("followup failed: %r" % e)
             scan()
+            try: snooze_due()
+            except Exception as e: log("snooze re-search failed: %r" % e)
             try: nightly_summary()
             except Exception as e: log("nightly summary failed: %r" % e)
         elif now.minute == 17 and last_follow != now.hour:     # hourly: has a replaced file arrived?
             last_follow = now.hour
             try: followup()
             except Exception as e: log("followup failed: %r" % e)
+        elif now.minute == 37 and last_queue != now.hour:      # v33: Downloads cards hourly; 07:37 (night window over) tells Gotify
+            last_queue = now.hour
+            try: queue_refresh(notify=(now.hour == QUEUE_NOTIFY_HOUR))
+            except Exception as e: log("queue refresh failed: %r" % e)
         elif now.minute % 10 == 7 and last_tdarr != (now.hour, now.minute):   # v23: every 10 min while Tdarr has files of ours
             last_tdarr = (now.hour, now.minute)
             try:
@@ -2232,6 +2409,67 @@ def quality_scan(sections, movies, series, trashed):
                         links=[plex_link(srk)] + alinks))
     return out, sizes
 
+# ---------------- Monitor (v32) ----------------
+# Sonarr/Radarr only upgrade monitored items. The odd-quality episodes were all unmonitored, so "Search for better copies"
+# was a one-off and nothing improved later. Monitor turns monitoring on for just the flagged episodes (and the series if it
+# was off) - never whole seasons, so missing episodes aren't pulled in - or for the film in Radarr.
+def _unmonitored(ref, cache):
+    a = arr_by_name(ref.get("arr"))
+    if not a: return None
+    if ref.get("kind") == "movie":
+        m = arr(a, "/movie/%d" % int(ref["id"]))
+        return {"movie": not m.get("monitored")} if not m.get("monitored") else {}
+    sid = int(ref["series"])
+    if sid not in cache:
+        cache[sid] = (arr(a, "/series/%d" % sid), {(e["seasonNumber"], e["episodeNumber"]): e for e in arr(a, "/episode?seriesId=%d" % sid)})
+    ser, eps = cache[sid]
+    un = [[s_, e_] for s_, e_ in ref.get("eps", []) if (s_, e_) in eps and not eps[(s_, e_)]["monitored"]]
+    out = {}
+    if un: out["eps"] = un
+    if not ser.get("monitored"): out["series"] = True
+    return out
+
+def monitor_state(items):
+    cache = {}
+    for it in items:
+        d = it["detail"]
+        if "search" not in d.get("fixes", []) or not d.get("ref"): continue
+        try: un = _unmonitored(d["ref"], cache)
+        except Exception: continue
+        if un is None: continue
+        if un:
+            d["unmon"] = un
+            d["fixes"] = [f for f in d["fixes"] if f != "monitor"]
+            d["fixes"].insert(d["fixes"].index("search") + 1, "monitor")
+        else:
+            d["monitored"] = True
+
+def monitor_fix(issue_id, row, d):
+    ref = d.get("ref") or {}; a = arr_by_name(ref.get("arr"))
+    if not a: return {"ok": False, "error": "Unknown Radarr/Sonarr."}
+    try:
+        if ref.get("kind") == "movie":
+            arr(a, "/movie/editor", {"movieIds": [int(ref["id"])], "monitored": True}, "PUT"); what = "the film"
+        else:
+            sid = int(ref["series"]); ser = arr(a, "/series/%d" % sid)
+            em = {(x["seasonNumber"], x["episodeNumber"]): x for x in arr(a, "/episode?seriesId=%d" % sid)}
+            ids = [em[(s_, e_)]["id"] for s_, e_ in ref.get("eps", []) if (s_, e_) in em and not em[(s_, e_)]["monitored"]]
+            ser_off = not ser.get("monitored")
+            if ser_off:
+                ser["monitored"] = True; arr(a, "/series/%d" % sid, ser, "PUT")
+            if ids: arr(a, "/episode/monitor", {"episodeIds": ids, "monitored": True}, "PUT")
+            what = "%d episode%s" % (len(ids), "" if len(ids) == 1 else "s") + (" and the series" if ser_off else "")
+    except Exception as e:
+        return {"ok": False, "error": "Couldn't ask %s: %s" % (a["name"], e)}
+    d["fixes"] = [f for f in d.get("fixes", []) if f != "monitor"]; d.pop("unmon", None); d["monitored"] = True
+    note = "Monitored %s in %s. It now upgrades %s by itself whenever a better copy turns up." % (what, a["name"], "it" if ref.get("kind") == "movie" else "them")
+    with db() as c:
+        c.execute("UPDATE issues SET detail=? WHERE id=?", (json.dumps(d), issue_id))
+        c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                  (issue_id, row["title"], row["library"], "", "[]", "[]", row["links"], now_iso(), "ok", note, "quality"))
+    event("quality", "%s: %s" % (row["title"], note))
+    return {"ok": True}
+
 def quality_fix(issue_id, how):
     with db() as c:
         row = c.execute("SELECT * FROM issues WHERE id=? AND chk='quality'", (issue_id,)).fetchone()
@@ -2239,23 +2477,26 @@ def quality_fix(issue_id, how):
     d = json.loads(row["detail"])
     if how not in d.get("fixes", []): return {"ok": False, "error": "That fix doesn't apply here."}
     if how == "tdarr": return tdarr_fix(issue_id, row, d)
+    if how == "monitor": return monitor_fix(issue_id, row, d)
     if how == "search":
         ref = d.get("ref") or {}; a = arr_by_name(ref.get("arr"))
         if not a: return {"ok": False, "error": "Unknown Radarr/Sonarr."}
         try:
             if ref["kind"] == "movie":
-                arr(a, "/command", {"name": "MoviesSearch", "movieIds": [int(ref["id"])]}, "POST"); n = 1
+                cmd = arr(a, "/command", {"name": "MoviesSearch", "movieIds": [int(ref["id"])]}, "POST"); n = 1; sids, mode = [int(ref["id"])], "movie"
             else:
                 em = {(x["seasonNumber"], x["episodeNumber"]): x["id"] for x in arr(a, "/episode?seriesId=%d" % int(ref["series"]))}
                 ids = [em[(s, e)] for s, e in ref.get("eps", []) if (s, e) in em]
                 if not ids: return {"ok": False, "error": "%s doesn't list those episodes." % a["name"]}
-                arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": ids}, "POST"); n = len(ids)
+                cmd = arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": ids}, "POST"); n = len(ids); sids, mode = ids, "episode"
         except Exception as e:
             return {"ok": False, "error": "Couldn't ask %s: %s" % (a["name"], e)}
-        note = "Asked %s to search for %d better cop%s. Anything it grabs downloads in the night window and replaces the old file." % (a["name"], n, "y" if n == 1 else "ies")
+        note = "Asked %s to search for %d better cop%s. Followed up every hour: grabbed, imported, waiting to import, or nothing found (then hidden for %d days and searched again by itself)." % (a["name"], n, "y" if n == 1 else "ies", SNOOZE_DAYS)
+        sref = {"kind": "search", "arr": a["name"], "mode": mode, "ids": sids, "at": now_iso(), "cmd": (cmd or {}).get("id")}
         with db() as c:
-            c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                      (issue_id, row["title"], row["library"], "", "[]", "[]", row["links"], now_iso(), "ok", note, "quality"))
+            snooze(c, issue_id, row["title"], days=1)
+            c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk, ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (issue_id, row["title"], row["library"], "", "[]", "[]", row["links"], now_iso(), "waiting", note, "quality", json.dumps(sref)))
             c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
         event("quality", "%s: %s" % (row["title"], note))
         return {"ok": True}
@@ -2786,14 +3027,86 @@ QUALITY_CODECS = {}                       # path -> Plex video codec, filled by 
 EXTRA_RE2 = re.compile(r"(-trailer|-sample|-featurette|-behindthescenes|-deleted|-interview|-scene|-short|-other)\.[a-z0-9]+$", re.I)
 EXTRA_DIRS = {"trailers", "featurettes", "extras", "behind the scenes", "deleted scenes", "interviews", "scenes", "shorts", "other", "samples"}
 
+# ---------------- files Tdarr failed to convert (v31) ----------------
+# Tdarr's "Transcode error" files never reached the phone before. Each card lists the files with the reason read from the
+# latest job report (Tdarr API list-footprintId-reports + read-job-file, keyed by the record's footprintId). "Retry" reuses
+# tdarr_fix (sets the record back to Queued; the 10-minute follow-up then shows ✓ or "couldn't convert").
+TDARR_REASONS = [
+    (re.compile(r"Subtitle codec \d+ is not supported|codec not currently supported in container", re.I), "a subtitle track ffmpeg can't copy"),
+    (re.compile(r"No space left on device", re.I), "the disk or Tdarr's cache ran out of space"),
+    (re.compile(r"Permission denied|Operation not permitted", re.I), "a permission problem"),
+    (re.compile(r"Invalid data found when processing input|moov atom not found|Error while decoding|corrupt", re.I), "the file is damaged"),
+    (re.compile(r"OpenEncodeSessionEx|CUDA_ERROR|No NVENC capable devices|nvenc.*(error|failed)|Cannot load libcuda", re.I), "the NVIDIA GPU encoder failed"),
+    (re.compile(r"Cannot allocate memory|out of memory", re.I), "it ran out of memory"),
+    (re.compile(r"Could not write header", re.I), "ffmpeg couldn't write the new file (a track it can't copy)"),
+]
+_TDARR_ERRLINE = re.compile(r"\] (?!.*Tdarr)(.*(error|failed|invalid|not supported).*)$", re.I)
+
+def tdarr_reason(fp):
+    """Best guess at why the last Tdarr transcode of this footprint failed, in plain words ('' if no report)."""
+    if not fp: return ""
+    try:
+        reps = tdarr_call("/api/v2/list-footprintId-reports", {"footprintId": fp}, timeout=20)
+        reps = [r for r in (reps if isinstance(reps, list) else []) if "()transcode()" in r]
+        if not reps: return ""
+        jf = max(reps, key=lambda r: int(re.sub(r"\D", "", r.rsplit("()", 1)[-1]) or 0))
+        res = tdarr_call("/api/v2/read-job-file", {"footprintId": fp, "jobId": jf.split("()")[3], "jobFileId": jf}, timeout=30)
+        txt = res.get("text", "") if isinstance(res, dict) else ""
+    except Exception:
+        return ""
+    for rx, why in TDARR_REASONS:
+        if rx.search(txt): return why
+    for line in reversed(txt.splitlines()):
+        m = _TDARR_ERRLINE.search(line.strip())
+        if m and "Conversion failed" not in m.group(1): return m.group(1).strip()[:160]
+    return "no clear reason in the job report"
+
+def tdarr_failed_cards(recs, trashed, pending):
+    libs = {lib_id: name for folder, lib_id, name in tdarr_libs()}
+    by_lib = {}
+    for f in recs:
+        if "error" not in str(f.get("TranscodeDecisionMaker", "")).lower(): continue
+        p = f["_id"]
+        if p in trashed or p in pending or not os.path.isfile(p): continue
+        by_lib.setdefault(f.get("DB") or "", []).append(f)
+    out, looked = [], 0
+    for lib_id, fs in by_lib.items():
+        name = libs.get(lib_id, lib_id or "?")
+        items = []
+        for f in sorted(fs, key=lambda x: x["_id"]):
+            why = ""
+            if looked < 40:
+                looked += 1; why = tdarr_reason(f.get("footprintId"))
+            try: size = os.path.getsize(f["_id"])
+            except OSError: size = 0
+            items.append({"path": f["_id"], "name": os.path.relpath(f["_id"], os.path.commonpath([x["_id"] for x in fs]) if len(fs) > 1 else os.path.dirname(f["_id"])),
+                          "size": size, "why": why or "not checked"})
+        reasons = {}
+        for x in items: reasons[x["why"]] = reasons.get(x["why"], 0) + 1
+        top = sorted(reasons.items(), key=lambda kv: -kv[1])
+        why_txt = "; ".join("%s (%d)" % (w, n) if len(top) > 1 else w for w, n in top[:3])
+        n = len(items)
+        out.append(dict(id=iid("quality", "tdarrfail", lib_id), chk="quality", sev="att", library="Tdarr: " + name,
+                        title="Tdarr couldn't convert %d file%s" % (n, "" if n == 1 else "s"),
+                        detail={"kind": "tdarrfail", "count": n, "items": items[:80], "reason": top[0][0] if top else "",
+                                "tdarr_paths": [x["path"] for x in items], "fixes": ["tdarr"],
+                                "text": "Reason: %s." % why_txt,
+                                "note": "The files still play; they just weren't made smaller. Retry puts them back in Tdarr's queue (for “a subtitle track ffmpeg can't copy”, add the Drop Unknown Subs plugin from the extras/tdarr folder on GitHub to the library's stack first). The result shows under Done."},
+                        links=[{"label": "Open Tdarr", "url": S["tdarr"]["public"]}] if S["tdarr"].get("public") else []))
+    return out
+
 def tdarr_missed_scan(trashed, skip):
     if not S.get("tdarr"): return []
     STATE["step"] = "Checking what Tdarr has seen"
     try:
-        known = {f["_id"] for f in tdarr_call("/api/v2/cruddb", {"collection": "FileJSONDB", "mode": "getAll"}, timeout=300) if f.get("_id")}
+        recs = [f for f in tdarr_call("/api/v2/cruddb", {"collection": "FileJSONDB", "mode": "getAll"}, timeout=300) if f.get("_id")]
     except Exception as e:
         log("tdarr missed check failed: %r" % e); return []
-    pending, out = smaller_waiting_paths(), []
+    known = {f["_id"] for f in recs}
+    pending = smaller_waiting_paths()
+    out = []
+    try: out += tdarr_failed_cards(recs, trashed, pending)          # v31
+    except Exception as e: log("tdarr failed check failed: %r" % e)
     for folder, lib_id, name in tdarr_libs():
         items = []
         for dp, dn, fn in os.walk(folder):
@@ -2820,6 +3133,303 @@ def tdarr_missed_scan(trashed, skip):
                                 "note": "Send all to Tdarr adds them to its %s library so its normal queue converts them, usually to about a third of the size. Checked every hour." % name},
                         links=[{"label": "Open Tdarr", "url": S["tdarr"]["public"]}] if S["tdarr"].get("public") else []))
     return out
+
+# ---------------- Downloads: Radarr/Sonarr queues (v33) ----------------
+# 11-15: 4 better copies sat "import blocked" for 12 h, a dead torrent never started and a 4-month-old download no arr knew
+# about kept 12.6 GB, and nothing said so. queue_cards() reads every arr's queue and makes a card per problem:
+#   blocked  - downloaded but the arr won't import it (name mismatch, "matched by ID", …) -> Import (manual import, only files
+#              the arr itself has no objection to; otherwise it says why and links to the arr)
+#   stalled  - torrent still at 0% after a night download window, or the arr/client says failed -> Remove & try another
+#              (remove + blocklist, then an explicit search because unmonitored items are never re-searched)
+#   leftover - finished download no Radarr/Sonarr knows about, over 7 days old -> Move to trash (qBittorrent forgets it, the
+#              files go to Library Doctor's trash; private torrents and LD_PROTECT_TAGS are left alone)
+QUEUE_LEFTOVER_DAYS = 7
+# If your downloads only run in a nightly window, set LD_DOWNLOAD_WINDOW_END to the hour it ends (e.g. 7 for 00:00-07:00):
+# a torrent then counts as stuck once a whole window has passed. Unset = stuck after 24 hours at 0%.
+_DWE = os.environ.get("LD_DOWNLOAD_WINDOW_END", "").strip()
+NIGHT_END_HOUR = int(_DWE) if _DWE.isdigit() and int(_DWE) < 24 else None
+QUEUE_NOTIFY_HOUR = NIGHT_END_HOUR if NIGHT_END_HOUR is not None else int(os.environ.get("LD_QUEUE_NOTIFY_HOUR", "8"))
+# torrents with any of these qBittorrent tags are never offered for removal (private torrents never are either)
+PROTECT_TAGS = {t.strip().lower() for t in os.environ.get("LD_PROTECT_TAGS", "").split(",") if t.strip()}
+
+def _protected(qb):
+    return bool(qb.get("private")) or bool(PROTECT_TAGS & {t.strip().lower() for t in (qb.get("tags") or "").split(",")})
+
+def _arr_queue(a):
+    inc = "includeMovie=true&includeUnknownMovieItems=true" if a["kind"] == "radarr" else "includeSeries=true&includeEpisode=true&includeUnknownSeriesItems=true"
+    return arr(a, "/queue?pageSize=500&" + inc).get("records", [])
+
+def _qbit():
+    q = S.get("qbit") or {}
+    if not q.get("url"): return None
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookiejar.CookieJar()))
+    op.open(q["url"] + "/api/v2/auth/login", data=urllib.parse.urlencode({"username": q["username"], "password": q["password"]}).encode(), timeout=15).read()
+    return op
+
+def _qbit_info(op, h):
+    try: return (json.loads(op.open(S["qbit"]["url"] + "/api/v2/torrents/info?hashes=" + h.lower(), timeout=20).read() or b"[]") or [None])[0]
+    except Exception: return None
+
+def _night_passed(added):
+    """True once a whole download window has passed since the item was added (or 24 h with no window set)."""
+    try: t = datetime.fromisoformat(str(added).replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+    except Exception: return False
+    if NIGHT_END_HOUR is None: return datetime.now() - t > timedelta(hours=24)
+    first_night = (t + timedelta(days=1)).replace(hour=NIGHT_END_HOUR, minute=0, second=0, microsecond=0) if t.hour >= NIGHT_END_HOUR else t.replace(hour=NIGHT_END_HOUR, minute=0, second=0, microsecond=0)
+    return datetime.now() > first_night + timedelta(minutes=30)
+
+def _q_msgs(r):
+    m = [x for sm in r.get("statusMessages") or [] for x in sm.get("messages") or []]
+    if r.get("errorMessage"): m.append(r["errorMessage"])
+    return "; ".join(dict.fromkeys(m))[:300]
+
+def _q_label(r):
+    ep = r.get("episode")
+    return "S%02dE%02d" % (ep["seasonNumber"], ep["episodeNumber"]) if ep else ""
+
+def queue_cards():
+    out, qop = [], None
+    for a in S.get("arrs", []):
+        try: recs = _arr_queue(a)
+        except Exception as e:
+            log("queue %s failed: %r" % (a["name"], e)); continue
+        groups = {}
+        for r in recs:
+            state, status = r.get("trackedDownloadState") or "", (r.get("status") or "").lower()
+            tstat, msgs = r.get("trackedDownloadStatus") or "", _q_msgs(r)
+            owner = r.get("movie") or r.get("series") or {}
+            known = bool(r.get("movieId") or r.get("seriesId"))
+            size, left = r.get("size") or 0, r.get("sizeleft") or 0
+            kind = None
+            if known and state in ("importBlocked", "importPending") and tstat == "warning" and status == "completed":
+                kind = "blocked"
+            elif known and (state == "failedPending" or status in ("failed", "warning") and "fail" in msgs.lower()):
+                kind = "stalled"
+            elif known and r.get("protocol") == "torrent" and state == "downloading" and (size == 0 or left >= size) and _night_passed(r.get("added")):
+                kind = "stalled"
+            elif not known and status == "completed":
+                if r.get("protocol") == "torrent" and r.get("downloadId"):
+                    if qop is None:
+                        try: qop = _qbit() or False
+                        except Exception as e: log("qbit login failed: %r" % e); qop = False
+                    info = _qbit_info(qop, r["downloadId"]) if qop else None
+                    age = (time.time() - info["completion_on"]) / 86400 if info and info.get("completion_on", 0) > 0 else 0
+                    if info and age >= QUEUE_LEFTOVER_DAYS:
+                        kind = "leftover"
+                        r["_qb"] = {"private": bool(info.get("private")), "tags": info.get("tags", ""), "path": info.get("content_path", ""),
+                                    "ratio": round(info.get("ratio", 0), 2), "days": int(age), "state": info.get("state")}
+            if not kind: continue
+            key = (kind, owner.get("id") or r.get("downloadId"))
+            g = groups.setdefault(key, {"kind": kind, "owner": owner, "items": []})
+            it = {"qid": r["id"], "downloadId": r.get("downloadId"), "title": r.get("title", ""), "ep": _q_label(r),
+                  "episodeId": r.get("episodeId"), "movieId": r.get("movieId"), "seriesId": r.get("seriesId"),
+                  "protocol": r.get("protocol"), "client": r.get("downloadClient"), "size": size, "left": left,
+                  "added": r.get("added"), "msg": msgs, "path": r.get("outputPath") or ""}
+            if r.get("_qb"): it["qb"] = r["_qb"]
+            g["items"].append(it)
+        for (kind, oid), g in groups.items():
+            items, owner = g["items"], g["owner"]
+            n = len(items)
+            name = (owner.get("title") or items[0]["title"]) if kind != "leftover" else items[0]["title"]
+            eps = ", ".join(x["ep"] for x in items if x["ep"])
+            links = [arr_link(a, owner, "movie" if a["kind"] == "radarr" else "series")] if owner.get("titleSlug") else []
+            links.append({"label": "Open %s queue" % a["name"], "url": a["public"].rstrip("/") + "/activity/queue"})
+            if kind == "blocked":
+                title = "%s%s: %s waiting to import" % (name, " " + eps if eps and n <= 4 else "", "1 download" if n == 1 else "%d downloads" % n)
+                text = "%s downloaded %s but won't import %s by itself: %s" % (a["name"], "it" if n == 1 else "them", "it" if n == 1 else "them", items[0]["msg"] or "import blocked")
+                note = "Import asks %s to import %s now, checking first that %s has no objection to the file. The old copy goes to its recycle bin." % (a["name"], "it" if n == 1 else "them", a["name"])
+                fixes = ["import"]
+            elif kind == "stalled":
+                title = "%s%s: %s" % (name, " " + eps if eps and n <= 4 else "", "download stuck" if n == 1 else "%d downloads stuck" % n)
+                text = (("Still at 0%% after %s, so probably nobody is sharing it. " % ("a night's download window" if NIGHT_END_HOUR is not None else "a whole day")) if items[0]["left"] >= items[0]["size"] else "") + (items[0]["msg"] or "")
+                note = "Remove & try another removes it, blocklists that release and searches for a different one (it downloads in the night window)."
+                fixes = ["retry"]
+            else:
+                qb = items[0].get("qb") or {}
+                prot = _protected(qb)
+                title = "Leftover download: %s" % name[:90]
+                text = "Finished %d days ago (%s, ratio %s) and no Radarr/Sonarr knows about it, so it's just taking %s." % (qb.get("days", 0), human(items[0]["size"]), qb.get("ratio", 0), human(items[0]["size"]))
+                note = ("It's on a private tracker (or has a protected tag), so it's left to its seeding rules." if prot else
+                        "Move to trash removes it from qBittorrent and puts the files in Library Doctor's trash (deleted after %d days). If you still want it, add the film or show in %s instead." % (TRASH_DAYS, a["name"]))
+                fixes = [] if prot else ["remove"]
+            out.append(dict(id=iid("queue", kind, a["name"], oid), chk="queue", sev="bad" if kind == "stalled" else "att", title=title, library=a["name"],
+                            detail={"kind": kind, "arr": a["name"], "items": items, "count": n, "fixes": fixes, "text": text, "note": note,
+                                    "size": sum(x["size"] for x in items)},
+                            links=links))
+    return out
+
+def queue_refresh(notify=False):
+    """Between scans: replace only the Downloads cards (keeps first_seen), optionally tell Gotify about new ones."""
+    cards = queue_cards()
+    now = now_iso()
+    with db() as c:
+        seen = {r["id"]: r["first_seen"] for r in c.execute("SELECT id, first_seen FROM issues WHERE chk='queue'")}
+        sid = (c.execute("SELECT MAX(id) FROM scans").fetchone()[0] or 0)
+        c.execute("DELETE FROM issues WHERE chk='queue'")
+        for it in cards:
+            c.execute("INSERT OR REPLACE INTO issues VALUES (?,?,?,?,?,?,?,?,?,?)", (it["id"], sid, "queue", it["sev"], it["title"], it["library"],
+                      json.dumps(it["detail"]), json.dumps(it["links"]), seen.get(it["id"], now), now))
+        hidden = hidden_ids(c)
+    new = [it for it in cards if it["id"] not in seen and it["id"] not in hidden]
+    if notify and new and (S.get("gotify") or {}).get("token"):
+        try: gotify_send("Library Doctor: %d download%s need%s you" % (len(new), "" if len(new) == 1 else "s", "s" if len(new) == 1 else ""),
+                         "\n\n".join("**%s** (%s): %s" % (it["title"], it["library"], it["detail"]["text"][:200]) for it in new[:6]), 5)
+        except Exception as e: log("queue gotify failed: %r" % e)
+    return len(cards)
+
+def _manual_import(a, it):
+    """Import one queue item's files the arr has no objection to. Returns (n_imported, problem or '')."""
+    q = {"downloadId": it["downloadId"], "filterExistingFiles": "false"}
+    if a["kind"] == "radarr": q["movieId"] = it["movieId"]
+    else: q["seriesId"] = it["seriesId"]
+    cands = arr(a, "/manualimport?" + urllib.parse.urlencode(q))
+    vids = [x for x in cands if (x.get("size") or 0) > 50 * 1024 * 1024 and os.path.splitext(x.get("path", ""))[1].lower() in VIDEO_EXT]
+    if not vids: return 0, "no video file found in the download"
+    bad = [j.get("reason", "") for x in vids for j in x.get("rejections") or []]
+    if bad: return 0, "%s refuses: %s" % (a["name"], bad[0][:160])
+    files = []
+    for x in vids:
+        f = {"path": x["path"], "quality": x.get("quality"), "languages": x.get("languages") or [], "releaseGroup": x.get("releaseGroup"),
+             "downloadId": it["downloadId"], "indexerFlags": x.get("indexerFlags", 0)}
+        if a["kind"] == "radarr":
+            f["movieId"] = (x.get("movie") or {}).get("id") or it["movieId"]
+        else:
+            eids = [e["id"] for e in x.get("episodes") or []] or ([it["episodeId"]] if it.get("episodeId") else [])
+            if not eids: return 0, "%s couldn't tell which episode it is" % a["name"]
+            f.update(seriesId=it["seriesId"], episodeIds=eids, folderName=x.get("folderName"), releaseType=x.get("releaseType", "singleEpisode"))
+        files.append(f)
+    cmd = arr(a, "/command", {"name": "ManualImport", "importMode": "auto", "files": files}, "POST")
+    for _ in range(40):
+        time.sleep(3)
+        st = arr(a, "/command/%d" % cmd["id"])
+        if st.get("status") in ("completed", "failed", "aborted"): break
+    if st.get("status") != "completed": return 0, "%s's import %s: %s" % (a["name"], st.get("status", "timed out"), (st.get("exception") or st.get("message") or "")[:160])
+    return len(files), ""
+
+def _retry(a, it):
+    arr(a, "/queue/%d?removeFromClient=true&blocklist=true&skipRedownload=false" % it["qid"], None, "DELETE")
+    if a["kind"] == "radarr" and it.get("movieId"):
+        arr(a, "/command", {"name": "MoviesSearch", "movieIds": [int(it["movieId"])]}, "POST")
+    elif it.get("episodeId"):
+        arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": [int(it["episodeId"])]}, "POST")
+
+def _remove_leftover(it):
+    qb = it.get("qb") or {}
+    if _protected(qb): return "private or protected torrent: left to its seeding rules"
+    op = _qbit()
+    if not op: return "qBittorrent isn't set up in Library Doctor"
+    info = _qbit_info(op, it["downloadId"])
+    if not info: return "qBittorrent doesn't have it any more"
+    src = info.get("content_path") or ""
+    if not src.startswith(MEDIA_ROOT + "/downloads/") or not os.path.exists(src): return "its files aren't under /media/downloads"
+    op.open(S["qbit"]["url"] + "/api/v2/torrents/delete", data=urllib.parse.urlencode({"hashes": it["downloadId"].lower(), "deleteFiles": "false"}).encode(), timeout=20).read()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-leftover-" + it["downloadId"][:8].lower()
+    files = [src] if os.path.isfile(src) else [os.path.join(d, f) for d, _, fs in os.walk(src) for f in fs]
+    for f in files:
+        dst = os.path.join(TRASH_DIR, stamp, os.path.relpath(f, MEDIA_ROOT))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        size = os.path.getsize(f); move_file(f, dst)
+        with db() as c: c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
+                                  ("queue", it["title"][:200], f, dst, size, "Leftover download (no Radarr/Sonarr knew it)", now_iso()))
+    if os.path.isdir(src):
+        for d, dn, fn in sorted(os.walk(src, topdown=False), key=lambda x: -len(x[0])):
+            try: os.rmdir(d)
+            except OSError: pass
+    return ""
+
+def queue_fix(issue_id, how):
+    with db() as c:
+        row = c.execute("SELECT * FROM issues WHERE id=? AND chk='queue'", (issue_id,)).fetchone()
+    if not row: return {"ok": False, "error": "That one isn't in the queue list any more. Refresh first."}
+    d = json.loads(row["detail"])
+    if how not in d.get("fixes", []): return {"ok": False, "error": "That fix doesn't apply here."}
+    a = arr_by_name(d.get("arr"))
+    if not a: return {"ok": False, "error": "Unknown Radarr/Sonarr."}
+    okn, probs = 0, []
+    for it in d["items"]:
+        try:
+            if how == "import":
+                n, why = _manual_import(a, it)
+                if n: okn += 1
+                else: probs.append("%s: %s" % (it["ep"] or it["title"][:50], why))
+            elif how == "retry":
+                _retry(a, it); okn += 1
+            elif how == "remove":
+                why = _remove_leftover(it)
+                if why: probs.append(why)
+                else: okn += 1
+        except Exception as e:
+            probs.append("%s: %s" % (it["ep"] or it["title"][:50], e))
+    n = len(d["items"])
+    verb = {"import": "Imported", "retry": "Removed and searching again for", "remove": "Moved to the trash:"}[how]
+    note = "%s %d of %d%s." % (verb, okn, n, (". Not done: " + "; ".join(probs)) if probs else "")
+    if how == "retry" and okn: note += " Anything it finds downloads in the night window."
+    st = "ok" if okn == n else "warn"
+    with db() as c:
+        c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                  (issue_id, row["title"], row["library"], "", "[]", "[]", row["links"], now_iso(), st, note, "queue"))
+        if okn == n: c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+    event("queue", "%s: %s" % (row["title"], note))
+    return {"ok": okn > 0, "error": "; ".join(probs) if not okn else ""}
+
+# ---------------- Search follow-up (v33) ----------------
+# "Search for better copies" used to snooze the card straight away. Now the search is followed: history since the search ->
+# grabbed / imported (with quality) / waiting to import (see Downloads) / nothing found. Only "nothing found" snoozes for
+# SNOOZE_DAYS; while a search is still being followed the card is hidden for a day.
+def search_followup():
+    with db() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM done WHERE chk='quality' AND status='waiting' AND cleared=0 AND ref LIKE '%\"kind\": \"search\"%'")]
+    for r in rows:
+        try:
+            ref = json.loads(r["ref"]); a = arr_by_name(ref["arr"])
+            if not a: continue
+            since = ref["at"]
+            utc = datetime.fromisoformat(since).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            hist = arr(a, "/history/since?" + urllib.parse.urlencode({"date": utc}))
+            key = "movieId" if ref["mode"] == "movie" else "episodeId"
+            want = set(ref["ids"]); st = {i: "none" for i in want}; qual = {}
+            for h in sorted(hist, key=lambda x: x.get("date", "")):
+                i = h.get(key)
+                if i not in want: continue
+                ev = h.get("eventType")
+                if ev == "grabbed" and st[i] == "none": st[i] = "grabbed"
+                elif ev in ("downloadFolderImported", "movieFileImported", "episodeFileImported"):
+                    st[i] = "imported"; qual[i] = ((h.get("quality") or {}).get("quality") or {}).get("name", "")
+                elif ev == "downloadFailed" and st[i] != "imported": st[i] = "failed"
+            try:
+                inq = {x.get(key): x for x in _arr_queue(a)}
+            except Exception: inq = {}
+            for i in want:
+                if st[i] == "grabbed" and i in inq and (inq[i].get("trackedDownloadState") in ("importBlocked", "importPending")): st[i] = "blocked"
+            cmd_done = True
+            if ref.get("cmd"):
+                try: cmd_done = arr(a, "/command/%d" % ref["cmd"]).get("status") in ("completed", "failed", "aborted")
+                except Exception: cmd_done = True
+            age_h = (datetime.now() - datetime.fromisoformat(since)).total_seconds() / 3600
+            cnt = {k: sum(1 for v in st.values() if v == k) for k in ("imported", "grabbed", "blocked", "failed", "none")}
+            n = len(want)
+            bits = []
+            if cnt["imported"]: bits.append("%d imported (%s)" % (cnt["imported"], ", ".join(sorted({q for q in qual.values() if q})) or "new copy"))
+            if cnt["grabbed"]: bits.append("%d downloading" % cnt["grabbed"])
+            if cnt["blocked"]: bits.append("%d waiting to import (see Downloads)" % cnt["blocked"])
+            if cnt["failed"]: bits.append("%d failed to download" % cnt["failed"])
+            if cnt["none"] and (cmd_done or age_h > 1): bits.append("%d nothing better found" % cnt["none"])
+            if cnt["imported"] == n:
+                status, note = "ok", "✓ %s: all %d better cop%s imported (%s)." % (a["name"], n, "y" if n == 1 else "ies", ", ".join(sorted(set(qual.values()))) or "new copy")
+                with db() as c: c.execute("DELETE FROM snoozed WHERE id=?", (r["issue_id"],))
+            elif cnt["grabbed"] or cnt["blocked"] or not (cmd_done or age_h > 1):
+                status, note = "waiting", "%s: %s. Checked %s." % (a["name"], ", ".join(bits) or "searching", datetime.now().strftime("%a %H:%M"))
+                with db() as c: snooze(c, r["issue_id"], r["title"], days=1, count=False)
+            else:
+                status = "ok" if cnt["imported"] else "warn"
+                note = "%s: %s." % (a["name"], ", ".join(bits))
+                if cnt["none"] or cnt["failed"]:
+                    note += " Hidden for %d days, then searched again by itself." % SNOOZE_DAYS
+                    with db() as c: snooze(c, r["issue_id"], r["title"])
+            with db() as c:
+                c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (status, note, now_iso(), r["id"]))
+        except Exception as e:
+            log("search followup %s failed: %r" % (r["id"], e))
 
 # ---------------- web ----------------
 # ---------------- login ----------------
@@ -3063,7 +3673,7 @@ def stats():
     with db() as c:
         trash = [dict(r) for r in c.execute("SELECT src, size, reason, moved_at, restored_at, purged_at FROM trash")]
         done = [dict(r) for r in c.execute("SELECT chk, status, note, at, cleared FROM done")]
-        ign = {r["id"] for r in c.execute("SELECT id FROM ignored")}
+        ign = hidden_ids(c)
         issues = [dict(r) for r in c.execute("SELECT id, chk, detail FROM issues")]
     # 1) files Library Doctor moved out for good: duplicates, leftovers, old .ts copies (minus the new .mkv). Not replaced broken files or Plex fixes.
     for t in trash:
@@ -3096,7 +3706,7 @@ def stats():
             if d.get("kind") == "hog": possible += d.get("extra") or 0
             elif d.get("kind") == "tdarrmissed": possible += TDARR_SAVE_GUESS * sum(x.get("size") or 0 for x in d.get("items") or [])
         if i["chk"] == "unwatched": continue          # information, not a job
-        jobs_open += len(d["eps"]) if d.get("kind") in ("titles", "odd") and isinstance(d.get("eps"), list) and d["eps"] else (d.get("count") or 1) if d.get("kind") == "tdarrmissed" else 1
+        jobs_open += len(d["eps"]) if d.get("kind") in ("titles", "odd") and isinstance(d.get("eps"), list) and d["eps"] else (d.get("count") or 1) if d.get("kind") in ("tdarrmissed", "tdarrfail") else 1
     month = (datetime.now() - timedelta(days=30)).isoformat(timespec="seconds")
     jobs_done = sum(1 for d in done if d["status"] == "ok" and (d["at"] or "") > month)
     jobs_busy = sum(1 for d in done if d["status"] in ("waiting", "checking"))
@@ -3108,7 +3718,8 @@ def stats():
 
 def state():
     with db() as c:
-        ign = {r["id"] for r in c.execute("SELECT id FROM ignored")}
+        ign = hidden_ids(c)
+        snz = {r["id"]: r["until"] for r in c.execute("SELECT id, until FROM snoozed WHERE until > ? AND id NOT IN (SELECT id FROM ignored)", (now_iso(),))}
         rows = [dict(r) for r in c.execute("SELECT * FROM issues ORDER BY chk, library, title")]
         scans = [dict(r) for r in c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 10")]
         trash = [dict(r) for r in c.execute("SELECT id, title, src, size, reason, moved_at FROM trash WHERE restored_at IS NULL AND purged_at IS NULL ORDER BY id DESC")]
@@ -3124,13 +3735,25 @@ def state():
                        "size": it["size"], "after": it.get("after")} for it in rf["items"]] if isinstance(rf, dict) and rf.get("kind") == "tdarr" else None
     for r in rows:
         r["detail"] = json.loads(r["detail"]); r["links"] = json.loads(r["links"]); r["ignored"] = r["id"] in ign
+        if r["id"] in snz: r["snoozed"] = snz[r["id"]]
     for t in trash:
         t["empties"] = (datetime.fromisoformat(t["moved_at"]) + timedelta(days=TRASH_DAYS)).isoformat(timespec="seconds")
+    bins = [{"name": "Library Doctor", "days": TRASH_DAYS, "count": len(trash), "size": sum(t["size"] or 0 for t in trash),
+             "next": min((t["empties"] for t in trash), default=None)}]
+    try:
+        rbi = recycle_items()
+        trash += [{k: v for k, v in x.items() if k in ("id", "title", "src", "size", "reason", "moved_at", "empties", "rb")} for x in rbi]
+        for b in recycle_bins():                       # v34: one summary line per bin, empty ones too
+            mine = [x for x in rbi if x["rb"] == b["arr"]["name"]]
+            bins.append({"name": b["arr"]["name"], "days": b["days"], "count": len(mine), "size": sum(x["size"] for x in mine),
+                         "next": min((x["empties"] for x in mine), default=None)})
+    except Exception as e:
+        log("recycle list failed: %r" % e)
     virus = {"clam": clam_status(cached=True), "last": kv_get("virus_last_incremental"), "full": kv_get("virus_full_last"),
              "full_running": VIRUS_LOCK.locked(), "full_started": (kv_get("virus_full_running") or {}).get("at")}
     coming = {"ytdlp": ytdlp_status(), "busy": TRAILER_LOCK.locked(), "updating": YTDLP_LOCK.locked()}
     return {"gotify": bool((S.get("gotify") or {}).get("token")), "follow_days": FOLLOW_DAYS, "virus": virus, "coming": coming, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
-            "scan_hour": SCAN_HOUR, "keep_days": KEEP_DAYS, "stats": stats(), "trash": trash, "trash_days": TRASH_DAYS, "events": events, "done": done,
+            "scan_hour": SCAN_HOUR, "keep_days": KEEP_DAYS, "stats": stats(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
             "configured": configured(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT,
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
 
@@ -3223,7 +3846,7 @@ class H(BaseHTTPRequestHandler):
                     if path == "/api/ignore":
                         c.execute("INSERT OR REPLACE INTO ignored (id, title, at, until) VALUES (?,?,?,?)", (i, str(body.get("title", ""))[:200], now_iso(), until))
                     else:
-                        c.execute("DELETE FROM ignored WHERE id=?", (i,))
+                        c.execute("DELETE FROM ignored WHERE id=?", (i,)); c.execute("DELETE FROM snoozed WHERE id=?", (i,))
                 if body.get("uw"):                       # an Unwatched item: move it on the card now
                     uw_move(i, until=until, show=(path == "/api/unignore"))
                 return self.send(200, {"ok": True})
@@ -3264,6 +3887,13 @@ class H(BaseHTTPRequestHandler):
                 res = [dict(quality_fix(str(i)[:32], how), id=i) for i in ids if i][:100]
                 return self.send(200, {"ok": any(r.get("ok") for r in res), "started": sum(1 for r in res if r.get("ok")),
                                        "errors": [r["error"] for r in res if not r.get("ok")]})
+            if path == "/api/queuefix":
+                ids = body.get("ids") or [body.get("id")]
+                how = str(body.get("how", ""))
+                res = [dict(queue_fix(str(i)[:32], how), id=i) for i in ids if i][:50]
+                return self.send(200, {"ok": any(r.get("ok") for r in res), "errors": [r["error"] for r in res if not r.get("ok") and r.get("error")]})
+            if path == "/api/queuerefresh":
+                return self.send(200, {"ok": True, "cards": queue_refresh()})
             if path == "/api/comingfix":
                 ids = body.get("ids") or [body.get("id")]
                 how = str(body.get("how", ""))
@@ -3286,15 +3916,32 @@ class H(BaseHTTPRequestHandler):
             if path == "/api/fixdouble":
                 return self.send(200, fix_double(str(body.get("id", ""))[:32]))
             if path == "/api/done/clear":
-                with db() as c: c.execute("UPDATE done SET cleared=1 WHERE cleared=0 AND COALESCE(chk,'dupes')=?", (str(body.get("chk") or "dupes")[:16],))
+                # v31: jobs still running (waiting/checking) stay on the list, otherwise their follow-up stops (cleared=0 filters)
+                with db() as c: c.execute("UPDATE done SET cleared=1 WHERE cleared=0 AND COALESCE(chk,'dupes')=? AND COALESCE(status,'') NOT IN ('waiting','checking')", (str(body.get("chk") or "dupes")[:16],))
                 return self.send(200, {"ok": True})
             if path == "/api/restore":
-                ids = body.get("ids") or [body.get("id", 0)]
-                res = [dict(restore(int(i)), id=i) for i in ids if str(i).isdigit()][:500]
+                ids = [str(i) for i in (body.get("ids") or [body.get("id", 0)])][:500]
+                res = [dict(restore(int(i)), id=i) for i in ids if i.isdigit()]
+                rb = [i for i in ids if re.fullmatch(r"rb[0-9a-f]{16}", i)]
+                if rb:
+                    items = recycle_items()
+                    res += [dict(restore_recycle(i, items), id=i) for i in rb]
                 ok = [r for r in res if r.get("ok")]
-                return self.send(200, {"ok": bool(ok), "restored": len(ok), "errors": [r["error"] for r in res if not r.get("ok")]})
+                return self.send(200, {"ok": bool(ok), "restored": len(ok), "errors": [r["error"] for r in res if not r.get("ok")],
+                                       "notes": [r["note"] for r in ok if r.get("note")]})
             if path == "/api/purge":
-                return self.send(200, purge_ids(body["ids"]) if body.get("ids") else purge(None))
+                ids = [str(i) for i in (body.get("ids") or [])][:500]
+                if ids:
+                    num = [i for i in ids if i.isdigit()]
+                    r = purge_ids(num) if num else {"ok": True, "deleted": 0, "freed": human(0)}
+                    rb = {i for i in ids if re.fullmatch(r"rb[0-9a-f]{16}", i)}
+                    rn, rf = purge_recycle(rb) if rb else (0, 0)
+                else:
+                    r = purge(None); rn, rf = purge_recycle(None)
+                if rn:
+                    r["freed"] = human(rf) if not r.get("deleted") else "%s + %s" % (r["freed"], human(rf))
+                    r["deleted"] = r.get("deleted", 0) + rn
+                return self.send(200, r)
         except Exception as e:
             log("POST %s failed: %r" % (path, e))
             return self.send(500, {"ok": False, "error": str(e)})

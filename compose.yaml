@@ -16,6 +16,7 @@ services:
       # - LD_CLAMD_HOST=clamav      # optional: your ClamAV (clamd) for the Virus Scan check
       # - LD_CLAMD_PORT=3310
       # - LD_CLAM_ROOT=/scandir     # where ClamAV sees the same media folder
+      # - LD_DOWNLOAD_WINDOW_END=7  # optional: if downloads only run at night, the hour that window ends
     volumes:
       - ./config:/config            # settings, password and the database live here
       # CHANGE: your media folder. Mount it read-write: clean-up moves files into a .library-doctor-trash folder

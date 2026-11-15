@@ -21,6 +21,7 @@
 | Unwatched | What nobody has played in a year, biggest first (never deletes anything) | Tautulli |
 | Virus scan | Programs pretending to be films (film.mkv.exe), and ClamAV on every new file | ClamAV (optional) |
 | Coming Soon | Agregarr placeholders playing a generic clip instead of the real trailer | Agregarr (optional) |
+| Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), torrents stuck at 0% (Remove & try another) | Radarr/Sonarr |
 
 Tdarr (Convert with Tdarr), Sportarr (sports libraries) and Gotify (a phone message after the nightly scan) are optional too.
 
@@ -78,6 +79,10 @@ Library Doctor has its own login. If Authentik, Authelia or your proxy already p
 | `LD_PORT` | `8790` | Port inside the container |
 | `LD_CLAMD_HOST` / `LD_CLAMD_PORT` | `127.0.0.1` / `3310` | Your ClamAV (clamd), for the Virus Scan check |
 | `LD_CLAM_ROOT` | `/scandir` | Where ClamAV sees the same media folder |
+| `LD_SNOOZE_DAYS` | `30` | After "Search for better copies" finds nothing, hide the card this long, then search again |
+| `LD_DOWNLOAD_WINDOW_END` | (unset) | If downloads only run at night, the hour the window ends (e.g. `7`); a torrent is "stuck" after a whole window at 0%. Unset = after 24 hours |
+| `LD_QUEUE_NOTIFY_HOUR` | `8` | Hour the Downloads check tells Gotify about new problems (the window end, if set) |
+| `LD_PROTECT_TAGS` | (empty) | qBittorrent tags never offered for removal, comma-separated (private torrents never are) |
 
 Everything else (apps, API keys, folder mapping) is set on the Settings page and saved in `/config/config.json`. API keys stay on your server and are never shown again after saving.
 
