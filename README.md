@@ -8,6 +8,8 @@
 
 [Try the live demo](https://mymediabuild.uk/library-doctor-plex-library-health-check/#try-the-demo) (made-up library, nothing real is changed) · [How it works](https://mymediabuild.uk/library-doctor-plex-library-health-check/)
 
+<p align="center"><img src="assets/tour.gif" width="880" alt="A quick tour of Library Doctor with a made-up library: the main screen, a dubbed film found by File Health, a stuck download with its reason, duplicates with editions, and the folder check in Settings"></p>
+
 ## What it checks
 
 | Check | What it finds | Needs |
@@ -15,14 +17,14 @@
 | Missing files | Plex, Radarr or Sonarr list a file that isn't on the disk, and **season gaps**: aired episodes Sonarr wants but never got (Search for these) | Plex + Radarr/Sonarr |
 | Duplicates | Two copies of the same film or episode, with which one to keep and why (different Plex editions, like Theatrical and Director's Cut, are never counted as duplicates, and neither are different films with the same title, like The Fly 1958 and 1986: if Plex mixed them up you get Split in Plex instead) | Plex |
 | Metadata gaps | "Episode 5" titles Sonarr knows the name of, wrong years, things not in Radarr/Sonarr | Plex + Radarr/Sonarr |
-| File health | Broken files, files much shorter than they should be, and **the wrong audio language** (an English film with only Russian audio, a dubbed season). Replace asks Radarr/Sonarr for a new copy and checks it when it arrives | Plex + Radarr/Sonarr |
-| Quality & space | Files far bigger than usual, old .ts/.avi files (Convert to MKV, no re-encoding), episodes much worse than their season, Find a smaller copy | Plex + Radarr/Sonarr |
+| File health | Broken files, files much shorter than they should be, and **the wrong audio language** (also checked within 10 minutes of each import) (an English film with only Russian audio, a dubbed season). Replace asks Radarr/Sonarr for a new copy and checks it when it arrives | Plex + Radarr/Sonarr |
+| Quality & space | Files far bigger than usual, old .ts/.avi files (Convert to MKV, no re-encoding), episodes much worse than their season, Find a smaller copy, and release groups whose files keep having to be replaced (Block it) | Plex + Radarr/Sonarr |
 | Subtitles | Subtitle files that are only adverts, names that no longer match the video, what Bazarr is still looking for | Bazarr |
 | Unwatched | What nobody has played in a year, biggest first (never deletes anything) | Tautulli |
 | Virus scan | Programs pretending to be films (film.mkv.exe), and ClamAV on every new file | ClamAV (optional) |
 | Coming Soon | Agregarr placeholders playing a generic clip instead of the real trailer | Agregarr (optional) |
 | App Health | Each app's own warnings (Radarr/Sonarr/Prowlarr health, Bazarr, Tdarr nodes), apps that stop answering, updates (with Update now, or the Docker commands to copy), and indexers that keep failing and never find anything | Radarr/Sonarr (Prowlarr optional) |
-| Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), torrents stuck at 0% (Remove & try another) | Radarr/Sonarr |
+| Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), downloads that are stuck, with the reason from your download client (no seeds, tracker error, slow, usenet failure) and Re-announce / Remove & try another | Radarr/Sonarr (qBittorrent, Transmission, SABnzbd, NZBGet optional) |
 | Disk space | Free space now and, after a week of daily readings, how fast it fills and roughly when it's full | — |
 
 Tdarr (Convert with Tdarr) and Sportarr (sports libraries) are optional too. For the nightly summary you can add any of Gotify, Discord, Telegram, ntfy, a webhook or email in Settings → Notifications.
@@ -47,20 +49,26 @@ Tdarr (Convert with Tdarr) and Sportarr (sports libraries) are optional too. For
 
 After that it scans by itself every night at 3am.
 
+### Unraid
+
+Until it's in Community Applications: **Docker → Add Container → Template repositories**, add `https://github.com/spikey1965/library-doctor`, then pick **library-doctor** from the template list (or paste the template URL `https://raw.githubusercontent.com/spikey1965/library-doctor/main/extras/unraid/library-doctor.xml`). Set **Media** to the share that holds your films and shows (e.g. `/mnt/user/data/media`); PUID 99 / PGID 100 are Unraid's defaults.
+
 ### Mount your media as one folder
 
 Library Doctor needs to see your films and shows inside **one** mount (for example `/mnt/media` with `movies/` and `tv/` inside it), mounted read-write. Clean-up moves files with a rename, which only works within one disk or dataset. If your films and shows are on different disks, mount their common parent folder.
 
 ### Folder mapping
 
-Your apps may see the same files at different paths (Plex might say `/data/movies`, Radarr `/movies`, Library Doctor `/media/movies`). On each app's card in Settings, press **Detect folders**: Library Doctor looks at a few real files from that app, finds them under its own `/media`, and fills in the mapping. You can also add one by hand.
+Your apps may see the same files at different paths (Plex might say `/data/movies`, Radarr `/movies`, Library Doctor `/media/movies`). **Settings → Folder check** does this for every app at once: it asks each app for a few real files, applies that app's mapping and looks for them under `/media`, with ✓ or ✗ per app and a **Use suggested mapping** button when something's off. It runs by itself when you open Settings and after every save. You can also press **Detect folders** on one app's card, or add a mapping by hand.
+
+Before every scan Library Doctor checks again: if it can't find Plex's or Radarr/Sonarr's files at all, the scan stops with a message instead of reporting your whole library as missing.
 
 ## Roadmap
 
 No dates, just the order things are likely to happen. Ideas and offers to test are welcome in [Issues](https://github.com/spikey1965/library-doctor/issues).
 
-- **Planned:** qBittorrent, Transmission and SABnzbd in Settings, so a stuck download says why (no seeds, tracker error, slow) with a re-announce button, plus SABnzbd failed downloads.
-- **Being considered:** edition labels on duplicate cards; Jellyfin and Emby support; music libraries; a Home Assistant card.
+- **Planned:** Jellyfin and Emby support (being tested first).
+- **Being considered:** Jellyfin and Emby support; music libraries; a Home Assistant card.
 
 ## Known limitations
 
@@ -69,6 +77,8 @@ This is a beta, so a few things are worth knowing before you start:
 - **One media mount.** Clean-up, Replace and Convert to MKV move files into `.library-doctor-trash` with a rename, which only works within one disk or dataset. If your films and shows are on different disks, scans still work but those fixes can't move files; Library Doctor shows a warning on its main screen when it spots this.
 - **Plex only.** Jellyfin and Emby aren't supported yet.
 - **Tested on TrueNAS so far.** Unraid, Synology, Raspberry Pi (ARM) and Docker Desktop haven't been tried by anyone yet. If you run one of those, an issue saying how it went (good or bad) really helps.
+- **Hardlinks.** A file that's also hardlinked elsewhere (typically a torrent that's still seeding) frees no space when it's moved. Library Doctor marks these as Hardlinked, never offers two links to the same file as duplicates, and doesn't count them in the space totals. Replacements made by Radarr itself (Find a smaller copy) can't be checked this way yet.
+- **Sleeping disks.** The scan never reads your video files; it only checks they exist and their size (and reads small subtitle files). On a NAS whose disks spin down, that can still wake them, so pick fewer days under Settings → Automatic scan (once a week is fine).
 - **Radarr/Sonarr v3 API.** It talks to the current Radarr and Sonarr (including Sonarr 5). Very old versions may not work.
 - **English and the author's library.** The checks were tuned on one real library of about 7,500 films and episodes. If a check flags something that's actually fine, press Ignore and please open an issue.
 
@@ -82,7 +92,7 @@ Library Doctor has its own login. If Authentik, Authelia or your proxy already p
 |---|---|---|
 | `TZ` | UTC | Time zone for the nightly scan |
 | `LD_SCAN_HOUR` | `3` | Hour of the automatic scan until you set a time and days in Settings → Automatic scan (an out-of-range value like `99` turns it off) |
-| `LD_TRASH_DAYS` | `7` | Days before the trash empties itself |
+| `LD_TRASH_DAYS` | `7` | Days before the trash empties itself, until you pick 3, 7, 14 or 30 in Settings → Trash |
 | `LD_KEEP_DAYS` | `182` | How long "Keep" hides an unwatched item |
 | `LD_AUTH` | `on` | `off` = no built-in login (only behind another login) |
 | `LD_PORT` | `8790` | Port inside the container |

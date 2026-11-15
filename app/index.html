@@ -92,6 +92,8 @@ button:focus-visible, a.btn:focus-visible, .check:focus-visible, select:focus-vi
 .dsk { margin:0 0 6px; font-size:14px; } .dsk b { font:700 18px var(--head); color:var(--teal); }
 .dbar { height:10px; border-radius:6px; background:var(--card); overflow:hidden; margin:0 0 8px; } .dbar i { display:block; height:100%; background:var(--teal); border-radius:6px; }
 .dbar.hi i { background:var(--orange); } .warnc { color:var(--orange); }
+.fct td { vertical-align:top; padding:6px 8px; } .fct code { font-size:11px; word-break:break-all; } .fc-ok b { color:var(--teal); } .fc-bad b, .fc-partial b { color:var(--orange); } .fc-error b { color:var(--mut); }
+.impact { margin:0; font-size:12px; color:var(--mut); } .impact b { color:var(--fg); }
 .confirm.howp { background:var(--card); border:1px solid var(--line2); } .howp .det code { display:inline; word-break:normal; } .cmd { margin:0; font:12px/1.5 ui-monospace,Menlo,monospace; background:var(--bg); color:var(--fg); border-radius:8px; padding:8px 10px; white-space:pre-wrap; word-break:break-all; }
 .confirm ul { margin:0; padding-left:18px; } .confirm code { font:12px ui-monospace,Menlo,monospace; word-break:break-all; color:var(--fg); }
 .b-orange { background:var(--orange); color:var(--bg); }
@@ -272,6 +274,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
         </div>
         <div class="splitw" id="splitWarn" role="note" hidden></div>
         <div class="splitw expw" id="expWarn" role="status" hidden></div>
+        <div class="splitw expw" id="fcWarn" role="status" hidden></div>
         <div class="checks" id="checks" role="group" aria-label="Checks"></div>
       </div>
       <div class="panel">
@@ -408,6 +411,16 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
 
   /* v0.1.3 History panel: three small single-series charts (teal marks, recessive grid, hover tooltips). */
   const HIST = { days: 30, cache: {}, scanId: null };
+  /* v0.1.7: one line on what a bulk action will do: files and GB to the trash (hardlinked copies free nothing),
+     downloads it starts, and the free space before and after the trash empties */
+  function impactLine(files, searches) {
+    const real = files.filter(f => (f.links || 1) <= 1), gb = real.reduce((a, f) => a + (+f.size || 0), 0), hl = files.length - real.length;
+    const sp = S && S.space, parts = [`${files.length} file${files.length === 1 ? "" : "s"} to the trash`];
+    if (searches) parts.push(`${searches} new download search${searches === 1 ? "" : "es"}`);
+    let disk = "";
+    if (sp && sp.total) disk = ` Free space: ${human(sp.free)} now, about ${human(sp.free + gb)} once the trash empties in ${S.trash_days} days.`;
+    return `<p class="impact"><b>Impact:</b> ${parts.join(", ")}, freeing ${human(gb)}${hl ? ` (${hl} hardlinked file${hl === 1 ? "" : "s"} free nothing while seeding)` : ""}.${disk}</p>`;
+  }
   /* v0.1.6 Disk space: free space now, and once a week of daily readings exists, how fast it fills and roughly when it's full */
   function spanTxt(days) {
     if (days < 14) return days + " day" + (days === 1 ? "" : "s");
@@ -525,6 +538,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       if (f.includes("smaller")) parts.push("Find a smaller copy (the old one waits in the recycle bin)");
       if (f.includes("tdarr")) parts.push(d.kind === "tdarrfail" ? `Retry ${d.count || 1} file${(d.count || 1) === 1 ? "" : "s"} in Tdarr` : d.kind === "tdarrmissed" ? `Send ${d.count} files to Tdarr` : "Convert with Tdarr (shrinks it in place)");
       if (f.includes("remux")) parts.push("Convert to MKV (same video, old file to the trash)");
+      if (f.includes("blockgroup")) parts.push(`Tell Radarr and Sonarr to skip releases from ${d.group}`);
       if (f.includes("search")) parts.push(d.eps ? `Search for better copies of ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}` : "Search for a better copy");
       if (f.includes("monitor")) parts.push("Monitor in " + arr.replace(/^Open in /, ""));
       what = parts.join(" · ") || "Nothing automatic: shown for information"; kind = f.includes("tdarr") || f.includes("remux") ? "convert" : f.includes("search") || f.includes("smaller") ? "download" : "look";
@@ -588,6 +602,9 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     $("splitWarn").hidden = !sp.length;
     // v0.1.5: files that will be deleted for good in the next 24 hours (Library Doctor's trash + Radarr/Sonarr/qbit_manage bins)
     const soon = (S.trash || []).filter(t => t.empties && new Date(t.empties).getTime() - Date.now() < 864e5), soonSz = soon.reduce((a, t) => a + (t.size || 0), 0);
+    const ls = (S.scans || [])[0], fcBad = ls && ((!ls.ok && /Folder check/.test(ls.note || "")) || /^Suspect/.test(ls.note || ""));
+    $("fcWarn").hidden = !fcBad;
+    if (fcBad) { $("fcWarn").innerHTML = `<b>${ls.ok ? "The last scan looked wrong." : "The last scan stopped."}</b> ${esc(ls.note)} <button class="b-line sm" id="fcGo">Open Folder check</button>`; $("fcGo").onclick = () => setView("settings"); }
     $("expWarn").hidden = !soon.length;
     if (soon.length) { $("expWarn").innerHTML = `<b>${human(soonSz)} will be permanently deleted tomorrow</b> (${soon.length} item${soon.length === 1 ? "" : "s"} in the trash and recycle bins). <button class="b-line sm" id="expGo">Review now</button>`;
       $("expGo").onclick = () => { $("binSort").value = "expires"; setView("trash"); }; }
@@ -634,7 +651,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
   }
   function card(i, inReview) {
     const d = i.detail, vs = eff(i), rm = removable(i), lo = overrides[i.id] == null ? (d.leftovers || []) : [];
-    const vers = d.versions ? '<ul class="vers">' + vs.map((v, j) => `<li class="${esc(v.action)}"><span class="badge ${esc(v.action)}">${LBL[v.action] || ""}</span><b>${esc(v.desc)}</b><span class="why">${esc(v.reason)}</span><code>${esc(v.path)}</code>${
+    const vers = d.versions ? '<ul class="vers">' + vs.map((v, j) => `<li class="${esc(v.action)}"><span class="badge ${esc(v.action)}">${LBL[v.action] || ""}</span>${v.edition ? `<span class="badge plex" title="Edition">${esc(v.edition)}</span>` : ""}${(v.links || 1) > 1 ? '<span class="badge plex" title="Another link to the same data exists (usually a torrent that is still seeding), so removing this copy frees no space until that is removed too.">Hardlinked</span>' : ""}<b>${esc(v.desc)}</b><span class="why">${esc(v.reason)}</span><code>${esc(v.path)}</code>${
         !i.ignored && v.action !== "keep" && v.action !== "plex" ? `<div class="acts" style="margin-top:6px"><button class="b-line sm" data-keep="${esc(i.id)}|${j}">Keep this one instead</button></div>` : ""}</li>`).join("") + "</ul>" : "";
     const path = d.path ? `<code>${esc(d.path)}</code>` : "";
     const links = i.links.map(l => `<a class="btn b-line" href="${esc(l.url)}" target="_blank" rel="noopener"${l.label.startsWith("Add in ") ? " data-added=\"1\"" : ""}>${esc(l.label)}</a>`).join("");
@@ -653,13 +670,13 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const size = human(rm.reduce((a, v) => a + (v.size || 0), 0));
     let act = "";
     if (i.chk === "quality" && !i.ignored) {
-      const QF = { tdarr: d.kind === "tdarrmissed" ? `Send all ${d.count} to Tdarr` : d.kind === "tdarrfail" ? (d.count === 1 ? "Retry in Tdarr" : `Retry all ${d.count} in Tdarr`) : "Convert with Tdarr", remux: "Convert to MKV", search: d.kind === "odd" ? "Search for better copies" : "Search for a better copy", monitor: "Monitor" };
+      const QF = { tdarr: d.kind === "tdarrmissed" ? `Send all ${d.count} to Tdarr` : d.kind === "tdarrfail" ? (d.count === 1 ? "Retry in Tdarr" : `Retry all ${d.count} in Tdarr`) : "Convert with Tdarr", remux: "Convert to MKV", search: d.kind === "odd" ? "Search for better copies" : "Search for a better copy", monitor: "Monitor", blockgroup: "Block it in Radarr and Sonarr" };
       act = (d.fixes || []).map(h => h === "smaller" ? (small && small.id === i.id ? "" : `<button class="b-teal" data-small="${esc(i.id)}">Find a smaller copy</button>`)
             : h === "monitor" ? `<button class="b-line" data-qfix="${esc(i.id)}|monitor" title="${esc(monTip(d))}">Monitor</button>`
             : `<button class="b-teal" data-qfix="${esc(i.id)}|${h}">${QF[h]}</button>`).join("") + (d.monitored ? `<span class="chip-done" title="${esc(d.ref && d.ref.kind === "movie" ? "Radarr" : "Sonarr")} upgrades ${d.ref && d.ref.kind === "movie" ? "it" : "these"} by itself when a better copy turns up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Monitored in ${esc((d.ref && d.ref.arr) || "Sonarr")}</span>` : "");
     } else if (i.chk === "queue" && !i.ignored) {
-      const QQ = { import: d.count === 1 ? "Import" : `Import all ${d.count}`, retry: "Remove & try another", remove: "Move to trash" };
-      act = (d.fixes || []).map(h => `<button class="${h === "remove" ? "b-orange" : "b-teal"}" data-queuefix="${esc(i.id)}|${h}">${QQ[h]}</button>`).join("");
+      const QQ = { import: d.count === 1 ? "Import" : `Import all ${d.count}`, retry: "Remove & try another", remove: "Move to trash", reannounce: "Re-announce" };
+      act = (d.fixes || []).map(h => `<button class="${h === "remove" ? "b-orange" : h === "retry" && (d.fixes || []).includes("reannounce") ? "b-line" : "b-teal"}" data-queuefix="${esc(i.id)}|${h}">${QQ[h]}</button>`).join("");
     } else if (i.chk === "coming" && !i.ignored) {
       const CF = { refresh: "Refresh in Plex", remove: "Remove placeholder", ytdlp: "Update yt-dlp" };
       act = (d.fixes || []).map(h => h === "trailer" ? (pick && pick.id === i.id ? "" : `<button class="b-teal" data-tpick="${esc(i.id)}">Pick trailer</button>`)
@@ -705,8 +722,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     } else if (inReview) act = `<button class="b-line" id="rvSkip">Next</button>`;
     const block = act.startsWith("<div") ? act : "", inline = act.startsWith("<div") ? "" : act;
     return `<div class="item ${i.ignored ? "ign" : i.sev === "bad" ? "bad" : ""}"><h3>${esc(i.title)} <span class="pill lib">${esc(i.library)}</span>${conf}${i.ignored ? (i.snoozed ? `<span class="pill lib" title="Searched, nothing better yet. Searched again by itself on this date.">Snoozed till ${esc(new Date(i.snoozed).toLocaleDateString(undefined, { day: "numeric", month: "short" }))}</span>` : '<span class="pill lib">Ignored</span>') : ""}</h3>
-      <p class="det">${esc(d.text)}${d.note ? " " + esc(d.note) : ""}${path}</p>${pick && pick.id === i.id ? pickHtml() : ""}${small && small.id === i.id ? smallHtml() : ""}${i.chk === "quality" && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td>${esc(e.res)}</td></tr>`).join("")}</table></div></details>` : ""}${i.chk === "unwatched" ? uwHtml(i) : ""}${d.kind === "tdarrmissed" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.name)}">${esc(x.name.split("/").length === 2 ? x.name.split("/")[0] : x.name.split("/").pop())}</td><td class="n">${esc(x.codec.toUpperCase())}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div>${d.count > d.items.length ? `<p class="det">…and ${d.count - d.items.length} smaller.</p>` : ""}</details>` : ""}${i.chk === "queue" && d.items && d.items.length ? `<details class="eps"><summary>Show the ${d.count === 1 ? "download" : d.count + " downloads"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.title)}">${esc(x.ep ? x.ep + " · " : "")}${esc(x.title)}</td><td>${esc((x.protocol || "") + (x.client ? " · " + x.client : ""))}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "lang" && d.files && d.files.length > 1 ? `<details class="eps"><summary>Show the ${d.files.length} episodes</summary><div class="uww"><table class="uw">${d.files.map(x => `<tr><td>${esc(x.se || "")}</td><td title="${esc(x.path)}">${esc(base(x.path))}</td><td class="n">${esc(x.audio || "")}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "tdarrfail" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.path)}">${esc(x.name.split("/").pop())}</td><td>${esc(x.why)}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${eps}${seas}${wanted}${dbl ? `<p class="det">The fix moves the file out for a moment so Plex drops both entries, then puts it straight back so Plex adds it once. The file never leaves the disk. It takes 1–3 minutes; the result shows under Done.</p>` : vers}${loLine}${block}
-      <div class="acts">${i.chk === "quality" ? links + inline : inline}${reset}${plexBtn}${i.chk === "quality" ? "" : links}${inReview ? "" : `<button class="b-line" data-${i.ignored ? "un" : ""}ign="${esc(i.id)}" data-t="${esc(i.title)}">${i.ignored ? "Stop ignoring" : "Ignore"}</button>`}</div></div>`;
+      <p class="det">${esc(d.text)}${d.note ? " " + esc(d.note) : ""}${(d.links || 1) > 1 ? " <b>Hardlinked:</b> this file has another link (usually a torrent still seeding), so moving it frees no space until that is removed too." : ""}${path}</p>${pick && pick.id === i.id ? pickHtml() : ""}${small && small.id === i.id ? smallHtml() : ""}${i.chk === "quality" && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td>${esc(e.res)}</td></tr>`).join("")}</table></div></details>` : ""}${i.chk === "unwatched" ? uwHtml(i) : ""}${d.kind === "tdarrmissed" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.name)}">${esc(x.name.split("/").length === 2 ? x.name.split("/")[0] : x.name.split("/").pop())}</td><td class="n">${esc(x.codec.toUpperCase())}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div>${d.count > d.items.length ? `<p class="det">…and ${d.count - d.items.length} smaller.</p>` : ""}</details>` : ""}${i.chk === "queue" && d.items && d.items.length ? `<details class="eps"><summary>Show the ${d.count === 1 ? "download" : d.count + " downloads"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.title)}">${esc(x.ep ? x.ep + " · " : "")}${esc(x.title)}</td><td>${esc((x.protocol || "") + (x.client ? " · " + x.client : ""))}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "lang" && d.files && d.files.length > 1 ? `<details class="eps"><summary>Show the ${d.files.length} episodes</summary><div class="uww"><table class="uw">${d.files.map(x => `<tr><td>${esc(x.se || "")}</td><td title="${esc(x.path)}">${esc(base(x.path))}</td><td class="n">${esc(x.audio || "")}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "tdarrfail" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.path)}">${esc(x.name.split("/").pop())}</td><td>${esc(x.why)}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${eps}${seas}${wanted}${dbl ? `<p class="det">The fix moves the file out for a moment so Plex drops both entries, then puts it straight back so Plex adds it once. The file never leaves the disk. It takes 1–3 minutes; the result shows under Done.</p>` : vers}${loLine}${block}
+      <div class="acts">${i.chk === "quality" ? links + inline : inline}${reset}${plexBtn}${i.chk === "quality" ? "" : links}${inReview ? "" : `<button class="b-line" data-${i.ignored ? "un" : ""}ign="${esc(i.id)}" data-t="${esc(i.title)}"${i.chk === "dupes" && !i.ignored ? ' title="You want these copies (e.g. a 4K and a 1080p for phones). Hides this card for good; Show ignored brings it back."' : ""}>${i.ignored ? "Stop ignoring" : i.chk === "dupes" ? ((d.versions || []).length > 2 ? "Keep them all" : "Keep both") : "Ignore"}</button>`}</div></div>`;
   }
   const monTip = d => d.unmon && d.unmon.movie ? "Radarr isn't monitoring this film, so it never upgrades it by itself. Monitor turns that on."
     : `${d.unmon && d.unmon.eps ? d.unmon.eps.length + " of these episodes aren't" : "These episodes are"} monitored${d.unmon && d.unmon.series ? " (nor is the series)" : ""}, so Sonarr never upgrades them by itself. Monitor turns it on for just these episodes, not whole seasons.`;
@@ -787,6 +804,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       if (confirmAll) {
         const set = confirmAll === "sure" ? sure : open, files = set.flatMap(removable);
         top += `<div class="confirm"><b>Move ${files.length} copies (${sz(set)}) from ${set.length} ${confirmAll === "sure" ? "sure " : ""}items to the trash?</b>Each item keeps the copy marked Keep. You can put any of them back for ${S.trash_days} days.
+          ${impactLine(files, 0)}
           <div class="acts"><button class="b-orange" id="allYes">Move ${files.length} copies to the trash</button><button class="b-line" id="allNo">Cancel</button></div></div>`;
       } else {
         top += `<div class="acts"><button class="b-teal" id="rvGo">Review one by one (${open.length})</button>` +
@@ -797,6 +815,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     if (filter === "health") {
       const ok = rows.filter(i => !i.ignored && (i.detail.fixes || []).length), sure = ok.filter(i => i.detail.confidence === "sure");
       if (confirmAll === "health") top += `<div class="confirm"><b>Replace ${sure.length} broken file${sure.length === 1 ? "" : "s"}?</b>They move to the trash (you can put them back for ${S.trash_days} days) and Radarr/Sonarr search for good copies, which download in the night window. The ones marked Check are left for you to look at.
+          ${impactLine(sure.flatMap(i => i.detail.files || [{ size: i.detail.size, links: i.detail.links }]), sure.length)}
           <div class="acts"><button class="b-orange" id="hAllYes">Replace ${sure.length}</button><button class="b-line" id="allNo">Cancel</button></div></div>`;
       else if (sure.length > 1) top += `<div class="acts"><button class="b-teal" id="hAllGo">Replace the ${sure.length} sure ones</button></div>`;
     }
@@ -916,13 +935,13 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       else { small.busy = null; small.err = r.error; }
       load(); });
     on("smClose", () => { small = null; list(); });
-    L.querySelectorAll("[data-queuefix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.queuefix.split("|"); b.disabled = true; b.textContent = how === "import" ? "Importing…" : how === "retry" ? "Removing…" : "Moving…";
+    L.querySelectorAll("[data-queuefix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.queuefix.split("|"); b.disabled = true; b.textContent = how === "import" ? "Importing…" : how === "retry" ? "Removing…" : how === "reannounce" ? "Re-announcing…" : "Moving…";
       const r = await api("/api/queuefix", { ids: [id], how });
-      flash = { err: !r.ok, text: r.ok ? (how === "import" ? "Imported. The result shows under Done below." : how === "retry" ? "Removed and blocklisted; searching for another copy. It downloads in the night window." : "Moved to the trash (Put back works for 7 days).") + (r.errors && r.errors.length ? " Not done: " + r.errors.join(" ") : "") : (r.errors || []).join(" ") || "That didn't work." };
+      flash = { err: !r.ok, text: r.ok ? (how === "reannounce" ? "Asked every tracker for people sharing it again. Give it an hour; if it's still stuck, try Remove & try another." : how === "import" ? "Imported. The result shows under Done below." : how === "retry" ? "Removed and blocklisted; searching for another copy. It downloads in the night window." : "Moved to the trash (Put back works for 7 days).") + (r.errors && r.errors.length ? " Not done: " + r.errors.join(" ") : "") : (r.errors || []).join(" ") || "That didn't work." };
       load(); setTimeout(load, 15000); });
-    L.querySelectorAll("[data-qfix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.qfix.split("|"); b.disabled = true; b.textContent = how === "remux" ? "Converting…" : how === "tdarr" ? "Sending…" : how === "monitor" ? "Monitoring…" : "Asking…";
+    L.querySelectorAll("[data-qfix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.qfix.split("|"); b.disabled = true; b.textContent = how === "remux" ? "Converting…" : how === "tdarr" ? "Sending…" : how === "monitor" ? "Monitoring…" : how === "blockgroup" ? "Blocking…" : "Asking…";
       const r = await api("/api/qualityfix", { ids: [id], how });
-      flash = { err: !r.ok, text: r.ok ? (how === "remux" ? "Converting. It takes under a minute; the result shows under Done below." : how === "tdarr" ? "Sent to Tdarr. It converts in its own queue; progress shows under Done below, checked every hour." : how === "monitor" ? "Monitored. Sonarr/Radarr now upgrades it by itself when a better copy turns up." : "Asked for better copies. It shows under Done below.") : r.errors.join(" ") };
+      flash = { err: !r.ok, text: r.ok ? (how === "remux" ? "Converting. It takes under a minute; the result shows under Done below." : how === "tdarr" ? "Sent to Tdarr. It converts in its own queue; progress shows under Done below, checked every hour." : how === "monitor" ? "Monitored. Sonarr/Radarr now upgrades it by itself when a better copy turns up." : how === "blockgroup" ? "Blocked: Radarr and Sonarr skip that group's releases from now on (Settings → Profiles → Release Profiles to undo)." : "Asked for better copies. It shows under Done below.") : r.errors.join(" ") };
       load(); setTimeout(load, 15000); setTimeout(load, 60000); });
     const uw = async (b, path, body, text) => { b.disabled = true; await api(path, Object.assign({ title: b.dataset.t, uw: 1 }, body)); flash = { text: text }; load(); };
     L.querySelectorAll("[data-keepu]").forEach(b => b.onclick = () => uw(b, "/api/ignore", { id: b.dataset.keepu, days: (S && S.keep_days) || 182 }, b.dataset.t + " is kept for " + keepTxt() + ". It's under Kept at the bottom of this card if you change your mind."));
@@ -1046,6 +1065,10 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     bazarr: { t: "Bazarr", list: true, files: true, secret: ["key", "API key"], url: "http://192.168.1.10:6767", help: "For the Subtitles check. API key: Bazarr → Settings → General." },
     tautulli: { t: "Tautulli", secret: ["key", "API key"], url: "http://192.168.1.10:8181", help: "For the Unwatched check. API key: Tautulli → Settings → Web Interface." },
     tdarr: { t: "Tdarr", files: true, secret: ["key", "API key"], url: "http://192.168.1.10:8265", help: "For Convert with Tdarr. Leave the key empty if Tdarr has no login." },
+    qbit: { t: "qBittorrent", secret: ["password", "Password"], url: "http://192.168.1.10:8080", extra: [["username", "Username", "admin"]], help: "For Downloads: says why a torrent is stuck (no seeds, tracker error, slow), adds a Re-announce button, and finds old finished downloads nothing uses. The Web UI address, username and password." },
+    transmission: { t: "Transmission", secret: ["password", "Password (if set)"], url: "http://192.168.1.10:9091", extra: [["username", "Username (if set)", ""]], help: "For Downloads: says why a torrent is stuck (no seeds, tracker error, slow) and adds a Re-announce button. The Web UI address, e.g. http://192.168.1.10:9091." },
+    nzbget: { t: "NZBGet", secret: ["password", "Control password"], url: "http://192.168.1.10:6789", extra: [["username", "Control username", "nzbget"]], help: "For Downloads: shows NZBGet's own status and why a usenet download failed. Username and password: NZBGet → Settings → Security (ControlUsername / ControlPassword)." },
+    sabnzbd: { t: "SABnzbd", secret: ["key", "API key"], url: "http://192.168.1.10:8080", help: "For Downloads: shows SABnzbd's own status and why a usenet download failed. API key: SABnzbd → Config → General." },
     prowlarr: { t: "Prowlarr", secret: ["key", "API key"], url: "http://192.168.1.10:9696", help: "For App Health: shows Prowlarr's own warnings (failing indexers, proxies). API key: Prowlarr → Settings → General." },
     sportarr: { t: "Sportarr", files: true, secret: ["key", "API key"], url: "http://192.168.1.10:1867", help: "For sports libraries managed by Sportarr." },
     gotify: { t: "Gotify", secret: ["token", "App token"], url: "http://192.168.1.10:8070", help: "A phone message after the nightly scan, only when there's news. Make an app in Gotify and paste its token." },
@@ -1053,8 +1076,27 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     telegram: { t: "Telegram", notify: true, fixedUrl: "https://api.telegram.org", secret: ["token", "Bot token"], url: "", extra: [["chat", "Chat ID", "123456789"]], help: "Make a bot with @BotFather and paste its token. For the chat ID, send your bot a message, then open api.telegram.org/bot&lt;token&gt;/getUpdates and copy chat → id." },
     ntfy: { t: "ntfy", notify: true, secret: ["token", "Access token (optional)"], url: "https://ntfy.sh", urlLabel: "Server", extra: [["topic", "Topic", "library-doctor-something-hard-to-guess"]], help: "ntfy.sh or your own ntfy server. Subscribe to the same topic in the ntfy app." },
     webhook: { t: "Webhook", notify: true, secret: ["token", "Bearer token (optional)"], url: "https://example.com/hook", urlLabel: "Address", help: "Sends a JSON POST: {title, message, text, priority, source}. Works with Home Assistant, n8n, Node-RED, Apprise API and the like." },
+    pushover: { t: "Pushover", notify: true, fixedUrl: "https://api.pushover.net", secret: ["token", "App API token"], url: "", extra: [["user", "Your user key", "your 30-character user key"]], help: "pushover.net: your user key is on the dashboard; make an application (Create an Application/API Token) for the app token." },
     email: { t: "Email", notify: true, secret: ["token", "Password"], url: "smtp.example.com:587", urlLabel: "Mail server (host:port)", extra: [["user", "Username", "you@example.com"], ["from", "From", "library-doctor@example.com"], ["to", "Send to (comma-separated)", "you@example.com"]], tls: true, help: "Any SMTP server. For Gmail use smtp.gmail.com:587 with an app password." }
   };
+  /* v0.1.7 Folder check: does each app's view of the media line up with Library Doctor's? */
+  const FC = { rows: null, busy: false };
+  async function folderCheck(force) {
+    FC.busy = true; if (view === "settings") settingsDraw();
+    try { const r = await api("/api/foldercheck" + (force ? "?force=1" : "")); FC.rows = r.rows || []; } catch (e) { FC.rows = FC.rows || []; }
+    FC.busy = false; if (view === "settings") settingsDraw();
+  }
+  function fcHtml() {
+    if (!FC.rows && !FC.busy) { setTimeout(() => folderCheck(false), 0); }
+    const IC = { ok: "✓", partial: "!", bad: "✗", error: "?", empty: "–" };
+    const rows = (FC.rows || []).map((r, n) => `<tr class="fc-${esc(r.status)}"><td><b>${IC[r.status] || ""}</b> ${esc(r.app)}</td>
+      <td>${r.example && r.example.app ? `<code>${esc(r.example.app)}</code><br>→ <code>${esc(r.example.local)}</code>` : ""}</td>
+      <td>${esc(r.msg || "")}${Array.isArray(r.suggest) && r.status !== "ok" && !r.applied ? `<br><span class="note">${esc(r.suggest_msg || "")}</span><br><button class="b-teal sm" data-fcuse="${n}">${r.suggest.length ? "Use suggested mapping" : "Remove the mapping"}</button>` : r.suggest_msg && r.status !== "ok" ? `<br><span class="note">${esc(r.suggest_msg)}</span>` : ""}${r.applied ? `<br><span class="note">Filled in: press Save settings.</span>` : ""}</td></tr>`).join("");
+    const bad = (FC.rows || []).filter(r => r.status === "bad" || r.status === "partial").length;
+    return `<h2>Folder check</h2><div class="app"><p class="help">Each app may see your media under a different folder (Plex <code>/data/movies</code>, Radarr <code>/movies</code>, Library Doctor <code>${esc(SC._root || "/media")}</code>). This asks every app for a few real files and looks for them here. A scan stops instead of reporting everything as missing when Plex's or Radarr/Sonarr's files can't be found.</p>
+      ${FC.busy && !FC.rows ? `<p class="note">Checking…</p>` : FC.rows && FC.rows.length ? `<div class="uww"><table class="uw fct">${rows}</table></div><p class="note">${bad ? `<b>${bad} app${bad === 1 ? "" : "s"} need${bad === 1 ? "s" : ""} attention.</b>` : "Everything lines up."}</p>` : `<p class="note">Add your apps below first.</p>`}
+      <div class="acts"><button class="b-line sm" id="fcRun" ${FC.busy ? "disabled" : ""}>${FC.busy ? "Checking…" : "Check again"}</button></div></div>`;
+  }
   let AUTH = null, PWmsg = null;
   async function settingsOpen() { if (!SC) { const r = await api("/api/settings"); SC = r.settings; SC.arrs = SC.arrs || []; SC.bazarr = SC.bazarr || []; SC._conf = r.configured; SC._root = r.media_root; SC._langs = r.languages || []; }
     try { AUTH = await api("/api/auth"); } catch (e) {} settingsDraw(); }
@@ -1095,20 +1137,25 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const el = $("setView"); if (!SC) { el.innerHTML = "<p class='intro'>Loading…</p>"; return; }
     let h = `<h2>Settings</h2><p class="intro">Library Doctor only reads from these apps until you press a fix button. API keys stay on this server and are never shown again after saving.</p>`;
     if (S && (S.split_mounts || []).length) h += `<div class="splitw" role="note" style="margin-top:0"><b>Your media is on more than one disk.</b> ${S.split_mounts.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")} ${S.split_mounts.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. Scans will work, but clean-up can't move files from there. Mount the folder that holds all your media as one volume if you can (see Known limitations in the README).</div>`;
+    h += fcHtml();
     if (!SC._conf) h += `<div class="start"><b>Start here:</b> add Plex and at least one Radarr or Sonarr, press Test on each, then Save. The first scan runs when you press Scan now.</div>`;
     h += entryHtml("plex", SC.plex || (SC.plex = { url: "", public: "https://app.plex.tv" }), null);
     h += `<h2>Radarr and Sonarr</h2>` + SC.arrs.map((e, i) => entryHtml("arrs", e, i)).join("") + `<div class="acts"><button class="b-line" data-add="arrs:radarr">+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">+ Add Sonarr</button></div>`;
     h += `<h2>Optional <small>each one switches on its own checks</small></h2>`;
     h += SC.bazarr.map((e, i) => entryHtml("bazarr", e, i)).join("");
-    for (const k of ["tautulli", "tdarr", "sportarr", "prowlarr"]) if (SC[k]) h += entryHtml(k, SC[k], null);
-    const missing = ["bazarr", "tautulli", "tdarr", "sportarr", "prowlarr"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
+    for (const k of ["tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"]) if (SC[k]) h += entryHtml(k, SC[k], null);
+    const missing = ["bazarr", "tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
     if (missing.length) h += `<div class="acts">${missing.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}${SC.bazarr.length ? `<button class="b-line" data-add="bazarr">+ Another Bazarr</button>` : ""}</div>`;
     else if (SC.bazarr.length) h += `<div class="acts"><button class="b-line" data-add="bazarr">+ Another Bazarr</button></div>`;
-    const NK = ["gotify", "discord", "telegram", "ntfy", "webhook", "email"];
+    const NK = ["gotify", "discord", "telegram", "ntfy", "webhook", "pushover", "email"];
     h += `<h2>Notifications <small>the nightly summary goes to every one you add</small></h2>`;
     for (const k of NK) if (SC[k]) h += entryHtml(k, SC[k], null);
     const nmiss = NK.filter(k => !SC[k]);
     if (nmiss.length) h += `<div class="acts">${nmiss.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}</div>`;
+    const DG = SC.digest || "news";
+    h += `<div class="app"><p class="help">When to send a message.</p><div class="fl"><label>Messages<select id="dgSel"><option value="news" ${DG === "news" ? "selected" : ""}>After a scan, only when there's something new</option><option value="weekly" ${DG === "weekly" ? "selected" : ""}>Once a week (Sunday), plus anything urgent</option><option value="both" ${DG === "both" ? "selected" : ""}>Both</option></select></label></div></div>`;
+    const TD = SC.trash_days || 7;
+    h += `<h2>Trash</h2><div class="app"><p class="help">Clean-ups move files into a hidden trash folder on the same disk first, so you can put them back. After this many days they're deleted for good (you get a warning the day before).</p><div class="fl"><label>Keep files in the trash for<select id="tdSel">${[3, 7, 14, 30].map(n => `<option value="${n}" ${TD === n ? "selected" : ""}>${n} days</option>`).join("")}</select></label></div></div>`;
     const SCH = SC.schedule || (SC.schedule = { hour: 3, minute: 0, days: [0, 1, 2, 3, 4, 5, 6] });
     h += `<h2>Automatic scan</h2><div class="app"><p class="help">When the scan runs by itself. Pick a quiet time (it reads every file's details from Plex and your apps). Scan now still works any time.</p>
       <div class="fl"><label>Time (empty = no automatic scan)<input type="time" id="schTime" value="${SCH.hour < 0 ? "" : String(SCH.hour).padStart(2, "0") + ":" + String(SCH.minute).padStart(2, "0")}"></label></div>
@@ -1116,6 +1163,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const LG = (SC._langs || []);
     h += `<h2>Audio language</h2><div class="app"><p class="help">File Health flags a film or show that was made in this language but whose only audio is another one (usually a dubbed copy). Untagged audio and foreign-language originals are never flagged.</p>
       <div class="fl"><label>Your language<select id="langSel"><option value="" ${SC.language === "" ? "selected" : ""}>Off (don't check)</option>${LG.map(l => `<option ${SC.language === l ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>`;
+    h += `<h2>Backup</h2><div class="app"><p class="help">Download everything on this page as a file, to move Library Doctor to another server or keep a copy. It includes your API keys, so keep it somewhere safe. The password isn't in it.</p>
+      <div class="acts"><a class="b-line" href="/api/settings/export" download id="bkExport">Download settings</a><label class="b-line" style="cursor:pointer">Restore from a file<input type="file" id="bkImport" accept=".json,application/json" hidden></label></div>${SC._imp ? `<div class="tres2 ${SC._imp.ok ? "ok" : "bad"}">${esc(SC._imp.msg)}</div>` : ""}</div>`;
     h += pwHtml();
     h += `<div class="savebar"><button class="b-teal" id="setSave" ${SCbusy ? "disabled" : ""}>${SCbusy ? "Saving…" : "Save settings"}</button><button class="b-line" id="setUndo">Undo changes</button>${SCmsg ? `<div class="tres2 ${SCmsg.ok ? "ok" : "bad"}">${esc(SCmsg.msg)}</div>` : ""}</div>`;
     el.innerHTML = h; settingsWire();
@@ -1141,14 +1190,27 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       if (a !== b) { PWmsg = { ok: false, msg: "The new passwords don't match." }; return settingsDraw(); }
       const r = await api("/api/auth/change", { old: o, new: a }); PWmsg = { ok: r.ok, msg: r.ok ? "Password changed. Other browsers are logged out." : r.msg }; settingsDraw(); });
     const lg = $("langSel"); if (lg) lg.onchange = () => { SC.language = lg.value; };
+    const dg = $("dgSel"); if (dg) dg.onchange = () => { SC.digest = dg.value; };
+    const bi = $("bkImport"); if (bi) bi.onchange = async () => { const f = bi.files && bi.files[0]; if (!f) return;
+      let data = null; try { data = JSON.parse(await f.text()); } catch (e) { SC._imp = { ok: false, msg: "That file isn't valid JSON." }; settingsDraw(); return; }
+      const r = await api("/api/settings/import", { data });
+      if (r.ok) { SC = null; await settingsOpen(); SC._imp = { ok: true, msg: "Settings restored from the file. Library Doctor is using them now." }; settingsDraw(); load(); folderCheck(true); }
+      else { SC._imp = { ok: false, msg: r.msg || "Couldn't restore that file." }; settingsDraw(); } };
+    const td = $("tdSel"); if (td) td.onchange = () => { SC.trash_days = +td.value; };
+    on("fcRun", () => folderCheck(true));
+    el.querySelectorAll("[data-fcuse]").forEach(b => b.onclick = () => { const r = (FC.rows || [])[+b.dataset.fcuse]; if (!r) return;
+      const ent = r.i == null ? SC[r.kind] : (SC[r.kind] || [])[r.i]; if (!ent) return;
+      ent.paths = (r.suggest || []).map(x => ({ from: x.from, to: x.to })); r.applied = true;
+      SCmsg = { ok: true, msg: "Mapping filled in for " + r.app + ". Press Save settings to use it; the folder check runs again after saving." }; settingsDraw(); });
     const st = $("schTime"); if (st) st.onchange = () => { if (!st.value) { SC.schedule.hour = -1; SC.schedule.minute = 0; return; } const [hh, mm] = st.value.split(":").map(Number); if (!isNaN(hh)) { SC.schedule.hour = hh; SC.schedule.minute = mm || 0; } };
     el.querySelectorAll("[data-day]").forEach(n => n.onchange = () => { const d = +n.dataset.day, a = SC.schedule.days; if (n.checked) { if (!a.includes(d)) a.push(d); } else SC.schedule.days = a.filter(x => x !== d); SC.schedule.days.sort(); });
     on("setUndo", () => { SC = null; SCmsg = null; Object.keys(TR).forEach(x => delete TR[x]); settingsOpen(); });
     on("setSave", async () => { SCbusy = true; SCmsg = null; settingsDraw();
-      const body = {}; for (const k of ["plex", "tautulli", "tdarr", "sportarr", "prowlarr", "gotify", "discord", "telegram", "ntfy", "webhook", "email", "arrs", "bazarr", "schedule"]) if (SC[k]) body[k] = SC[k];
+      const body = {}; for (const k of ["plex", "tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify", "discord", "telegram", "ntfy", "webhook", "pushover", "email", "arrs", "bazarr", "schedule"]) if (SC[k]) body[k] = SC[k];
+      if (SC.trash_days) body.trash_days = SC.trash_days; if (SC.digest) body.digest = SC.digest;
       if (SC.language != null) body.language = SC.language;
       const r = await api("/api/settings/save", { settings: body }); SCbusy = false;
-      if (r.ok) { SCmsg = { ok: true, msg: r.configured ? "Saved. Library Doctor is using the new settings now." : "Saved. Add Plex and at least one Radarr or Sonarr to start scanning." }; const keep = SCmsg; SC = null; await settingsOpen(); SCmsg = keep; settingsDraw(); load(); }
+      if (r.ok) { SCmsg = { ok: true, msg: r.configured ? "Saved. Library Doctor is using the new settings now." : "Saved. Add Plex and at least one Radarr or Sonarr to start scanning." }; const keep = SCmsg; SC = null; await settingsOpen(); SCmsg = keep; settingsDraw(); load(); folderCheck(true); }
       else { SCmsg = { ok: false, msg: r.msg || r.error || "Couldn't save." }; settingsDraw(); } });
   }
   $("tabSet").onclick = () => setView("settings");

@@ -35,7 +35,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.6"
+APP_VERSION = "0.1.7"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -45,6 +45,7 @@ SCAN_HOUR = int(os.environ.get("LD_SCAN_HOUR", "3"))   # default; the Settings p
 MEDIA_ROOT = os.path.realpath(os.environ.get("LD_MEDIA_ROOT", "/media"))
 TRASH_DIR = os.path.join(MEDIA_ROOT, ".library-doctor-trash")
 TRASH_DAYS = int(os.environ.get("LD_TRASH_DAYS", "7"))
+TRASH_DAYS_ENV = TRASH_DAYS
 PAGE = 1000
 TINY = 50 * 1024 * 1024
 GOOD_CONTAINERS = (".mkv", ".mp4", ".m4v")                    # preferred when quality and length match
@@ -318,18 +319,51 @@ def plex_refresh_folder(section, folder):
 
 _EDITION_RE = re.compile(r"\{edition-([^}]+)\}", re.I)
 
+# v0.1.7: the same cut is written many ways ("Directors Cut", "Director's Cut", "DC"…) and many libraries don't use the
+# {edition-...} tag at all. Editions are normalised to one name, and plain file names are read too, but only the part
+# after the "(year)", so a film called "Extended Family" isn't taken for an Extended edition. "Remastered" isn't an
+# edition (same cut, better transfer), so remastered copies still count as duplicates of the original.
+_EDITION_WORDS = [
+    (re.compile(r"director'?s[ ._-]?cut|\bdc\b", re.I), "Director's Cut"), (re.compile(r"\bfinal[ ._-]?cut\b", re.I), "Final Cut"),
+    (re.compile(r"\bextended(?:[ ._-]?(?:cut|edition|version))?\b", re.I), "Extended"), (re.compile(r"\btheatrical(?:[ ._-]?(?:cut|edition|version))?\b", re.I), "Theatrical"),
+    (re.compile(r"\bimax\b", re.I), "IMAX"), (re.compile(r"\b(?:unrated|uncut)\b", re.I), "Unrated"), (re.compile(r"\bspecial[ ._-]?edition\b", re.I), "Special Edition"),
+    (re.compile(r"\bopen[ ._-]?matte\b", re.I), "Open Matte"), (re.compile(r"\bassembly[ ._-]?cut\b", re.I), "Assembly Cut"),
+    (re.compile(r"\bultimate(?:[ ._-]?(?:cut|edition))?\b", re.I), "Ultimate"), (re.compile(r"\bredux\b", re.I), "Redux"),
+    (re.compile(r"\bcriterion\b", re.I), "Criterion"), (re.compile(r"\b(?:anniversary)(?:[ ._-]?edition)?\b", re.I), "Anniversary Edition")]
+_YEAR_SPLIT = re.compile(r"\((?:19|20)\d\d\)|[ ._](?:19|20)\d\d[ ._]")
+
+def edition_name(raw):
+    """'directors cut' / 'Director's Cut' / 'DC' -> "Director's Cut"; unknown names are kept, tidied."""
+    raw = (raw or "").strip()
+    if not raw: return ""
+    for rx, name in _EDITION_WORDS:
+        if rx.search(raw): return name
+    return raw[:1].upper() + raw[1:]
+
+def edition_from_name(path):
+    """Edition from a file or folder name: the {edition-...} tag, else known words after the (year)."""
+    x = _EDITION_RE.search(path or "")
+    if x: return edition_name(x.group(1))
+    base = os.path.basename(path or "")
+    parts = _YEAR_SPLIT.split(base, maxsplit=1)
+    if len(parts) < 2: return ""
+    tail = re.sub(r"\{[^}]*\}|\[[^\]]*\]", " ", parts[1])
+    for rx, name in _EDITION_WORDS:
+        if rx.search(tail): return name
+    return ""
+
 def edition_of(m=None, md=None):
     """v0.1.3: Plex edition of an item or one of its copies ("Director's Cut"), from Plex's editionTitle or an
-    {edition-...} tag in the file/folder name. Different editions of a film are not duplicates."""
+    {edition-...} tag in the file/folder name. Different editions of a film are not duplicates. v0.1.7: normalised
+    names, and editions in plain file names too (see edition_from_name). Returns a lowercase key."""
     if md is not None:
-        f = ((md.get("Part") or [{}])[0].get("file") or "")
-        x = _EDITION_RE.search(f)
-        if x: return x.group(1).strip().lower()
-    if m is not None and m.get("editionTitle"): return str(m["editionTitle"]).strip().lower()
+        e = edition_from_name((md.get("Part") or [{}])[0].get("file") or "")
+        if e: return e.lower()
+    if m is not None and m.get("editionTitle"): return edition_name(str(m["editionTitle"])).lower()
     if m is not None:
         for md2 in m.get("Media", []):
-            x = _EDITION_RE.search((md2.get("Part") or [{}])[0].get("file") or "")
-            if x: return x.group(1).strip().lower()
+            e = edition_from_name((md2.get("Part") or [{}])[0].get("file") or "")
+            if e: return e.lower()
     return ""
 
 def guids(m):
@@ -364,7 +398,16 @@ def version(md):
     p = (md.get("Part") or [{}])[0]
     return {"desc": media_desc(md), "path": p.get("file", ""), "size": sum(x.get("size", 0) or 0 for x in md.get("Part", [])),
             "duration": md.get("duration") or 0, "height": int(md.get("height") or 0), "bitrate": md.get("bitrate") or 0,
-            "parts": [x.get("file", "") for x in md.get("Part", []) if x.get("file")]}
+            "parts": [x.get("file", "") for x in md.get("Part", []) if x.get("file")], "edition": edition_from_name(p.get("file", "")), **_link_info(p.get("file", ""))}
+
+def _link_info(path):
+    """v0.1.7: hardlinks. A file with more than one link (e.g. the same data also in a torrent's folder, still seeding)
+    frees no space when Library Doctor moves this copy, and two "copies" with the same inode are one file."""
+    try:
+        st = os.stat(path)
+        return {"links": st.st_nlink, "ino": "%d:%d" % (st.st_dev, st.st_ino)}
+    except OSError:
+        return {"links": 1, "ino": ""}
 
 # v0.1.6: same title, different film. "The Fly (1958)" and "The Fly (1986)" have different TMDB ids, so Library Doctor never
 # groups them. But when Plex MISMATCHES a file (puts the 1958 file under the 1986 entry) the two look like "2 copies" of one
@@ -459,15 +502,20 @@ def recommend(vers, tracked=()):
         cands = [max([v for v in vers if v["action"] != "plex"] or vers, key=lambda v: v["size"])]
         cands[0]["action"] = "candidate"
     def good_box(v): return 1 if os.path.splitext(v["path"])[1].lower() in GOOD_CONTAINERS else 0
+    # v0.1.7: when Radarr/Sonarr have custom formats (TRaSH guides etc.), their score for each copy decides first, so a
+    # bloated 4K file never beats the 1080p remux your own rules prefer
+    use_cf = len({v.get("cf") for v in cands if v.get("cf") is not None}) > 1
     def key(v):
         dur = round(v["duration"] / max(1, longest) * 50)   # 2% buckets: near-equal lengths count as equal
-        return (v["height"], dur, good_box(v), 1 if v["tracked"] else 0, v["bitrate"], v["size"])
+        return ((v.get("cf") or 0) if use_cf else 0, v["height"], dur, good_box(v), 1 if v["tracked"] else 0, v["bitrate"], v["size"])
     best = max(cands, key=key)
     for v in cands:
         if v is best:
             why = []
             if len(cands) > 1:
                 other = [o for o in cands if o is not best]
+                if use_cf and any((best.get("cf") or 0) > (o.get("cf") or 0) for o in other):
+                    why.append("highest %s custom format score (%d vs %d)" % (best.get("cf_app") or "Radarr/Sonarr", best.get("cf") or 0, max(o.get("cf") or 0 for o in other)))
                 if any(best["height"] > o["height"] for o in other): why.append("higher resolution")
                 if any(best["duration"] - o["duration"] > 60000 for o in other): why.append("longest (%s)" % mins(best["duration"]))
                 if good_box(best) and any(not good_box(o) for o in other): why.append("better file type (%s)" % os.path.splitext(best["path"])[1][1:].upper())
@@ -480,15 +528,52 @@ def recommend(vers, tracked=()):
             v["action"], v["reason"] = "keep", "Keep: " + ", ".join(why)
         else:
             v["sure"] = best["height"] > v["height"]   # a clearly lower resolution is a safe call; same-quality picks are "check"
-            if best["height"] > v["height"]: r = "Lower resolution than the one kept"
+            if best.get("ino") and v.get("ino") == best["ino"]:
+                v["action"], v["reason"], v["sure"] = "keep", "The same file as the one kept (a hardlink), so it takes no extra space", False
+                continue
+            if use_cf and (v.get("cf") or 0) < (best.get("cf") or 0):
+                r = "Lower %s custom format score (%d vs %d)" % (best.get("cf_app") or "Radarr/Sonarr", v.get("cf") or 0, best.get("cf") or 0)
+                if v["height"] > best["height"]: v["sure"] = False; r += ", although it's a higher resolution"
+            elif best["height"] > v["height"]: r = "Lower resolution than the one kept"
             elif best["duration"] - v["duration"] > 60000: r = "%s shorter than the one kept" % mins(best["duration"] - v["duration"])
             elif good_box(best) and not good_box(v): r = "Same quality, but a .%s file (the %s is kept%s)" % (
                 os.path.splitext(v["path"])[1][1:].lower(), os.path.splitext(best["path"])[1][1:].upper(),
                 "; Sonarr/Radarr will switch to it on the rescan" if v["tracked"] else "")
             elif best["tracked"] and not v["tracked"]: r = "Same quality; not the file Radarr/Sonarr/Sportarr tracks"
             else: r = "Same quality as the one kept"
+            if (v.get("links") or 1) > 1: r += ". It's hardlinked (probably still seeding), so removing it frees no space until the torrent is removed"
             v["action"], v["reason"] = "remove", r
+    for v in vers:                                     # a link to the very same data as the kept copy is never a copy to remove
+        if v is not best and v.get("action") == "remove" and best.get("ino") and v.get("ino") == best["ino"]:
+            v["action"], v["reason"], v["sure"] = "keep", "The same file as the one kept (a hardlink), so it takes no extra space", False
     return vers
+
+_CF_HAS = {}
+def cf_scores(vers, refs):
+    """v0.1.7: ask Radarr/Sonarr to score each copy's file name with its own custom formats (/parse). Only when that app
+    has custom formats at all; otherwise nothing changes."""
+    ref = next((r for r in refs or [] if arr_by_name(r.get("arr"))), None)
+    if not ref: return
+    a = arr_by_name(ref["arr"])
+    c = _CF_HAS.get(a["name"])
+    if not c or time.time() - c[0] > 3600:
+        try: c = (time.time(), len(arr(a, "/customformat")) > 0)
+        except Exception: c = (time.time(), False)
+        _CF_HAS[a["name"]] = c
+    if not c[1]: return
+    for v in vers:
+        try:
+            r = arr(a, "/parse?" + urllib.parse.urlencode({"title": os.path.splitext(os.path.basename(v["path"]))[0]}))
+            if r.get("customFormatScore") is not None:
+                v["cf"], v["cf_app"] = int(r["customFormatScore"]), a["name"]
+                v["cf_names"] = [x.get("name") for x in r.get("customFormats") or []][:5]
+                v["desc"] = (v.get("desc") or "") + " · %s score %d" % (a["name"], v["cf"])
+        except Exception as e:
+            log("custom format score failed: %r" % e); return
+
+def dupes_useful(vers):
+    """False when nothing is left to remove (e.g. every other copy is a hardlink of the kept one)."""
+    return any(v.get("action") == "remove" for v in vers)
 
 def confidence(vers):
     rm = [v for v in vers if v.get("action") == "remove"]
@@ -580,6 +665,15 @@ def scan():
     started = now_iso()
     issues, n_items, n_files = [], 0, 0
     try:
+        STATE["step"] = "Checking folders"                   # v0.1.7: scan guard
+        try: blockers = folder_blockers(folder_check(force=True))
+        except Exception as e: blockers = []; log("folder check failed: %r" % e)
+        if blockers:
+            b = blockers[0]
+            ex = b.get("example") or {}
+            short = lambda x: (x or "?") if len(x or "") <= 60 else x[:57] + "…"
+            raise RuntimeError("Library Doctor can't see %s's files (%s), so nothing was checked. Fix it in Settings → Folder check. Example: %s says %s, looked for %s." % (
+                b["app"], b["msg"].rstrip(".").lower(), b["app"], short(ex.get("app")), short(ex.get("local"))))
         S["plex"]["machine"] = plex("/identity")["machineIdentifier"]
         STATE["step"] = "Reading Radarr and Sonarr"
         movies, series, arr_files = load_arrs()
@@ -654,7 +748,7 @@ def scan():
                 live_d = live
                 if len(live) > 1:
                     eds = {}
-                    for md in live: eds.setdefault(edition_of(m, md) if _EDITION_RE.search((md.get("Part") or [{}])[0].get("file") or "") else "", []).append(md)
+                    for md in live: eds.setdefault(edition_of(m, md) if edition_from_name((md.get("Part") or [{}])[0].get("file") or "") else "", []).append(md)
                     if len(eds) > 1:
                         live_d = max(eds.values(), key=len) if max(len(v) for v in eds.values()) > 1 else live[:1]
                 # --- duplicates: several versions in one item ---
@@ -672,8 +766,9 @@ def scan():
                     vers = [version(md) for md in live_d]
                     if kind == "show":
                         for a, it in arr_series: tracked |= sonarr_tracked(a, it["id"])
-                    issues.append(dict(id=iid("dupe-item", lib, m["ratingKey"]), chk="dupes", sev="amb", title=title, library=lib,
-                                       detail={"text": "%d copies in one Plex item." % len(vers), "versions": recommend(vers, tracked),
+                    cf_scores(vers, refs); recommend(vers, tracked)
+                    if dupes_useful(vers): issues.append(dict(id=iid("dupe-item", lib, m["ratingKey"]), chk="dupes", sev="amb", title=title, library=lib,
+                                       detail={"text": "%d copies in one Plex item." % len(vers), "versions": vers,
                                                "leftovers": leftovers(vers), "confidence": confidence(vers), "section": sec["key"], "refs": refs},
                                        links=links))
                 key = g.get("tmdb") or g.get("imdb") or g.get("tvdb")
@@ -696,7 +791,8 @@ def scan():
                         issues.append(mismatch_card(lib, ("guid", str(k)), title, vers,
                                                     [plex_link(m["ratingKey"]) for m, *_ in lst] + [l for l in links if l["label"] != "Open in Plex"], sec["key"]))
                         continue
-                    recommend(vers, tr)
+                    cf_scores(vers, refs); recommend(vers, tr)
+                    if not dupes_useful(vers): continue
                     issues.append(dict(id=iid("dupe-guid", lib, k), chk="dupes", sev="amb", title=title, library=lib,
                                        detail={"text": "%d separate Plex items for the same %s." % (len(lst), "film" if kind == "movie" else "episode"),
                                                "versions": vers, "leftovers": leftovers(vers), "confidence": confidence(vers), "section": sec["key"], "refs": refs},
@@ -705,6 +801,10 @@ def scan():
             issues += health_scan(sections, movies, series, arr_files, trashed)
         except Exception as e:
             log("file health check failed: %r" % e)
+        try:
+            issues += groups_scan(movies, series)                     # v0.1.7: release groups to avoid
+        except Exception as e:
+            log("release group check failed: %r" % e)
         try:
             issues += gaps_scan(series)                               # v0.1.6: season gaps
         except Exception as e:
@@ -762,10 +862,17 @@ def scan():
                                            "note": "A rescan in %s will notice it's gone and search again if the film is monitored." % a["name"],
                                            "size": human(size)},
                                    links=[arr_link(a, m, "movie")]))
+        # v0.1.7 safety net: most of the library "missing" means a folder problem, not a missing library
+        note = ""
+        miss = [it for it in issues if it["chk"] == "missing" and it["detail"].get("kind") != "gaps"]
+        if len(miss) > 50 and len(miss) > 0.3 * max(1, n_files):
+            issues = [it for it in issues if not (it["chk"] == "missing" and it["detail"].get("kind") != "gaps")]
+            note = "Suspect: %d of %d files looked missing, which usually means a folder mapping problem, so they aren't shown. Check Settings → Folder check." % (len(miss), n_files)
+            log(note)
         finished = now_iso()
         with db() as c:
             sid = c.execute("INSERT INTO scans (started, finished, ok, items, files, issues, note) VALUES (?,?,?,?,?,?,?)",
-                            (started, finished, 1, n_items, n_files, len(issues), "")).lastrowid
+                            (started, finished, 1, n_items, n_files, len(issues), note)).lastrowid
             seen = {r["id"]: r["first_seen"] for r in c.execute("SELECT id, first_seen FROM issues")}
             c.execute("DELETE FROM issues")
             for it in issues:
@@ -1028,10 +1135,12 @@ def purge(older_than_days=None):
         n, freed = 0, 0
         for t in rows:
             if cutoff and datetime.fromisoformat(t["moved_at"]) > cutoff: continue
+            hl = False
             if os.path.realpath(t["dst"]).startswith(TRASH_DIR + os.sep) and os.path.isfile(t["dst"]):
-                os.remove(t["dst"]); n += 1; freed += t["size"] or 0
+                hl = os.stat(t["dst"]).st_nlink > 1        # v0.1.7: another link still holds the data, so nothing is freed
+                os.remove(t["dst"]); n += 1; freed += 0 if hl else (t["size"] or 0)
             with db() as c:
-                c.execute("UPDATE trash SET purged_at=? WHERE id=?", (now_iso(), t["id"]))
+                c.execute("UPDATE trash SET purged_at=?, reason=? WHERE id=?", (now_iso(), (t["reason"] or "") + (" (hardlinked)" if hl else ""), t["id"]))
         # tidy empty folders inside the trash
         for root, dirs, files in os.walk(TRASH_DIR, topdown=False):
             if root != TRASH_DIR and not os.listdir(root):
@@ -1049,10 +1158,12 @@ def purge_ids(ids):
             with db() as c:
                 t = c.execute("SELECT * FROM trash WHERE id=? AND restored_at IS NULL AND purged_at IS NULL", (tid,)).fetchone()
             if not t: continue
+            hl = False
             if os.path.realpath(t["dst"]).startswith(TRASH_DIR + os.sep) and os.path.isfile(t["dst"]):
-                os.remove(t["dst"]); n += 1; freed += t["size"] or 0
+                hl = os.stat(t["dst"]).st_nlink > 1
+                os.remove(t["dst"]); n += 1; freed += 0 if hl else (t["size"] or 0)
             with db() as c:
-                c.execute("UPDATE trash SET purged_at=? WHERE id=?", (now_iso(), tid))
+                c.execute("UPDATE trash SET purged_at=?, reason=? WHERE id=?", (now_iso(), (t["reason"] or "") + (" (hardlinked)" if hl else ""), tid))
         for root, dirs, files in os.walk(TRASH_DIR, topdown=False):
             if root != TRASH_DIR and not os.listdir(root):
                 try: os.rmdir(root)
@@ -1485,7 +1596,7 @@ def health_scan(sections, movies, series, arr_files, trashed):
                 if ref: note += " Replace moves it to the trash and asks %s to download a good copy." % ref["arr"]
                 else: note += " Neither Radarr nor Sonarr manages it, so there's nothing to fetch a new copy."
                 out.append(dict(id=iid("health", f), chk="health", sev=sev, title=title, library=lib,
-                                detail={"kind": "broken" if broken else "short", "text": text, "note": note, "path": f, "size": size,
+                                detail={"kind": "broken" if broken else "short", "text": text, "note": note, "path": f, "size": size, "links": _link_info(f)["links"],
                                         "dur": round(dur, 1), "exp": exp, "ref": ref, "section": key, "confidence": conf,
                                         "fixes": ["replace"] if ref else []},
                                 links=[plex_link(m["ratingKey"])] + ([link] if link else [])))
@@ -1560,6 +1671,82 @@ def _health_search(done_id, ref):
     with db() as c:
         c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (status, note, now_iso(), done_id))
     log("health search %s: %s" % (done_id, note))
+
+# ---------------- release groups to avoid (v0.1.7) ----------------
+# When one release group keeps supplying files Library Doctor had to replace (broken, too short, wrong audio language),
+# suggest telling Radarr/Sonarr to skip it. Careful by design: a big group with many good files also has a few bad ones,
+# so it needs 3+ replaced files across 2+ titles in 180 days AND at least a quarter of that group's files in your library.
+GROUP_WINDOW_DAYS, GROUP_MIN_FILES, GROUP_MIN_TITLES, GROUP_MIN_RATE = 180, 3, 2, 0.25
+GROUP_PROFILE = "Library Doctor: groups to avoid"
+_GRP_RE = re.compile(r"-([A-Za-z0-9]{2,20})$")
+
+def _group_of(path):
+    m = _GRP_RE.search(os.path.splitext(os.path.basename(path or ""))[0])
+    return m.group(1) if m else ""
+
+def groups_scan(movies, series):
+    since = (datetime.now() - timedelta(days=GROUP_WINDOW_DAYS)).isoformat(timespec="seconds")
+    with db() as c:
+        rows = [dict(r) for r in c.execute("SELECT title, src, reason FROM trash WHERE moved_at > ? AND reason LIKE '%(replaced)%'", (since,))]
+    bad = {}
+    for r in rows:
+        g = _group_of(r["src"])
+        if not g: continue
+        e = bad.setdefault(g.lower(), {"name": g, "files": 0, "titles": set(), "why": {}})
+        e["files"] += 1; e["titles"].add(re.sub(r"\s+S\d\dE\d\d.*$| Season \d+$", "", r["title"] or ""))
+        w = (r["reason"] or "").split(" (")[0]; e["why"][w] = e["why"].get(w, 0) + 1
+    cand = {k: v for k, v in bad.items() if v["files"] >= GROUP_MIN_FILES and len(v["titles"]) >= GROUP_MIN_TITLES}
+    if not cand: return []
+    have = {}
+    for lst in movies.values():
+        for a, it in lst:
+            g = ((it.get("movieFile") or {}).get("releaseGroup") or "").lower()
+            if g in cand: have[g] = have.get(g, 0) + 1
+    for a in [x for x in S.get("arrs", []) if x.get("kind") == "sonarr"]:
+        try:
+            for sr in arr(a, "/series"):
+                if not (sr.get("statistics") or {}).get("episodeFileCount"): continue
+                for f in arr(a, "/episodefile?seriesId=%d" % sr["id"]):
+                    g = (f.get("releaseGroup") or "").lower()
+                    if g in cand: have[g] = have.get(g, 0) + 1
+        except Exception as e: log("group totals %s failed: %r" % (a["name"], e))
+    blocked = set()
+    for a in S.get("arrs", []):
+        try:
+            for rp in arr(a, "/releaseprofile"):
+                if rp.get("name") == GROUP_PROFILE: blocked |= {str(t).lower() for t in rp.get("ignored") or []}
+        except Exception: pass
+    out = []
+    for k, v in cand.items():
+        total = v["files"] + have.get(k, 0); rate = v["files"] / max(1, total)
+        if rate < GROUP_MIN_RATE or any(k in t for t in blocked): continue
+        why = ", ".join("%d %s" % (n, w.lower()) for w, n in sorted(v["why"].items(), key=lambda x: -x[1]))
+        out.append(dict(id=iid("group", k), chk="quality", sev="att", title="Release group %s" % v["name"], library="Radarr/Sonarr",
+                        detail={"kind": "group", "group": v["name"], "count": v["files"], "rate": round(rate, 2),
+                                "text": "%d of the %d files from %s in your library had to be replaced in the last %d days (%s), across %d titles: %s." % (
+                                    v["files"], total, v["name"], GROUP_WINDOW_DAYS, why, len(v["titles"]), ", ".join(sorted(v["titles"])[:4]) + (" …" if len(v["titles"]) > 4 else "")),
+                                "note": "Block it adds %s to a \"%s\" release profile in each Radarr/Sonarr, so they skip its releases from now on. Files you already have aren't touched; remove the word there to undo." % (v["name"], GROUP_PROFILE),
+                                "fixes": ["blockgroup"]}, links=[]))
+    return out
+
+def group_block(issue_id, row, d):
+    term = "/-%s\\b/i" % re.escape(d["group"])                # matches "...x264-GROUP" at the end of a release name
+    done, errs = [], []
+    for a in S.get("arrs", []):
+        try:
+            rps = arr(a, "/releaseprofile"); rp = next((x for x in rps if x.get("name") == GROUP_PROFILE), None)
+            if rp:
+                if term not in (rp.get("ignored") or []):
+                    rp["ignored"] = (rp.get("ignored") or []) + [term]; arr(a, "/releaseprofile/%d" % rp["id"], rp, "PUT")
+            else:
+                arr(a, "/releaseprofile", {"name": GROUP_PROFILE, "enabled": True, "required": [], "ignored": [term], "indexerId": 0, "tags": []}, "POST")
+            done.append(a["name"])
+        except Exception as e:
+            errs.append("%s: %s" % (a["name"], getattr(e, "reason", e)))
+    if not done: return {"ok": False, "error": "Couldn't change any Radarr/Sonarr. " + "; ".join(errs)}
+    with db() as c: c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+    event("quality", "Blocked release group %s in %s." % (d["group"], ", ".join(done)))
+    return {"ok": True, "error": "; ".join(errs)}
 
 # ---------------- season gaps (v0.1.6) ----------------
 # Missing Files covers files Plex lists that aren't on the disk. This covers episodes that never arrived at all: Sonarr has
@@ -1699,7 +1886,7 @@ def lang_scan(sections, movies, series, trashed):
             out.append(dict(id=iid("lang", p), chk="health", sev="amb", title=title, library=(sec or {}).get("title") or a["name"],
                             detail={"kind": "lang", "text": "The only audio is %s, but it's %s film." % (_lang_names(codes), "an " + pref if pref[0] in "AEIOU" else "a " + pref),
                                     "note": "Usually a dubbed copy. Labels are occasionally wrong, so play a minute if you're not sure. Replace moves it to the trash, blocks that release in %s (when it still has the download in its history) and asks it for another copy." % a["name"],
-                                    "path": p, "size": f.get("size") or os.path.getsize(p), "audio": codes, "lang": pref,
+                                    "path": p, "size": f.get("size") or os.path.getsize(p), "audio": codes, "lang": pref, "links": _link_info(p)["links"],
                                     "files": [{"path": p, "size": f.get("size") or 0}],
                                     "ref": {"arr": a["name"], "kind": "movie", "id": it["id"]}, "section": (sec or {}).get("key"),
                                     "confidence": "check", "fixes": ["replace"]},
@@ -2361,8 +2548,8 @@ def gotify_send(title, message, priority=5):
 # ---------------- more notification channels (v0.1.3) ----------------
 # Besides Gotify: Discord (webhook), Telegram (bot), ntfy, a plain JSON webhook and email. Standard library only.
 # notify() sends one message to every channel that's set up; it's "ok" if at least one got it.
-NOTIFY_KINDS = ("discord", "telegram", "ntfy", "webhook", "email")
-NOTIFY_DEFAULT_URL = {"discord": "https://discord.com", "telegram": "https://api.telegram.org"}
+NOTIFY_KINDS = ("discord", "telegram", "ntfy", "webhook", "email", "pushover")
+NOTIFY_DEFAULT_URL = {"discord": "https://discord.com", "telegram": "https://api.telegram.org", "pushover": "https://api.pushover.net"}
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
 
 def _plain(t): return _MD_BOLD.sub(r"\1", t or "")
@@ -2394,6 +2581,11 @@ def notify_one(kind, e, title, message, priority=5):
             h = {"User-Agent": "LibraryDoctor"}
             if e.get("token"): h["Authorization"] = "Bearer " + e["token"]
             http(e["url"], h, data={"title": title, "message": message, "text": _plain(message), "priority": priority, "source": "library-doctor"}, method="POST", timeout=20)
+        elif kind == "pushover":                              # v0.1.7
+            if not e.get("token") or not e.get("user"): return {"ok": False, "error": "Fill in the app token and your user key."}
+            body = urllib.parse.urlencode({"token": e["token"], "user": e["user"], "title": title[:250], "message": _plain(message)[:1000],
+                                           "priority": 1 if priority >= 8 else 0}).encode()
+            urllib.request.urlopen(urllib.request.Request((e.get("url") or NOTIFY_DEFAULT_URL["pushover"]).rstrip("/") + "/1/messages.json", data=body, method="POST"), timeout=20).read()
         elif kind == "email":
             import smtplib, ssl as _ssl
             from email.message import EmailMessage
@@ -2441,7 +2633,56 @@ def notify(title, message, priority=5):
 
 CHK_NAMES = {"missing": "missing file", "dupes": "duplicate", "meta": "metadata gap", "health": "broken file", "subs": "subtitle problem", "virus": "virus / fake file", "coming": "Coming Soon problem", "quality": "quality/space item", "unwatched": "unwatched list", "queue": "download problem", "apps": "app warning"}
 
+def health_pct():
+    """The main screen's Library Health figure, worked out the same way on the server (for the weekly digest)."""
+    with db() as c:
+        sc = c.execute("SELECT files FROM scans WHERE ok=1 ORDER BY id DESC LIMIT 1").fetchone()
+        ign = hidden_ids(c)
+        rows = [dict(r) for r in c.execute("SELECT id, chk, detail FROM issues")]
+    files = (sc["files"] if sc else 0) or 0
+    bad = set()
+    for r in rows:
+        if r["id"] in ign or r["chk"] in ("meta", "subs", "coming", "quality", "unwatched", "queue", "apps"): continue
+        d = json.loads(r["detail"] or "{}")
+        if d.get("kind") in ("gaps", "mismatch"): continue
+        if d.get("versions"): bad |= {v.get("path") for v in d["versions"] if v.get("action") != "keep"}
+        else: bad.add(d.get("path") or r["id"])
+    return round(100.0 * (1 - len(bad) / files), 1) if files else None, len(rows) - len([r for r in rows if r["id"] in ign])
+
+def weekly_digest():
+    """v0.1.7: one quiet message a week (after Sunday's scan) when Settings → Notifications says Weekly or Both."""
+    if (S.get("digest") or "news") not in ("weekly", "both") or not notify_channels(): return
+    now = datetime.now()
+    if now.weekday() != 6: return
+    wk = now.strftime("%G-W%V")
+    if kv_get("digest_week") == wk: return
+    pct, n_open = health_pct()
+    since = (now - timedelta(days=7)).isoformat(timespec="seconds")
+    with db() as c:
+        ign = hidden_ids(c)
+        new = [r["chk"] for r in c.execute("SELECT id, chk FROM issues WHERE first_seen > ?", (since,)) if r["id"] not in ign]
+        fixed = c.execute("SELECT COUNT(*) FROM done WHERE status='ok' AND at > ?", (since,)).fetchone()[0]
+    lines = ["**Library health:** %s" % ("%.1f%%" % pct if pct is not None else "no scan yet"),
+             "**To review:** %d open item%s, %d new this week" % (n_open, "" if n_open == 1 else "s", len(new)), "**Fixed this week:** %d" % fixed]
+    try:
+        sf = space_forecast()
+        if sf.get("total"):
+            lines.append("**Disk:** %s free of %s" % (human(sf["free"]), human(sf["total"])) + (", full in about %d days" % sf["days_left"] if sf.get("days_left") is not None else ""))
+    except Exception: pass
+    if new:
+        by = {}
+        for k in new: by[k] = by.get(k, 0) + 1
+        lines.append("New: " + ", ".join("%d %s%s" % (n, CHK_NAMES.get(k, k), "" if n == 1 else "s") for k, n in by.items()))
+    notify("Library Doctor: your week", "\n".join(lines), 3)
+    kv_set("digest_week", wk)
+
 def nightly_summary():
+    if (S.get("digest") or "news") == "weekly":              # v0.1.7: weekly only, except things that can't wait
+        with db() as c: sc = c.execute("SELECT ok FROM scans ORDER BY id DESC LIMIT 1").fetchone()
+        urgent = sc is not None and not sc["ok"]
+        with db() as c:
+            urgent = urgent or c.execute("SELECT COUNT(*) FROM issues WHERE chk='virus' AND first_seen > ?", ((datetime.now() - timedelta(days=1)).isoformat(timespec="seconds"),)).fetchone()[0] > 0
+        if not urgent: return
     last = kv_get("gotify_last_summary") or (datetime.now() - timedelta(days=1)).isoformat(timespec="seconds")
     with db() as c:
         sc = c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1").fetchone()
@@ -2496,8 +2737,60 @@ def nightly_summary():
     if r.get("ok"): kv_set("gotify_last_summary", now_iso()); log("nightly summary sent: %s" % title)
     return dict(r, sent=r.get("ok"))
 
+# ---------------- checks on import (v0.1.7) ----------------
+# Every 10 minutes: what did Radarr/Sonarr import since last time? A new file that's clearly broken (tiny, or far shorter
+# than its film/episode), has only the wrong audio language, or is a program pretending to be a video gets a message
+# straight away and a scan is started, so the card is there in a minute instead of after the 03:00 scan.
+IMPORT_EVERY_MIN = 10
+_FAKE_EXT = (".exe", ".scr", ".bat", ".cmd", ".com", ".lnk", ".msi", ".vbs", ".js", ".jar", ".ps1", ".zip", ".rar", ".7z", ".iso")
+
+def import_check():
+    last = kv_get("import_check_at")
+    now_utc = datetime.now(timezone.utc)
+    kv_set("import_check_at", now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    if not last: return []                                     # first run: just remember where we are
+    pref = pref_language(); found = []
+    for a in S.get("arrs", []):
+        try: hist = arr(a, "/history/since?" + urllib.parse.urlencode({"date": last, "eventType": "downloadFolderImported"}))
+        except Exception as e: log("import check %s failed: %r" % (a["name"], e)); continue
+        for h in hist if isinstance(hist, list) else []:
+            try:
+                if a["kind"] == "radarr":
+                    item = arr(a, "/movie/%d" % int(h["movieId"])); f = item.get("movieFile") or {}
+                    title = "%s (%s)" % (item.get("title"), item.get("year", "?")); runtime = item.get("runtime") or 0
+                    orig = (item.get("originalLanguage") or {}).get("name")
+                else:
+                    e = arr(a, "/episode/%d" % int(h["episodeId"]))
+                    f = arr(a, "/episodefile/%d" % int(e["episodeFileId"])) if e.get("episodeFileId") else {}
+                    sr = arr(a, "/series/%d" % int(e["seriesId"]))
+                    title = "%s S%02dE%02d" % (sr.get("title"), e.get("seasonNumber") or 0, e.get("episodeNumber") or 0)
+                    runtime = e.get("runtime") or sr.get("runtime") or 0; orig = (sr.get("originalLanguage") or {}).get("name")
+                p = f.get("path") or ""
+                if not p: continue
+                mi = f.get("mediaInfo") or {}
+                why = None
+                if os.path.splitext(p)[1].lower() in _FAKE_EXT: why = "it's a %s file, not a video" % os.path.splitext(p)[1]
+                elif (f.get("size") or 0) and f["size"] < BROKEN_BYTES: why = "it's only %s, so it's broken" % human(f["size"])
+                else:
+                    rt = mi.get("runTime") or ""
+                    try:
+                        hh, mm, ss = (rt.split(":") + ["0", "0"])[:3]; mins_ = int(hh) * 60 + int(mm) + float(ss) / 60
+                    except ValueError: mins_ = 0
+                    if runtime >= 15 and mins_ and mins_ < runtime * 0.5: why = "it's only %d minutes long, but should be about %d" % (mins_, runtime)
+                    elif pref and orig == pref and _wrong_audio(_audio(mi), pref): why = "its only audio is %s" % _lang_names(_audio(mi))
+                if why: found.append((a["name"], title, why))
+            except Exception as e:
+                log("import check item failed: %r" % e)
+    if found:
+        notify("Library Doctor: %d just-imported file%s to check" % (len(found), "" if len(found) == 1 else "s"),
+               "\n".join("**%s** (%s): %s" % (t, n, w) for n, t, w in found[:8]), 6)
+        event("import", "Just imported and looks wrong: " + "; ".join("%s (%s)" % (t, w) for _, t, w in found[:5]))
+        if not STATE["running"]: threading.Thread(target=scan, daemon=True).start()
+    return found
+
 def nightly():
     last, last_follow, last_tdarr, last_queue = None, None, None, None
+    last_import = None
     while True:
         now = datetime.now()
         if not configured(): time.sleep(30); continue          # setup mode: nothing to do until Settings are saved
@@ -2511,8 +2804,14 @@ def nightly():
             scan()
             try: snooze_due()
             except Exception as e: log("snooze re-search failed: %r" % e)
+            try: weekly_digest()
+            except Exception as e: log("weekly digest failed: %r" % e)
             try: nightly_summary()
             except Exception as e: log("nightly summary failed: %r" % e)
+        elif now.minute % IMPORT_EVERY_MIN == 3 and last_import != (now.hour, now.minute):   # v0.1.7: checks on import
+            last_import = (now.hour, now.minute)
+            try: import_check()
+            except Exception as e: log("import check failed: %r" % e)
         elif now.minute == 17 and last_follow != now.hour:     # hourly: has a replaced file arrived?
             last_follow = now.hour
             try: followup()
@@ -2925,7 +3224,7 @@ def quality_scan(sections, movies, series, trashed):
                 elif f0 not in pending:
                   needs_tdarr = len(r["parts"]) == 1 and (md.get("videoCodec") or "").lower() not in TDARR_DONE_CODECS and tdarr_lib_for(f0)
                   out.append(dict(id=iid("quality", "hog", lib, f0), chk="quality", sev="att", title=title, library=lib,
-                                detail={"kind": "hog", "path": f0, "size": r["size"], "extra": int(extra), "ref": ref, "section": sec["key"],
+                                detail={"kind": "hog", "path": f0, "size": r["size"], "extra": int(extra), "ref": ref, "section": sec["key"], "links": _link_info(f0)["links"],
                                         "vcodec": (md.get("videoCodec") or "").lower(), "tdarr_paths": [f0] if needs_tdarr else [],
                                         "fixes": (["tdarr"] if needs_tdarr else []) + (["smaller"] if ref and ref.get("kind") == "movie" else []),
                                         "text": "%s for %s: about %.1f GB an hour, %.1f× the usual for %s in %s (%.1f GB an hour)." % (
@@ -3065,6 +3364,7 @@ def quality_fix(issue_id, how):
     if how not in d.get("fixes", []): return {"ok": False, "error": "That fix doesn't apply here."}
     if how == "tdarr": return tdarr_fix(issue_id, row, d)
     if how == "monitor": return monitor_fix(issue_id, row, d)
+    if how == "blockgroup": return group_block(issue_id, row, d)
     if how == "search":
         ref = d.get("ref") or {}; a = arr_by_name(ref.get("arr"))
         if not a: return {"ok": False, "error": "Unknown Radarr/Sonarr."}
@@ -3958,12 +4258,131 @@ def _arr_queue(a):
     inc = "includeMovie=true&includeUnknownMovieItems=true" if a["kind"] == "radarr" else "includeSeries=true&includeEpisode=true&includeUnknownSeriesItems=true"
     return arr(a, "/queue?pageSize=500&" + inc).get("records", [])
 
-def _qbit():
-    q = S.get("qbit") or {}
+def _qbit(q=None):
+    q = q if q is not None else (S.get("qbit") or {})
     if not q.get("url"): return None
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookiejar.CookieJar()))
-    op.open(q["url"] + "/api/v2/auth/login", data=urllib.parse.urlencode({"username": q["username"], "password": q["password"]}).encode(), timeout=15).read()
+    r = op.open(q["url"].rstrip("/") + "/api/v2/auth/login", data=urllib.parse.urlencode({"username": q.get("username", ""), "password": q.get("password", "")}).encode(), timeout=15).read()
+    if r.strip() not in (b"Ok.", b""): raise RuntimeError("qBittorrent refused the username or password")   # 4.x says "Ok.", 5.x answers 204 with nothing
     return op
+
+# v0.1.7: why is a download stuck? qBittorrent knows (seeds in the swarm, what the tracker said, speed); SABnzbd knows its
+# own status and why a download failed. One plain sentence, and whether a re-announce might help.
+_UNREG = re.compile(r"unregistered|not registered|not found|torrent not exist|unknown torrent|info ?hash not found|deleted|nuked|trumped", re.I)
+
+def _speed(b): return "%s/s" % human(b)
+
+# v0.1.7: Transmission (RPC with its session-id handshake) and NZBGet (JSON-RPC), next to qBittorrent and SABnzbd
+_TR_SID = {"v": ""}
+def _tr_rpc(method, args=None, cfg=None):
+    t = cfg if cfg is not None else (S.get("transmission") or {})
+    url = t["url"].rstrip("/"); url = url if url.endswith("/rpc") else url + "/transmission/rpc"
+    h = {"Content-Type": "application/json"}
+    if t.get("username") or t.get("password"):
+        import base64
+        h["Authorization"] = "Basic " + base64.b64encode(("%s:%s" % (t.get("username", ""), t.get("password", ""))).encode()).decode()
+    body = json.dumps({"method": method, "arguments": args or {}}).encode()
+    for _ in range(2):
+        h["X-Transmission-Session-Id"] = _TR_SID["v"]
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, data=body, headers=h, method="POST"), timeout=20) as r:
+                d = json.loads(r.read() or b"{}")
+                if d.get("result") != "success": raise RuntimeError("Transmission said: %s" % d.get("result"))
+                return d.get("arguments") or {}
+        except urllib.error.HTTPError as e:
+            if e.code == 409: _TR_SID["v"] = e.headers.get("X-Transmission-Session-Id", ""); continue
+            raise
+    raise RuntimeError("Transmission didn't accept the session")
+
+def _nzbget(method, params=None, cfg=None):
+    n = cfg if cfg is not None else (S.get("nzbget") or {})
+    import base64
+    h = {"Content-Type": "application/json", "Authorization": "Basic " + base64.b64encode(("%s:%s" % (n.get("username", ""), n.get("password", ""))).encode()).decode()}
+    r = http(n["url"].rstrip("/") + "/jsonrpc", h, data={"method": method, "params": params or [], "id": 1}, method="POST", timeout=20)
+    if r.get("error"): raise RuntimeError("NZBGet said: %s" % (r["error"].get("message") if isinstance(r["error"], dict) else r["error"]))
+    return r.get("result")
+
+_NZBGET_WHY = {"HEALTH": "too many parts of it are missing on your usenet server", "PAR": "repairing it failed", "UNPACK": "unpacking it failed",
+               "MOVE": "moving the finished files failed", "SCAN": "the post-processing scan failed", "BAD": "the download was bad",
+               "PASSWORD": "it's password-protected", "SPACE": "the disk was full", "DISKSPACE": "the disk was full", "FETCH": "the NZB couldn't be fetched"}
+
+def _tr_reason(h):
+    tr = _tr_rpc("torrent-get", {"ids": [h.lower()], "fields": ["status", "error", "errorString", "percentDone", "rateDownload", "eta", "peersSendingToUs", "trackerStats", "metadataPercentComplete"]}).get("torrents") or []
+    if not tr: return None
+    t = tr[0]; stats = t.get("trackerStats") or []
+    msgs = [str(x.get("lastAnnounceResult") or "") for x in stats if x.get("lastAnnounceResult") and not x.get("lastAnnounceSucceeded")]
+    if t.get("errorString") and _UNREG.search(t["errorString"]) or any(_UNREG.search(m) for m in msgs):
+        return ("The tracker says it no longer has this torrent (%s), so it will never finish." % ((t.get("errorString") or next(m for m in msgs if _UNREG.search(m)))[:80]), False)
+    if t.get("status") == 0: return ("It's paused in Transmission.", False)
+    if t.get("error") in (2, 3) and t.get("errorString"): return ("Transmission reports an error: %s." % t["errorString"][:100], True)
+    if (t.get("metadataPercentComplete") or 1) < 1: return ("Transmission is still waiting for the torrent's details: nobody sharing it has been found yet.", True)
+    seeds = max([x.get("seederCount") or 0 for x in stats] + [0])
+    if seeds <= 0 and not t.get("peersSendingToUs") and (t.get("percentDone") or 0) < 1:
+        return ("Nobody is sharing it: 0 seeds in the swarm%s." % (" (%d%% done so far)" % round(100 * t["percentDone"]) if t.get("percentDone") else ""), True)
+    sp, eta = t.get("rateDownload") or 0, t.get("eta") or -1
+    if sp and eta > 0: return ("It's downloading slowly: %s, about %s left (%d seeds)." % (_speed(sp), mins(eta * 1000) if eta < 86400 else "%d days" % round(eta / 86400), seeds), False)
+    return ("%d seed%s, but nothing is coming in right now." % (seeds, "" if seeds == 1 else "s"), True)
+
+def _nzbget_reason(nid):
+    try: nid = int(nid)
+    except (TypeError, ValueError): return None
+    for g in _nzbget("listgroups", [0]) or []:
+        if g.get("NZBID") == nid:
+            left = g.get("RemainingSizeMB") or 0
+            return ("NZBGet says: %s%s." % (str(g.get("Status", "?")).replace("_", " ").lower(), ", %s left" % human(left * 1048576) if left else ""), False)
+    for x in _nzbget("history", [False]) or []:
+        if x.get("NZBID") == nid:
+            st = str(x.get("Status") or "")
+            if st.startswith("FAILURE") or st.startswith("DELETED"):
+                why = _NZBGET_WHY.get(st.split("/")[-1], st.split("/")[-1].lower())
+                return ("NZBGet couldn't finish it: %s." % why, False)
+            return ("NZBGet says: %s." % st.lower(), False)
+    return None
+
+def dl_reason(it, qop=None):
+    """(sentence, can_reannounce) for one stuck download, or ("", False) when the client can't tell more."""
+    try:
+        if it.get("protocol") == "torrent" and it.get("downloadId") and not qop and (S.get("transmission") or {}).get("url"):
+            r = _tr_reason(it["downloadId"])
+            return r if r else ("Transmission doesn't have this torrent any more.", False)
+        if it.get("protocol") == "usenet" and it.get("downloadId") and not (S.get("sabnzbd") or {}).get("url") and (S.get("nzbget") or {}).get("url"):
+            return _nzbget_reason(it["downloadId"]) or ("", False)
+        if it.get("protocol") == "torrent" and it.get("downloadId") and qop:
+            h = it["downloadId"].lower(); base = S["qbit"]["url"].rstrip("/")
+            info = (json.loads(qop.open(base + "/api/v2/torrents/info?hashes=" + h, timeout=20).read() or b"[]") or [None])[0]
+            if not info:
+                if (S.get("transmission") or {}).get("url"):           # maybe it's in the other torrent client
+                    r = _tr_reason(it["downloadId"])
+                    if r: return r
+                return ("qBittorrent doesn't have this torrent any more.", False)
+            trk = json.loads(qop.open(base + "/api/v2/torrents/trackers?hash=" + h, timeout=20).read() or b"[]")
+            real = [t for t in trk if not str(t.get("url", "")).startswith("** [")]
+            msgs = [str(t.get("msg") or "") for t in real if t.get("msg")]
+            st = info.get("state") or ""
+            if any(_UNREG.search(m) for m in msgs): return ("The tracker says it no longer has this torrent (%s), so it will never finish." % next(m for m in msgs if _UNREG.search(m))[:80], False)
+            if st in ("pausedDL", "stoppedDL"): return ("It's paused in qBittorrent.", False)
+            if real and all(t.get("status") == 4 for t in real):
+                return ("Every tracker is failing%s, so qBittorrent can't find anyone to download from." % (": " + msgs[0][:80] if msgs else ""), True)
+            if st == "metaDL": return ("qBittorrent is still waiting for the torrent's details: nobody sharing it has been found yet.", True)
+            seeds = max(info.get("num_complete") or 0, info.get("num_seeds") or 0)
+            if seeds == 0 and (info.get("progress") or 0) < 1:
+                return ("Nobody is sharing it: 0 seeds in the swarm%s." % (" (%d%% done so far)" % round(100 * info["progress"]) if info.get("progress") else ""), True)
+            sp, eta = info.get("dlspeed") or 0, info.get("eta") or 0
+            if sp and eta and eta < 8640000: return ("It's downloading slowly: %s, about %s left (%d seeds)." % (_speed(sp), mins(eta * 1000) if eta < 86400 else "%d days" % round(eta / 86400), seeds), False)
+            return ("%d seed%s, but nothing is coming in right now (qBittorrent state: %s)." % (seeds, "" if seeds == 1 else "s", st or "?"), True)
+        if it.get("protocol") == "usenet" and it.get("downloadId") and (S.get("sabnzbd") or {}).get("url"):
+            z = S["sabnzbd"]; base = z["url"].rstrip("/") + "/api?output=json&apikey=" + urllib.parse.quote(z.get("key", ""))
+            q = http(base + "&mode=queue&nzo_ids=" + urllib.parse.quote(it["downloadId"]), timeout=20).get("queue") or {}
+            sl = (q.get("slots") or [None])[0]
+            if sl: return ("SABnzbd says: %s%s." % (sl.get("status", "?"), (", %s left" % sl["timeleft"]) if sl.get("timeleft") and sl.get("timeleft") != "0:00:00" else ""), False)
+            hi = http(base + "&mode=history&nzo_ids=" + urllib.parse.quote(it["downloadId"]), timeout=20).get("history") or {}
+            sl = (hi.get("slots") or [None])[0]
+            if sl and sl.get("fail_message"): return ("SABnzbd couldn't finish it: %s." % sl["fail_message"].rstrip(".")[:120], False)
+            if sl: return ("SABnzbd says: %s." % sl.get("status", "?"), False)
+            if (S.get("nzbget") or {}).get("url"): return _nzbget_reason(it["downloadId"]) or ("", False)
+    except Exception as e:
+        log("download reason failed: %r" % e)
+    return ("", False)
 
 def _qbit_info(op, h):
     try: return (json.loads(op.open(S["qbit"]["url"] + "/api/v2/torrents/info?hashes=" + h.lower(), timeout=20).read() or b"[]") or [None])[0]
@@ -4040,9 +4459,17 @@ def queue_cards():
                 fixes = ["import"]
             elif kind == "stalled":
                 title = "%s%s: %s" % (name, " " + eps if eps and n <= 4 else "", "download stuck" if n == 1 else "%d downloads stuck" % n)
-                text = (("Still at 0%% after %s, so probably nobody is sharing it. " % ("a night's download window" if NIGHT_END_HOUR is not None else "a whole day")) if items[0]["left"] >= items[0]["size"] else "") + (items[0]["msg"] or "")
+                if qop is None and items[0].get("protocol") == "torrent":
+                    try: qop = _qbit() or False
+                    except Exception as e: log("qbit login failed: %r" % e); qop = False
+                why, rean = dl_reason(items[0], qop or None)
+                if why: items[0]["why"] = why
+                text = why + (" " if why else "") + ((("Still at 0%% after %s, so probably nobody is sharing it. " % ("a night's download window" if NIGHT_END_HOUR is not None else "a whole day")) if items[0]["left"] >= items[0]["size"] and not why else "") + (items[0]["msg"] or ""))
                 note = "Remove & try another removes it, blocklists that release and searches for a different one (it downloads in the night window)."
                 fixes = ["retry"]
+                if rean and all(x.get("protocol") == "torrent" for x in items) and ((S.get("qbit") or {}).get("url") or (S.get("transmission") or {}).get("url")):
+                    fixes = ["reannounce", "retry"]
+                    note = "Re-announce asks every tracker for people sharing it again (worth a try first). " + note
             else:
                 qb = items[0].get("qb") or {}
                 prot = _protected(qb)
@@ -4153,6 +4580,16 @@ def queue_fix(issue_id, how):
                 else: probs.append("%s: %s" % (it["ep"] or it["title"][:50], why))
             elif how == "retry":
                 _retry(a, it); okn += 1
+            elif how == "reannounce":
+                op = _qbit()
+                if op:
+                    op.open(S["qbit"]["url"].rstrip("/") + "/api/v2/torrents/reannounce", data=urllib.parse.urlencode({"hashes": it["downloadId"].lower()}).encode(), timeout=20).read()
+                if (S.get("transmission") or {}).get("url"):
+                    try: _tr_rpc("torrent-reannounce", {"ids": [it["downloadId"].lower()]})
+                    except Exception as e:
+                        if not op: raise
+                if not op and not (S.get("transmission") or {}).get("url"): raise RuntimeError("No torrent client is set up in Settings")
+                okn += 1
             elif how == "remove":
                 why = _remove_leftover(it)
                 if why: probs.append(why)
@@ -4301,14 +4738,14 @@ def session_end(tok, everyone=False):
         elif tok: c.execute("DELETE FROM sessions WHERE h=?", (hashlib.sha256(tok.encode()).hexdigest(),))
 
 # ---------------- settings page ----------------
-SECRET_FIELDS = ("token", "key")
-SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "prowlarr", "gotify") + NOTIFY_KINDS
+SECRET_FIELDS = ("token", "key", "password")
+SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
 LISTS = ("arrs", "bazarr")
 
 def settings_public():
     """Settings for the page: secrets replaced by <field>_set: true. List items carry _i (their index) so a save can keep unchanged keys."""
     def red(e, i=None):
-        e = dict(e); e.pop("container_root", None); e.pop("media_root", None)
+        e = _clean_entry(e); e.pop("container_root", None); e.pop("media_root", None)
         for f in SECRET_FIELDS:
             if f in e: e[f + "_set"] = bool(e.pop(f))
         if i is not None: e["_i"] = i
@@ -4318,11 +4755,18 @@ def settings_public():
     h, mi, days = sched()
     out["schedule"] = {"hour": h, "minute": mi, "days": days}
     out["language"] = pref_language()
+    out["trash_days"] = TRASH_DAYS; out["digest"] = S.get("digest") or "news"
     return {"settings": out, "configured": configured(), "media_root": MEDIA_ROOT, "languages": sorted(LANGS)}
+
+RUNTIME_KEYS = ("roots", "machine")                          # filled in while running; never written to config.json
+
+def _clean_entry(e):
+    """v0.1.7: drop runtime caches (keys starting with "_" such as _rbown, plus roots/machine) from a settings entry."""
+    return {k: v for k, v in (e or {}).items() if not (k.startswith("_") and k != "_i") and k not in RUNTIME_KEYS}
 
 def _with_secrets(kind, e):
     """Fill blank secret fields of an edited entry from what's saved (matched by _i for lists)."""
-    e = {k: v for k, v in (e or {}).items() if not k.endswith("_set")}
+    e = {k: v for k, v in _clean_entry(e).items() if not k.endswith("_set")}
     old = (S.get(kind) or [])[e["_i"]] if kind in LISTS and isinstance(e.get("_i"), int) and e["_i"] < len(S.get(kind) or []) else S.get(kind) if kind in SINGLE else None
     for f in SECRET_FIELDS:
         if not e.get(f) and isinstance(old, dict) and old.get(f): e[f] = old[f]
@@ -4363,6 +4807,20 @@ def settings_test(kind, e):
         if kind == "sportarr":
             http(u + "/api/rootfolder", {"X-Api-Key": e.get("key", "")}, timeout=15)
             return {"ok": True, "msg": "Connected to Sportarr."}
+        if kind == "qbit":
+            op = _qbit(e)
+            v = op.open(u.rstrip("/") + "/api/v2/app/version", timeout=15).read().decode().strip()
+            return {"ok": True, "msg": "Connected to qBittorrent %s." % v}
+        if kind == "transmission":
+            r = _tr_rpc("session-get", {"fields": ["version"]}, cfg=e)
+            return {"ok": True, "msg": "Connected to Transmission %s." % r.get("version", "")}
+        if kind == "nzbget":
+            return {"ok": True, "msg": "Connected to NZBGet %s." % (_nzbget("version", cfg=e) or "")}
+        if kind == "sabnzbd":
+            r = http(u + "/api?" + urllib.parse.urlencode({"mode": "queue", "output": "json", "limit": 1, "apikey": e.get("key", "")}), timeout=15)
+            if r.get("error") or r.get("status") is False: return {"ok": False, "msg": "SABnzbd said: %s. Check the API key." % (r.get("error") or "no")}
+            v = http(u + "/api?mode=version&output=json", timeout=15).get("version", "")
+            return {"ok": True, "msg": "Connected to SABnzbd %s." % v}
         if kind in NOTIFY_KINDS:
             r = notify_one(kind, e, "Library Doctor", "Connected. Nightly summaries will come here.", 3)
             return {"ok": r.get("ok"), "msg": "Sent a test message." if r.get("ok") else r.get("error")}
@@ -4370,7 +4828,7 @@ def settings_test(kind, e):
             http(u + "/message", {"X-Gotify-Key": e.get("token", "")}, data={"title": "Library Doctor", "message": "Connected. Nightly summaries will come here.", "priority": 3}, method="POST", timeout=15)
             return {"ok": True, "msg": "Sent a test message to Gotify."}
     except urllib.error.HTTPError as x:
-        return {"ok": False, "msg": "It answered, but said %d %s. %s" % (x.code, x.reason, "Check the API key." if x.code in (401, 403) else "")}
+        return {"ok": False, "msg": "It answered, but said %d %s. %s" % (x.code, x.reason, ("Check the username and password." if kind in ("qbit", "transmission", "nzbget") else "Check the API key.") if x.code in (401, 403) else "")}
     except Exception as x:
         return {"ok": False, "msg": "Couldn't reach %s: %s" % (u, getattr(x, "reason", x))}
     return {"ok": False, "msg": "Unknown app."}
@@ -4417,6 +4875,81 @@ def _samples(kind, e):
         out = [x["path"] for x in http(u + "/api/rootfolder", h, timeout=20) if x.get("path")]
     return out
 
+# ---------------- folder check (v0.1.7) ----------------
+# The number one reason a tool like this fails on day one: each app sees the media under a different folder (Plex /data/movies,
+# Radarr /movies, Library Doctor /media/movies). folder_check() asks every app for a few real paths, applies that app's
+# mapping and looks for the files. Shown in Settings (and run by itself after a save and before every scan); a scan
+# stops instead of reporting thousands of "missing" files when Plex's or Radarr/Sonarr's files can't be found at all.
+_FC = {"t": 0, "v": []}
+
+def apply_trash_days():
+    global TRASH_DAYS
+    try: TRASH_DAYS = int(S.get("trash_days") or TRASH_DAYS_ENV)
+    except (TypeError, ValueError): TRASH_DAYS = TRASH_DAYS_ENV
+
+def _fc_apps():
+    out = []
+    if (S.get("plex") or {}).get("url"): out.append(("plex", None, S["plex"], "Plex", True))
+    for i, a in enumerate(S.get("arrs") or []):
+        if a.get("url"): out.append(("arrs", i, a, a.get("name") or a.get("kind", "").title(), True))
+    for i, b in enumerate(S.get("bazarr") or []):
+        if b.get("url"): out.append(("bazarr", i, b, b.get("name") or "Bazarr", False))
+    for k, n in (("tdarr", "Tdarr"), ("sportarr", "Sportarr")):
+        if (S.get(k) or {}).get("url"): out.append((k, None, S[k], n, False))
+    return out
+
+def folder_check(force=False):
+    if not force and time.time() - _FC["t"] < 600: return _FC["v"]
+    rows = []
+    for kind, idx, e, name, needed in _fc_apps():
+        row = {"app": name, "kind": kind, "i": idx, "needed": needed, "mapping": e.get("paths") or [], "total": 0, "found": 0}
+        try: smp = _samples(kind, e)
+        except Exception as x:
+            row.update(status="error", msg="Couldn't ask %s for its folders (%s)." % (name, getattr(x, "reason", x))); rows.append(row); continue
+        pairs = _pairs(e)
+        loc = [(p, _swap(p, pairs)) for p in smp]
+        ok = [(a, b) for a, b in loc if os.path.exists(b)]
+        row.update(total=len(loc), found=len(ok))
+        ex = (ok or loc or [("", "")])[0]
+        row["example"] = {"app": ex[0], "local": ex[1], "exists": bool(ok)}
+        if not loc: row.update(status="empty", msg="%s didn't report any files yet." % name)
+        elif len(ok) >= max(1, round(len(loc) * 0.8)): row.update(status="ok", msg="%d of %d found." % (len(ok), len(loc)))
+        else:
+            row.update(status="bad" if len(ok) < len(loc) / 2 else "partial", msg="Only %d of %d found." % (len(ok), len(loc)))
+            try:
+                d = settings_detect(kind, dict(e, _i=idx) if idx is not None else dict(e))
+                if d.get("ok"): row["suggest"] = d.get("paths") or []; row["suggest_msg"] = d.get("msg") if d.get("paths") else "It needs no mapping at all: the files are at the same place as here."
+                else: row["suggest_msg"] = d.get("msg")
+            except Exception as x: row["suggest_msg"] = str(x)
+        rows.append(row)
+    _FC.update(t=time.time(), v=rows)
+    return rows
+
+def folder_blockers(rows):
+    """Apps the scan can't work without (Plex, Radarr/Sonarr) whose files can't be found at all."""
+    return [r for r in rows if r.get("needed") and r.get("status") == "bad" and r.get("total", 0) >= 2]
+
+# v0.1.7: settings backup. A JSON file with everything from Settings (API keys included, so keep it safe), for moving
+# Library Doctor to another server. The password is not in it (set a new one there).
+def settings_export():
+    out = {}
+    for k, v in S.items():
+        out[k] = _clean_entry(v) if isinstance(v, dict) else [_clean_entry(x) if isinstance(x, dict) else x for x in v] if isinstance(v, list) else v
+    return {"library_doctor_settings": 1, "version": APP_VERSION, "exported": now_iso(), "settings": out}
+
+def settings_import(data):
+    cfg = (data or {}).get("settings") if isinstance(data, dict) else None
+    if not isinstance(cfg, dict) or not (data or {}).get("library_doctor_settings"):
+        return {"ok": False, "msg": "That isn't a Library Doctor settings file."}
+    known = set(SINGLE) | set(LISTS) | {"schedule", "language", "trash_days", "digest"}
+    for k, v in cfg.items():                                  # settings this page doesn't edit (e.g. qbit) come along too
+        if k not in known: S[k] = v
+    new = {k: cfg[k] for k in known if k in cfg}
+    for k in LISTS: new.setdefault(k, [])
+    r = settings_save(new)
+    if r.get("ok"): event("settings", "Settings restored from a backup file (made %s)." % str(data.get("exported", "?"))[:16])
+    return r
+
 def settings_detect(kind, e):
     """Work out the folder mapping: for each sample, find which folder under MEDIA_ROOT holds the same tail."""
     e = _with_secrets(kind, e)
@@ -4459,6 +4992,16 @@ def settings_save(new):
             return {"ok": False, "msg": "The scan time isn't valid."}
     elif S.get("schedule"):
         cfg["schedule"] = S["schedule"]                      # a save without the schedule keeps the old one
+    if "trash_days" in (new or {}):                          # v0.1.7: days in the trash, from Settings
+        try: td = int(new.get("trash_days"))
+        except (TypeError, ValueError): return {"ok": False, "msg": "Pick how many days the trash keeps files."}
+        if td not in (3, 7, 14, 30): return {"ok": False, "msg": "Pick 3, 7, 14 or 30 days for the trash."}
+        cfg["trash_days"] = td
+    elif "trash_days" in S: cfg["trash_days"] = S["trash_days"]
+    if "digest" in (new or {}):                              # v0.1.7: news (after scans with news) | weekly | both
+        dg = str(new.get("digest") or "news")
+        cfg["digest"] = dg if dg in ("news", "weekly", "both") else "news"
+    elif "digest" in S: cfg["digest"] = S["digest"]
     if "language" in (new or {}):                            # v0.1.6: audio language check ("" = off)
         lg = str(new.get("language") or "")
         if lg and lg not in LANGS: return {"ok": False, "msg": "Pick a language from the list."}
@@ -4473,7 +5016,7 @@ def settings_save(new):
         cfg[k] = [_with_secrets(k, e) for e in (new or {}).get(k) or [] if isinstance(e, dict) and e.get("url")]
     # v0.1.4: keep settings this page doesn't edit (e.g. "qbit" from an older secrets.json) instead of dropping them
     for k, v in S.items():
-        if k not in cfg and k not in SINGLE and k not in LISTS and k not in ("schedule", "language"): cfg[k] = v
+        if k not in cfg and k not in SINGLE and k not in LISTS and k not in ("schedule", "language", "trash_days", "digest"): cfg[k] = v
     names = [a.get("name", "") for a in cfg["arrs"]]
     if any(not n for n in names) or len(set(names)) != len(names): return {"ok": False, "msg": "Each Radarr/Sonarr needs its own name."}
     for a in cfg["arrs"]:
@@ -4487,6 +5030,7 @@ def settings_save(new):
     with os.fdopen(fd, "w") as f: json.dump(cfg, f, indent=1)
     os.replace(tmp, CONFIG_FILE)
     S.clear(); S.update(normalize(cfg))
+    apply_trash_days(); _FC["t"] = 0
     _TDARR_LIBS["t"] = 0; _STATS["v"] = None
     event("settings", "Settings saved.")
     return {"ok": True, "configured": configured()}
@@ -4536,21 +5080,25 @@ def stats():
     if _STATS["v"] is not None and time.time() - _STATS["at"] < 30: return _STATS["v"]
     freed = pending = 0
     with db() as c:
-        trash = [dict(r) for r in c.execute("SELECT src, size, reason, moved_at, restored_at, purged_at FROM trash")]
+        trash = [dict(r) for r in c.execute("SELECT src, dst, size, reason, moved_at, restored_at, purged_at FROM trash")]
         done = [dict(r) for r in c.execute("SELECT chk, status, note, at, cleared FROM done")]
         ign = hidden_ids(c)
         issues = [dict(r) for r in c.execute("SELECT id, chk, detail FROM issues")]
     # 1) files Library Doctor moved out for good: duplicates, leftovers, old .ts copies (minus the new .mkv). Not replaced broken files or Plex fixes.
     for t in trash:
         r = t["reason"] or ""
-        if t["restored_at"] or "(replaced)" in r or r.startswith("Plex fix") or r.startswith("Virus"): continue
+        if t["restored_at"] or "(replaced)" in r or r.startswith("Plex fix") or r.startswith("Virus") or "(hardlinked)" in r: continue
         size = t["size"] or 0
         if r.startswith("Old .ts copy"):
             mkv = os.path.splitext(t["src"])[0] + ".mkv"
             try: size = max(0, size - os.path.getsize(mkv))
             except OSError: size = 0
         if t["purged_at"]: freed += size
-        else: pending += size                      # still in Library Doctor's trash: freed when it empties
+        else:                                      # still in Library Doctor's trash: freed when it empties (not if it's hardlinked)
+            try:
+                if os.stat(t["dst"]).st_nlink > 1: continue
+            except OSError: pass
+            pending += size
     # 2) smaller copies and Tdarr conversions ("saved X" in the Done note)
     week = (datetime.now() - timedelta(days=7)).isoformat(timespec="seconds")
     for d in done:
@@ -4566,7 +5114,7 @@ def stats():
         if i["id"] in ign: continue
         d = json.loads(i["detail"])
         if i["chk"] == "dupes":
-            possible += sum(v.get("size") or 0 for v in d.get("versions") or [] if v.get("action") == "remove")
+            possible += sum(v.get("size") or 0 for v in d.get("versions") or [] if v.get("action") == "remove" and (v.get("links") or 1) <= 1)
         elif i["chk"] == "quality":
             if d.get("kind") == "hog": possible += d.get("extra") or 0
             elif d.get("kind") == "tdarrmissed": possible += TDARR_SAVE_GUESS * sum(x.get("size") or 0 for x in d.get("items") or [])
@@ -4665,6 +5213,12 @@ class H(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self.send(200, history(int((q.get("days") or ["30"])[0]) if (q.get("days") or ["30"])[0].isdigit() else 30))
         if path == "/api/settings": return self.send(200, settings_public())
+        if path == "/api/settings/export":
+            body = json.dumps(settings_export(), indent=1).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Disposition", 'attachment; filename="library-doctor-settings-%s.json"' % datetime.now().strftime("%Y%m%d"))
+            self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path.startswith("/api/foldercheck"): return self.send(200, {"rows": folder_check(force="force=1" in self.path)})
         self.send(404, {"error": "not found"})
     def _redirect(self, to):
         self.send_response(302); self.send_header("Location", to); self.send_header("Content-Length", "0"); self.end_headers()
@@ -4790,6 +5344,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, {"ok": True})
             if path == "/api/virusfull":
                 return self.send(200, virus_full())
+            if path == "/api/settings/import":
+                return self.send(200, settings_import(body.get("data")))
             if path == "/api/gapsearch":
                 return self.send(200, gaps_fix(str(body.get("id", ""))[:32]))
             if path == "/api/plexsplit":
@@ -4836,5 +5392,6 @@ if __name__ == "__main__":
             "(set PUID/PGID in compose to the folder's owner), then start it again." % (CONFIG_DIR, e, CONFIG_DIR, os.getuid()))
         raise SystemExit(1)
     threading.Thread(target=nightly, daemon=True).start()
+    apply_trash_days()
     log("Library Doctor listening on %s:%d (nightly scan at %02d:00, trash kept %d days)" % (LISTEN, PORT, SCAN_HOUR, TRASH_DAYS))
     ThreadingHTTPServer((LISTEN, PORT), H).serve_forever()

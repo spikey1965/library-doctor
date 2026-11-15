@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.7 (beta)
+
+- **Folder check (Settings):** every app's view of your media side by side with Library Doctor's, ✓/✗ per app with an example file, and **Use suggested mapping** (or **Remove the mapping**) when they don't line up. Runs by itself when you open Settings and after each save.
+- **Scan guard:** before every scan the folders are checked again; if Plex's or Radarr/Sonarr's files can't be found at all, the scan stops with a banner pointing to Folder check, instead of filling Missing Files with your whole library. As a second safety net, a scan where most files look missing doesn't show them and says why.
+- **Hardlink aware:** files with another link (usually a torrent still seeding) get a **Hardlinked** badge and a note that moving them frees nothing until the torrent goes; two "copies" that are links to the same file are never offered as duplicates; the space totals and the trash only count space that's really freed.
+- **Your custom formats decide:** when Radarr/Sonarr have custom formats (TRaSH guides etc.), each duplicate copy is scored by them and the highest score is kept, ahead of resolution; the score is shown on every copy, and a pick against the higher resolution is marked Check, never Sure.
+- **Keep both:** duplicate cards say Keep both (or Keep them all) instead of Ignore, for versions you want, like a 4K and a 1080p for phones.
+- **Impact line:** Clean up all and Replace all now say what they'll do first: files to the trash, GB freed (hardlinked ones excluded), downloads started, and free space now and after the trash empties.
+- **Weekly digest + Pushover:** Settings → Notifications can send messages after scans with news (as before), once a week on Sunday (library health, items to review, fixed this week, disk space, plus anything urgent at once), or both. Pushover added.
+- **Trash days in Settings:** keep files in the trash for 3, 7, 14 or 30 days.
+- **Download clients:** qBittorrent, Transmission, SABnzbd and NZBGet can be added in Settings. A stuck download now says why (nobody sharing it, the tracker no longer has it, every tracker failing, still fetching details, paused, or downloading slowly with time left; for usenet the client's own status or failure reason), with **Re-announce** for torrents before **Remove & try another**.
+- **Checks on import:** every 10 minutes Library Doctor looks at what Radarr/Sonarr just imported; a file that's broken, far too short, the wrong audio language or a program pretending to be a video gets a message straight away and a scan, so the card is there within minutes instead of after the night's scan.
+- **Release groups to avoid:** when one group keeps supplying files that had to be replaced (3+ files across 2+ titles in 180 days, and at least a quarter of that group's files in your library), Quality & Space offers **Block it in Radarr and Sonarr** (a "Library Doctor: groups to avoid" release profile).
+- **Edition labels:** each copy on a duplicate card shows its edition (Director's Cut, Extended, IMAX…). Editions are normalised (Directors Cut = Director's Cut, Extended Cut = Extended Edition) and also read from plain file names after the year; Remastered isn't an edition.
+- **Settings backup:** Settings → Backup downloads everything as a file (API keys included) and restores it, for moving to another server.
+- **Unraid template** in `extras/unraid`.
+
+**Fixed**
+- Saving Settings also wrote two of Library Doctor's internal caches (the recycle-bin index and the root-folder list) into `config.json`, which could grow it to hundreds of KB. Only real settings are saved now, and the next save shrinks the file.
+- qBittorrent 5's login answer (an empty reply instead of "Ok.") is accepted.
+
 ## 0.1.6 (beta)
 
 - **App Health update cards:** an "update available" card now shows the installed and new version and:
