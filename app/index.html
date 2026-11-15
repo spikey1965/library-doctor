@@ -404,12 +404,12 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const days = h.space.map(x => x.d), byDay = {};
     h.scans.forEach(sc => { const d = sc.t.slice(0, 10), o = byDay[d] || (byDay[d] = { issues: 0, secs: 0, n: 0, last: "" }); o.n++; if (sc.t >= o.last) { o.last = sc.t; o.issues = sc.issues; } o.secs = Math.max(o.secs, sc.secs); });
     const mm = s2 => s2 >= 3600 ? (s2 / 3600).toFixed(1) + " h" : s2 >= 60 ? Math.round(s2 / 60) + " min" : s2 + " s";
-    const sp = h.space.map(x => ({ d: x.d, v: x.total, tip: `<b>${esc(fmtD(x.d))}</b>${human(x.total)} saved so far${x.day ? " (+" + human(x.day) + " that day)" : ""}` }));
+    const sp = h.space.map(x => ({ d: x.d, v: x.total / 1073741824, tip: `<b>${esc(fmtD(x.d))}</b>${human(x.total)} saved so far${x.day ? " (+" + human(x.day) + " that day)" : ""}` }));
     const is = days.map(d => { const o = byDay[d]; return { d, v: o ? o.issues : 0, tip: o ? `<b>${esc(fmtD(d))}</b>${o.issues} to look at after the last scan (${o.n} scan${o.n === 1 ? "" : "s"})` : `<b>${esc(fmtD(d))}</b>No scan` }; });
     const du = days.map(d => { const o = byDay[d]; return { d, v: o ? o.secs : 0, tip: o ? `<b>${esc(fmtD(d))}</b>Longest scan: ${mm(o.secs)}` : `<b>${esc(fmtD(d))}</b>No scan` }; });
     const gained = h.space[h.space.length - 1].total - h.space[0].total, nsc = h.scans.length;
     const last = h.scans[h.scans.length - 1];
-    el.innerHTML = hchart("Space saved", `<b>${human(gained)}</b> in the last ${h.days} days · ${human(h.space[h.space.length - 1].total)} in total`, sp, "line", v => human(v)) +
+    el.innerHTML = hchart("Space saved", `<b>${human(gained)}</b> in the last ${h.days} days · ${human(h.space[h.space.length - 1].total)} in total`, sp, "line", v => v >= 1000 ? (v / 1024).toFixed(1) + " TB" : Math.round(v) + " GB") +
       hchart("Issues found", nsc ? `${last.issues} after the last scan · ${nsc} scan${nsc === 1 ? "" : "s"} in ${h.days} days` : "No scans in this period yet", is, "bar", v => String(Math.round(v))) +
       hchart("Scan time", nsc ? `longest scan each day · last one took ${mm(last.secs)}` : "", du, "bar", v => mm(v));
     HIST.drawn = key;

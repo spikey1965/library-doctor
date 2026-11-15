@@ -35,7 +35,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -3783,6 +3783,9 @@ def settings_save(new):
         if isinstance(e, dict) and e.get("url"): cfg[k] = _with_secrets(k, e)
     for k in LISTS:
         cfg[k] = [_with_secrets(k, e) for e in (new or {}).get(k) or [] if isinstance(e, dict) and e.get("url")]
+    # v0.1.4: keep settings this page doesn't edit (e.g. "qbit" from an older secrets.json) instead of dropping them
+    for k, v in S.items():
+        if k not in cfg and k not in SINGLE and k not in LISTS and k != "schedule": cfg[k] = v
     names = [a.get("name", "") for a in cfg["arrs"]]
     if any(not n for n in names) or len(set(names)) != len(names): return {"ok": False, "msg": "Each Radarr/Sonarr needs its own name."}
     for a in cfg["arrs"]:

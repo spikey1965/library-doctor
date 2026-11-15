@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4 (beta)
+
+- Saving Settings keeps any setting the page doesn't show (for example a qBittorrent entry in an older `secrets.json`), instead of dropping it.
+- History: the Space saved chart's scale now rounds to whole GB (it could top out at odd values like 465.7 GB).
+
 ## 0.1.3 (beta)
 
 - **More notifications:** besides Gotify, the nightly summary (and new Downloads problems) can go to Discord, Telegram, ntfy, any webhook (JSON POST) and email. Add them in Settings → Notifications, each with a Test button; every one you add gets the message.
