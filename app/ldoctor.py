@@ -35,7 +35,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.6"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -366,6 +366,74 @@ def version(md):
             "duration": md.get("duration") or 0, "height": int(md.get("height") or 0), "bitrate": md.get("bitrate") or 0,
             "parts": [x.get("file", "") for x in md.get("Part", []) if x.get("file")]}
 
+# v0.1.6: same title, different film. "The Fly (1958)" and "The Fly (1986)" have different TMDB ids, so Library Doctor never
+# groups them. But when Plex MISMATCHES a file (puts the 1958 file under the 1986 entry) the two look like "2 copies" of one
+# film. Before calling anything a duplicate, compare what the files themselves say: {tmdb-…}/{imdb-…} tags first, else the
+# (year) in the folder or file name. Different answers = different films: no clean-up, a "Plex mixed these up" card instead.
+_TMDB_TAG = re.compile(r"\{tmdb-(\d+)\}", re.I)
+_IMDB_TAG = re.compile(r"\{imdb-(tt\d+)\}", re.I)
+_YEAR_IN = re.compile(r"\((19\d\d|20\d\d)\)")
+
+def _film_id_year(path):
+    fid = None
+    for rx, k in ((_TMDB_TAG, "tmdb"), (_IMDB_TAG, "imdb")):
+        m = rx.search(path or "")
+        if m: fid = (k, m.group(1).lower()); break
+    yr = None
+    for part in (os.path.basename(os.path.dirname(path or "")), os.path.basename(path or "")):
+        m = _YEAR_IN.findall(part)
+        if m: yr = m[-1]; break
+    return fid, yr
+
+def different_films(vers):
+    """True when the copies' names say they're different films. For each pair: if both carry the same kind of id
+    ({tmdb-…}/{imdb-…}) the ids decide (same id = same film, whatever the years say); otherwise the (year) decides when
+    both have one. A name with neither can't prove anything, so it never splits a group."""
+    keys = [_film_id_year(v.get("path")) for v in vers]
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            (ia, ya), (ib, yb) = keys[i], keys[j]
+            if ia and ib and ia[0] == ib[0]:
+                if ia != ib: return True
+                continue
+            if ya and yb and ya != yb: return True
+    return False
+
+def _film_label(path):
+    folder = os.path.basename(os.path.dirname(path or "")) or os.path.basename(path or "")
+    return re.sub(r"\s*[\[{].*$", "", folder).strip() or folder
+
+def mismatch_card(lib, key_parts, title, vers, links, section, rk=None):
+    names = []
+    for v in vers:
+        n = _film_label(v["path"])
+        if n not in names: names.append(n)
+    for v in vers: v.update(action="keep", reason="A different film, not a copy")
+    return dict(id=iid("mismatch", lib, *key_parts), chk="dupes", sev="amb", title=title, library=lib,
+                detail={"kind": "mismatch", "text": "Plex has put different films together: %s." % " and ".join(names),
+                        "note": ("Nothing to delete: they're separate films and Plex matched one of them wrong. Split in Plex separates them "
+                                 "and Plex matches each one again by itself." if rk else
+                                 "Nothing to delete: they're separate films and Plex matched one of them wrong. Open it in Plex and use Fix Match on the wrong one."),
+                        "versions": vers, "section": section, "rk": rk, "confidence": "check", "fixes": ["split"] if rk else []},
+                links=links)
+
+def plex_split(issue_id):
+    with db() as c:
+        row = c.execute("SELECT * FROM issues WHERE id=? AND chk='dupes'", (issue_id,)).fetchone()
+    if not row: return {"ok": False, "error": "That card has gone; scan again."}
+    d = json.loads(row["detail"])
+    if d.get("kind") != "mismatch" or not d.get("rk"): return {"ok": False, "error": "Nothing to split here."}
+    p = S["plex"]
+    try:
+        http("%s/library/metadata/%s/split" % (p["url"].rstrip("/"), d["rk"]), {"X-Plex-Token": p["token"]}, method="PUT", timeout=30)
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "error": "Plex said %d %s." % (e.code, e.reason)}
+    except Exception as e:
+        return {"ok": False, "error": "Couldn't reach Plex (%s)." % getattr(e, "reason", e)}
+    with db() as c: c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+    event("dupes", "%s: asked Plex to split the films it had put together." % row["title"])
+    return {"ok": True, "text": "Plex is splitting them and matching each film again. They show as separate items in a minute or two."}
+
 # ---------------- recommendation ----------------
 def recommend(vers, tracked=()):
     """Mark each copy keep / remove / plex, with a plain reason. Returns the list (mutated in place)."""
@@ -598,6 +666,8 @@ def scan():
                                                "section": sec["key"], "refs": refs, "confidence": "fix",
                                                "versions": [dict(version(live[0]), action="keep", reason="The one real file")]},
                                        links=links))
+                elif len(live_d) > 1 and kind == "movie" and different_films([version(md) for md in live_d]):
+                    issues.append(mismatch_card(lib, (m["ratingKey"],), title, [version(md) for md in live_d], links, sec["key"], rk=m["ratingKey"]))
                 elif len(live_d) > 1:
                     vers = [version(md) for md in live_d]
                     if kind == "show":
@@ -622,6 +692,10 @@ def scan():
                         if kind == "show":
                             for a, it in aser: tr |= sonarr_tracked(a, it["id"])
                         vers += [version(md) for md in live]
+                    if kind == "movie" and different_films(vers):
+                        issues.append(mismatch_card(lib, ("guid", str(k)), title, vers,
+                                                    [plex_link(m["ratingKey"]) for m, *_ in lst] + [l for l in links if l["label"] != "Open in Plex"], sec["key"]))
+                        continue
                     recommend(vers, tr)
                     issues.append(dict(id=iid("dupe-guid", lib, k), chk="dupes", sev="amb", title=title, library=lib,
                                        detail={"text": "%d separate Plex items for the same %s." % (len(lst), "film" if kind == "movie" else "episode"),
@@ -631,6 +705,14 @@ def scan():
             issues += health_scan(sections, movies, series, arr_files, trashed)
         except Exception as e:
             log("file health check failed: %r" % e)
+        try:
+            issues += gaps_scan(series)                               # v0.1.6: season gaps
+        except Exception as e:
+            log("season gaps check failed: %r" % e)
+        try:
+            issues += lang_scan(sections, movies, series, trashed)    # v0.1.6: audio language
+        except Exception as e:
+            log("language check failed: %r" % e)
         try:
             issues += virus_scan(sections, movies, series, trashed, started)
         except Exception as e:
@@ -691,6 +773,8 @@ def scan():
                           (it["id"], sid, it["chk"], it["sev"], it["title"], it["library"], json.dumps(it["detail"]),
                            json.dumps(it["links"]), seen.get(it["id"], finished), finished))
         log("scan done: %d items, %d files, %d issues" % (n_items, n_files, len(issues)))
+        try: space_record()
+        except Exception as e: log("space record failed: %r" % e)
     except Exception as e:
         log("scan failed: %r" % e)
         with db() as c:
@@ -1426,6 +1510,7 @@ def health_fix(issue_id):
         if not row: return {"ok": False, "error": "That file isn't in the last scan any more. Scan again first."}
         d = json.loads(row["detail"]); src, ref = d["path"], d.get("ref")
         if not ref: return {"ok": False, "error": "Radarr/Sonarr doesn't manage this one, so there's nothing to fetch a new copy."}
+        if d.get("kind") == "lang": return lang_fix(issue_id, row, d)
         if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where it was, so nothing was moved. Scan again."}
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         moved, tids = [], []
@@ -1475,6 +1560,301 @@ def _health_search(done_id, ref):
     with db() as c:
         c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (status, note, now_iso(), done_id))
     log("health search %s: %s" % (done_id, note))
+
+# ---------------- season gaps (v0.1.6) ----------------
+# Missing Files covers files Plex lists that aren't on the disk. This covers episodes that never arrived at all: Sonarr has
+# them on its wanted list (monitored, aired) but no copy. One card per show, seasons as ranges ("Season 2: 6–10 · Season 3: 1, 7").
+def _ranges(nums):
+    nums = sorted(set(nums)); out = []; i = 0
+    while i < len(nums):
+        j = i
+        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1: j += 1
+        out.append(str(nums[i]) if i == j else "%d, %d" % (nums[i], nums[j]) if j == i + 1 else "%d\u2013%d" % (nums[i], nums[j]))
+        i = j + 1
+    return ", ".join(out)
+
+def gaps_scan(series):
+    out = []; now = datetime.now(timezone.utc)
+    searched = kv_get("gaps_searched") or {}
+    by_id = {}
+    for lst in series.values():
+        for a, sr in lst: by_id[(a["name"], sr["id"])] = (a, sr)
+    for a in [x for x in S.get("arrs", []) if x.get("kind") == "sonarr"]:
+        try: recs = arr(a, "/wanted/missing?" + urllib.parse.urlencode({"pageSize": 5000, "includeSeries": "true", "monitored": "true", "sortKey": "airDateUtc", "sortDirection": "ascending"})).get("records", [])
+        except Exception as e:
+            log("season gaps %s failed: %r" % (a["name"], e)); continue
+        shows = {}
+        for e in recs:
+            if not e.get("seasonNumber") or not e.get("airDateUtc"): continue          # no specials, nothing unaired
+            try:
+                if datetime.fromisoformat(e["airDateUtc"].replace("Z", "+00:00")) > now - timedelta(hours=12): continue
+            except ValueError: continue
+            shows.setdefault(e["seriesId"], {"series": e.get("series") or {}, "seasons": {}})["seasons"].setdefault(e["seasonNumber"], []).append(e)
+        for sid, v in shows.items():
+            a2, sr = by_id.get((a["name"], sid), (a, v["series"]))
+            stats = {x.get("seasonNumber"): (x.get("statistics") or {}) for x in (sr.get("seasons") or [])}
+            seasons, parts, total = [], [], 0
+            for sn, eps in sorted(v["seasons"].items()):
+                nums = [e.get("episodeNumber") or 0 for e in eps]
+                full = (stats.get(sn) or {}).get("episodeFileCount", 1) == 0
+                seasons.append({"s": sn, "eps": sorted(nums), "ids": [e["id"] for e in eps], "full": full})
+                parts.append("Season %d: %s" % (sn, ("all %d episodes" % len(nums)) if full else ("episode " if len(nums) == 1 else "episodes ") + _ranges(nums)))
+                total += len(nums)
+            cid = iid("gaps", a["name"], sid)
+            note = "Sonarr has them on its wanted list but never found a copy. Search for these asks it to look again now (whole seasons as season packs); anything it finds downloads in the night window."
+            if searched.get(cid): note += " Last searched from here %s." % searched[cid][:10]
+            out.append(dict(id=cid, chk="missing", sev="att", title=sr.get("title") or v["series"].get("title") or "Show %d" % sid, library=a["name"],
+                            detail={"kind": "gaps", "text": "%d episode%s never downloaded. %s." % (total, "" if total == 1 else "s", " · ".join(parts)),
+                                    "note": note, "count": total, "seasons": seasons, "ref": {"arr": a["name"], "series": sid}, "fixes": ["gapsearch"]},
+                            links=[arr_link(a2, sr, "series")] if sr.get("titleSlug") else []))
+    return out
+
+def gaps_fix(issue_id):
+    with db() as c:
+        row = c.execute("SELECT * FROM issues WHERE id=? AND chk='missing'", (issue_id,)).fetchone()
+    if not row: return {"ok": False, "error": "That card has gone; scan again."}
+    d = json.loads(row["detail"])
+    if d.get("kind") != "gaps": return {"ok": False, "error": "Nothing to search here."}
+    a = arr_by_name(d["ref"]["arr"]); sid = int(d["ref"]["series"]); n = 0
+    try:
+        eps = []
+        for x in d.get("seasons") or []:
+            if x.get("full"): arr(a, "/command", {"name": "SeasonSearch", "seriesId": sid, "seasonNumber": int(x["s"])}, "POST"); n += 1
+            else: eps += [int(i) for i in x.get("ids") or []]
+        if eps: arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": eps}, "POST"); n += 1
+    except Exception as e:
+        return {"ok": False, "error": "Couldn't ask %s to search (%s)." % (a["name"], getattr(e, "reason", e))}
+    sk = kv_get("gaps_searched") or {}; sk[issue_id] = now_iso(); kv_set("gaps_searched", sk)
+    event("missing", "%s: asked %s to search for the %d missing episode%s." % (row["title"], a["name"], d.get("count") or 0, "" if d.get("count") == 1 else "s"))
+    return {"ok": True, "text": "%s is searching for the %d missing episode%s of %s. Anything it finds downloads in the night window; the card goes when they've arrived." % (
+        a["name"], d.get("count") or 0, "" if d.get("count") == 1 else "s", row["title"])}
+
+# ---------------- audio language (v0.1.6) ----------------
+# A dubbed copy (an English film with only Russian audio) looks fine everywhere until you press play. Radarr and Sonarr
+# already read every file's audio languages (mediaInfo.audioLanguages) and know each title's original language, so:
+# flag a file only when its audio is clearly another language AND the title was made in your language. Untagged audio
+# ("und", which is how many English files are labelled) never counts, and foreign-language originals are never flagged.
+LANGS = {   # Settings name -> the codes Radarr/Sonarr/ffprobe use for it
+    "English": {"eng", "en", "english"}, "German": {"ger", "deu", "de", "german"}, "French": {"fre", "fra", "fr", "french"},
+    "Spanish": {"spa", "es", "spanish"}, "Italian": {"ita", "it", "italian"}, "Dutch": {"dut", "nld", "nl", "dutch"},
+    "Portuguese": {"por", "pt", "portuguese"}, "Polish": {"pol", "pl", "polish"}, "Swedish": {"swe", "sv", "swedish"},
+    "Danish": {"dan", "da", "danish"}, "Norwegian": {"nor", "nob", "nno", "no", "nb", "norwegian"}, "Finnish": {"fin", "fi", "finnish"},
+    "Czech": {"cze", "ces", "cs", "czech"}, "Hungarian": {"hun", "hu", "hungarian"}, "Greek": {"gre", "ell", "el", "greek"},
+    "Turkish": {"tur", "tr", "turkish"}, "Russian": {"rus", "ru", "russian"}, "Japanese": {"jpn", "ja", "japanese"},
+    "Korean": {"kor", "ko", "korean"}, "Chinese": {"chi", "zho", "zh", "chinese", "cmn", "yue"}, "Hindi": {"hin", "hi", "hindi"},
+    "Arabic": {"ara", "ar", "arabic"}, "Hebrew": {"heb", "he", "hebrew"}, "Thai": {"tha", "th", "thai"}, "Bengali": {"ben", "bn", "bengali"},
+    "Ukrainian": {"ukr", "uk", "ukrainian"}, "Romanian": {"rum", "ron", "ro", "romanian"}, "Vietnamese": {"vie", "vi", "vietnamese"},
+    "Indonesian": {"ind", "id", "indonesian"}, "Tagalog": {"tgl", "tl", "fil", "tagalog", "filipino"}, "Tongan": {"ton", "to", "tongan"},
+}
+LANG_UNKNOWN = {"", "und", "unk", "unknown", "zxx", "mul", "mis", "qaa", "none"}
+_LANG_NAME = {c: n for n, cs in LANGS.items() for c in cs}
+
+def pref_language():
+    v = S.get("language")
+    if v is None: return "English"                           # default for everyone who never touched the setting
+    return v if v in LANGS else ""                           # "" = check switched off
+
+def _audio(mi):
+    return [t.strip().lower() for t in re.split(r"[/,]", (mi or {}).get("audioLanguages") or "") if t.strip()]
+
+def _wrong_audio(codes, pref):
+    """True when the audio is clearly in other languages only (nothing in pref, at least one real language tag)."""
+    want = LANGS.get(pref) or set()
+    real = [c for c in codes if c not in LANG_UNKNOWN]
+    return bool(real) and not any(c in want for c in codes)
+
+def _lang_names(codes):
+    out = []
+    for c in codes:
+        if c in LANG_UNKNOWN: continue
+        n = _LANG_NAME.get(c, c)
+        if n not in out: out.append(n)
+    return " and ".join(out) or "unknown"
+
+def _section_for(sections, path):
+    best = None
+    for sec in sections:
+        for l in sec.get("Location", []):
+            r = l["path"].rstrip("/") + "/"
+            if path.startswith(r) and (best is None or len(r) > best[0]): best = (len(r), sec)
+    return best[1] if best else None
+
+def lang_scan(sections, movies, series, trashed):
+    pref = pref_language()
+    if not pref: return []
+    out, seen = [], set()
+    STATE["step"] = "Checking audio languages"
+    for lst in movies.values():
+        for a, it in lst:
+            if (a["name"], it["id"]) in seen: continue
+            seen.add((a["name"], it["id"]))
+            f = it.get("movieFile") or {}
+            p = f.get("path")
+            if not p or p in trashed or not os.path.isfile(p): continue
+            if ((it.get("originalLanguage") or {}).get("name") or "") != pref: continue
+            codes = _audio(f.get("mediaInfo"))
+            if not _wrong_audio(codes, pref): continue
+            sec = _section_for(sections, p)
+            title = "%s (%s)" % (it.get("title"), it.get("year", "?"))
+            out.append(dict(id=iid("lang", p), chk="health", sev="amb", title=title, library=(sec or {}).get("title") or a["name"],
+                            detail={"kind": "lang", "text": "The only audio is %s, but it's %s film." % (_lang_names(codes), "an " + pref if pref[0] in "AEIOU" else "a " + pref),
+                                    "note": "Usually a dubbed copy. Labels are occasionally wrong, so play a minute if you're not sure. Replace moves it to the trash, blocks that release in %s (when it still has the download in its history) and asks it for another copy." % a["name"],
+                                    "path": p, "size": f.get("size") or os.path.getsize(p), "audio": codes, "lang": pref,
+                                    "files": [{"path": p, "size": f.get("size") or 0}],
+                                    "ref": {"arr": a["name"], "kind": "movie", "id": it["id"]}, "section": (sec or {}).get("key"),
+                                    "confidence": "check", "fixes": ["replace"]},
+                            links=[arr_link(a, it, "movie")]))
+    for lst in series.values():
+        for a, sr in lst:
+            if (a["name"], "s", sr["id"]) in seen: continue
+            seen.add((a["name"], "s", sr["id"]))
+            if ((sr.get("originalLanguage") or {}).get("name") or "") != pref: continue
+            if not (sr.get("statistics") or {}).get("episodeFileCount"): continue
+            try: files = arr(a, "/episodefile?seriesId=%d" % sr["id"])
+            except Exception: continue
+            bad = [f for f in files if f.get("path") and f["path"] not in trashed and _wrong_audio(_audio(f.get("mediaInfo")), pref) and os.path.isfile(f["path"])]
+            if not bad: continue
+            try: eps = arr(a, "/episode?seriesId=%d" % sr["id"])
+            except Exception: eps = []
+            by_file = {}
+            for e in eps:
+                if e.get("episodeFileId"): by_file.setdefault(e["episodeFileId"], []).append(e)
+            seasons = {}
+            for f in bad: seasons.setdefault(f.get("seasonNumber", 0), []).append(f)
+            for sn, fl in sorted(seasons.items()):
+                items, ids, langs = [], [], []
+                for f in sorted(fl, key=lambda x: x.get("relativePath") or ""):
+                    es = sorted(by_file.get(f["id"], []), key=lambda e: e.get("episodeNumber") or 0)
+                    ids += [e["id"] for e in es]
+                    codes = _audio(f.get("mediaInfo"))
+                    for n in _lang_names(codes).split(" and "):
+                        if n not in langs: langs.append(n)
+                    items.append({"path": f["path"], "size": f.get("size") or 0, "se": "S%02d" % sn + "".join("E%02d" % (e.get("episodeNumber") or 0) for e in es), "audio": "/".join(codes)})
+                sec = _section_for(sections, fl[0]["path"])
+                n = len(items)
+                out.append(dict(id=iid("lang", a["name"], sr["id"], sn), chk="health", sev="amb",
+                                title="%s Season %d" % (sr.get("title"), sn) if n > 1 else "%s %s" % (sr.get("title"), items[0]["se"]),
+                                library=(sec or {}).get("title") or a["name"],
+                                detail={"kind": "lang", "text": ("%d episodes have only %s audio" % (n, " and ".join(langs)) if n > 1 else "The only audio is %s" % " and ".join(langs)) + ", but it's %s show." % ("an " + pref if pref[0] in "AEIOU" else "a " + pref),
+                                        "note": "Usually a dubbed release. Labels are occasionally wrong, so play a minute of one if you're not sure. Replace moves %s to the trash, blocks %s in %s (when it still has the download in its history) and asks it for other copies." % ("them" if n > 1 else "it", "those releases" if n > 1 else "that release", a["name"]),
+                                        "path": items[0]["path"], "size": sum(x["size"] for x in items), "lang": pref, "files": items, "count": n,
+                                        "ref": {"arr": a["name"], "kind": "episodes", "series": sr["id"], "ids": ids}, "section": (sec or {}).get("key"),
+                                        "confidence": "check", "fixes": ["replace"] if ids else []},
+                                links=[arr_link(a, sr, "series")]))
+    return out
+
+def lang_fix(issue_id, row, d):
+    ref = d["ref"]; stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    moved, tids, folders = [], [], set()
+    for x in d.get("files") or []:
+        src = x["path"]
+        if not safe_media_path(src) or not os.path.isfile(src): continue
+        for p, reason in [(src, "Wrong audio language (replaced)")] + [(y, "Leftover side file") for y in health_side_files(src)]:
+            dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(p), MEDIA_ROOT))
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(p); move_file(p, dst)
+                with db() as c:
+                    tids.append(c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
+                                          (issue_id, row["title"], p, dst, size, reason, now_iso())).lastrowid)
+                if p == src: moved.append(p); folders.add(os.path.dirname(p))
+            except Exception as e:
+                if p == src: log("lang move failed %s: %r" % (p, e))
+    if not moved: return {"ok": False, "error": "The files aren't where they were, so nothing was moved. Scan again."}
+    for fo in folders: plex_refresh_folder(d.get("section"), fo)
+    with db() as c:
+        done_id = c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk, ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (issue_id, row["title"], row["library"], "", json.dumps(moved), json.dumps(tids), row["links"], now_iso(),
+                             "checking", "Asking %s for a copy in %s…" % (ref["arr"], d.get("lang") or "your language"), "health",
+                             json.dumps(dict(dict(ref, kind="movie") if ref["kind"] == "movie" else
+                                        {"arr": ref["arr"], "kind": "episode", "id": ref["ids"][0], "series": ref["series"]} if len(ref.get("ids") or []) == 1 else
+                                        {"arr": ref["arr"], "kind": "episodes", "series": ref["series"], "ids": ref.get("ids") or []}, lang=d.get("lang") or pref_language())))).lastrowid
+        c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+    event("health", "%s: moved %d file%s with the wrong audio language to the trash and asked %s for another copy." % (row["title"], len(moved), "" if len(moved) == 1 else "s", ref["arr"]))
+    threading.Thread(target=_lang_search, args=(done_id, ref, moved), daemon=True).start()
+    return {"ok": True}
+
+def _lang_block(a, ref, moved):
+    """Block the release(s) the wrong file came from: find the import in the arr's history, then mark its grab failed
+    (that's how Radarr/Sonarr blocklist a release). Best effort: returns how many were blocked."""
+    try:
+        if ref["kind"] == "movie": hist = arr(a, "/history/movie?movieId=%d" % int(ref["id"]))
+        else: hist = arr(a, "/history/series?seriesId=%d" % int(ref["series"]))
+    except Exception as e:
+        log("lang history failed: %r" % e); return 0
+    hist = hist if isinstance(hist, list) else hist.get("records", [])
+    names = {os.path.basename(p) for p in moved}
+    dl = {h.get("downloadId") for h in hist if h.get("eventType") in ("downloadFolderImported", "episodeFileImported", "movieFileImported")
+          and h.get("downloadId") and os.path.basename(((h.get("data") or {}).get("importedPath") or "").replace("\\", "/")) in names}
+    n = 0
+    for h in hist:
+        if h.get("eventType") == "grabbed" and h.get("downloadId") in dl:
+            try: arr(a, "/history/failed/%d" % h["id"], {}, "POST"); n += 1; dl.discard(h["downloadId"])
+            except Exception as e: log("lang blocklist failed: %r" % e)
+    return n
+
+def _lang_search(done_id, ref, moved):
+    status, note = "warn", ""
+    try:
+        a = arr_by_name(ref["arr"])
+        blocked = _lang_block(a, ref, moved)
+        if ref["kind"] == "movie":
+            arr(a, "/command", {"name": "RescanMovie", "movieId": int(ref["id"])}, "POST")
+        else:
+            arr(a, "/command", {"name": "RescanSeries", "seriesId": int(ref["series"])}, "POST")
+        time.sleep(20)
+        if ref["kind"] == "movie": arr(a, "/command", {"name": "MoviesSearch", "movieIds": [int(ref["id"])]}, "POST")
+        else: arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": [int(i) for i in ref.get("ids") or []]}, "POST")
+        status = "waiting"
+        note = "%s is searching for another copy%s. It downloads in the night window and shows up in Plex by itself." % (
+            a["name"], " (the old release is blocked)" if blocked else "")
+    except Exception as e:
+        note = "Moved to the trash, but couldn't ask %s to search: %s" % (ref.get("arr"), e)
+    with db() as c:
+        c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (status, note, now_iso(), done_id))
+    log("lang search %s: %s" % (done_id, note))
+
+# ---------------- space forecast (v0.1.6) ----------------
+# One free-space reading per day (the latest of the day wins). After a week of readings, a straight line through "used"
+# gives how fast the disk fills and roughly when it's full. Several disks/datasets under the media folder are added up.
+SPACE_MIN_DAYS = 7
+
+def space_now():
+    seen, free, total = set(), 0, 0
+    for p in [MEDIA_ROOT] + split_mounts():
+        try: st = os.statvfs(p)
+        except OSError: continue
+        k = (st.f_fsid, st.f_blocks)
+        if k in seen: continue
+        seen.add(k); free += st.f_bavail * st.f_frsize; total += st.f_blocks * st.f_frsize
+    return free, total
+
+def space_record():
+    free, total = space_now()
+    if not total: return
+    log_ = [x for x in (kv_get("space_log") or []) if isinstance(x, dict)]
+    d = datetime.now().date().isoformat()
+    log_ = [x for x in log_ if x.get("d") != d] + [{"d": d, "free": free, "total": total}]
+    kv_set("space_log", log_[-400:])
+
+def space_forecast():
+    free, total = space_now()
+    pts = [x for x in (kv_get("space_log") or []) if isinstance(x, dict) and x.get("total")]
+    out = {"free": free, "total": total, "readings": len(pts), "need": SPACE_MIN_DAYS, "rate": None, "days_left": None}
+    try: out["possible"] = stats()["possible"]
+    except Exception: out["possible"] = 0
+    if len(pts) < SPACE_MIN_DAYS: return out
+    pts = pts[-90:]
+    d0 = datetime.fromisoformat(pts[0]["d"])
+    xs = [(datetime.fromisoformat(x["d"]) - d0).days for x in pts]
+    ys = [x["total"] - x["free"] for x in pts]
+    n = len(xs); mx, my = sum(xs) / n, sum(ys) / n
+    den = sum((x - mx) ** 2 for x in xs)
+    if den <= 0: return out
+    rate = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den          # bytes per day (+ = filling up)
+    out["rate"] = rate
+    out["days"] = xs[-1]
+    if rate > 0: out["days_left"] = int(free / rate)
+    return out
 
 # ---------------- subtitles (stage 3) ----------------
 SUB_EXTS = (".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup")
@@ -1897,6 +2277,31 @@ def followup():
             if not r.get("ref"):
                 with db() as c: c.execute("UPDATE done SET ref=? WHERE id=?", (json.dumps(ref), r["id"]))
             a = arr_by_name(ref["arr"]); f = None
+            age = (datetime.now() - datetime.fromisoformat(r["at"])).total_seconds() / 86400
+            if ref["kind"] == "episodes":                     # v0.1.6: a whole season replaced (audio language): wait for ALL of them
+                want = {int(i) for i in ref.get("ids") or []}
+                eps = [e for e in arr(a, "/episode?seriesId=%d" % int(ref["series"])) if e.get("id") in want]
+                files = {x["id"]: x for x in arr(a, "/episodefile?seriesId=%d" % int(ref["series"]))}
+                got = [files[e["episodeFileId"]] for e in eps if e.get("hasFile") and e.get("episodeFileId") in files
+                       and files[e["episodeFileId"]].get("path") not in moved and os.path.exists(files[e["episodeFileId"]].get("path") or "")]
+                n, k = len(want), len({e["id"] for e in eps if e.get("hasFile") and e.get("episodeFileId") in files and files[e["episodeFileId"]].get("path") not in moved})
+                qs = sorted({((x.get("quality") or {}).get("quality") or {}).get("name", "") for x in got} - {""})
+                wrong = [x for x in got if ref.get("lang") and _wrong_audio(_audio(x.get("mediaInfo")), ref["lang"])]
+                if n and k >= n and wrong:
+                    st, note = "warn", "All %d new copies arrived, but %d still %s %s audio only (%s). Try Interactive Search in %s and pick a release in %s." % (
+                        n, len(wrong), "has" if len(wrong) == 1 else "have", _lang_names(_audio(wrong[0].get("mediaInfo"))),
+                        ", ".join(os.path.basename(x.get("path") or "")[:60] for x in wrong[:3]) + (" …" if len(wrong) > 3 else ""), a["name"], ref["lang"])
+                    event("health", "%s: %s" % (r["title"], note))
+                elif n and k >= n:
+                    st, note = "ok", "\u2713 All %d new copies arrived (%s%s)." % (n, ", ".join(qs) + ", " if qs else "", human(sum(x.get("size") or 0 for x in got)))
+                    event("health", "%s: %s" % (r["title"], note))
+                elif age > FOLLOW_DAYS:
+                    st, note = "warn", "%d of %d new copies after %d days. %s can't find the rest; try Interactive Search on its page." % (k, n, FOLLOW_DAYS, a["name"])
+                    event("health", "%s: %s" % (r["title"], note))
+                else:
+                    st, note = "waiting", "%d of %d new copies arrived so far; waiting for %s. Checked %s." % (k, n, a["name"], datetime.now().strftime("%a %H:%M"))
+                with db() as c: c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (st, note, now_iso(), r["id"]))
+                continue
             if ref["kind"] == "movie":
                 m = arr(a, "/movie/%d" % int(ref["id"]))
                 f = m.get("movieFile") if m.get("hasFile") else None
@@ -1909,6 +2314,9 @@ def followup():
                 q = ((f.get("quality") or {}).get("quality") or {}).get("name", "")
                 if size < BROKEN_BYTES:
                     st, note = "warn", "A new copy arrived, but it's only %s, so it looks broken too: %s" % (human(size), os.path.basename(f["path"]))
+                elif ref.get("lang") and _wrong_audio(_audio(f.get("mediaInfo")), ref["lang"]):    # v0.1.6: dubbed again?
+                    st, note = "warn", "A new copy arrived, but its audio is %s again: %s. Try Interactive Search in %s and pick a release in %s." % (
+                        _lang_names(_audio(f.get("mediaInfo"))), os.path.basename(f["path"]), a["name"], ref["lang"])
                 else:
                     st, note = "ok", "\u2713 New copy arrived: %s (%s%s)." % (os.path.basename(f["path"]), q + ", " if q else "", human(size))
                 with db() as c: c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (st, note, now_iso(), r["id"]))
@@ -1926,6 +2334,11 @@ def followup():
             else:
                 with db() as c: c.execute("UPDATE done SET status='waiting', note=?, checked_at=? WHERE id=?",
                                           ("Waiting for %s to download a new copy (usually overnight). Checked %s." % (a["name"], datetime.now().strftime("%a %H:%M")), now_iso(), r["id"]))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:                                 # v0.1.6: the film/show was removed from Radarr/Sonarr: nothing to wait for
+                with db() as c: c.execute("UPDATE done SET status='ok', note=?, checked_at=? WHERE id=?",
+                                          ("Removed from %s, so there's no new copy to wait for." % (json.loads(r["ref"] or "{}").get("arr") or "Radarr/Sonarr"), now_iso(), r["id"]))
+            else: log("followup %s failed: %r" % (r["id"], e))
         except Exception as e:
             log("followup %s failed: %r" % (r["id"], e))
     smaller_followup()
@@ -2068,6 +2481,12 @@ def nightly_summary():
     if arrived: lines.append("**Replaced and re-downloaded:** " + ", ".join(d["title"] for d in arrived[:6]) + (" and %d more" % (len(arrived) - 6) if len(arrived) > 6 else ""))
     if failed: lines.append("**Still no good copy:** " + ", ".join(d["title"] for d in failed[:6]) + (" and %d more" % (len(failed) - 6) if len(failed) > 6 else ""))
     if smaller: lines.append("**Smaller now:** " + ", ".join(x["title"] for x in smaller[:6]))
+    try:
+        sf = space_forecast()
+        if sf.get("days_left") is not None and sf["days_left"] < 60:
+            lines.append("**Disk space:** %s free, filling by about %s a day, so it's full in about %d days." % (human(sf["free"]), human(sf["rate"]), sf["days_left"]))
+            prio = max(prio, 5 if sf["days_left"] < 14 else prio)
+    except Exception as e: log("space summary failed: %r" % e)
     if soon: lines.append("**Trash:** %d item%s (%s) delete%s for good in the next 24 hours (Library Doctor's trash and the recycle bins). Review them in the Trash screen." % (len(soon), "" if len(soon) == 1 else "s", human(sum(t["size"] or 0 for t in soon)), "s" if len(soon) == 1 else ""))
     if not lines:
         log("nightly summary: nothing new, no message sent"); kv_set("gotify_last_summary", now_iso()); return {"ok": True, "sent": False}
@@ -2100,6 +2519,8 @@ def nightly():
             except Exception as e: log("followup failed: %r" % e)
         elif now.minute == 37 and last_queue != now.hour:      # v33: Downloads cards hourly; 07:37 (night window over) tells Gotify
             last_queue = now.hour
+            try: space_record()                                       # v0.1.6: one free-space reading per day (latest wins)
+            except Exception as e: log("space record failed: %r" % e)
             try: queue_refresh(notify=(now.hour == QUEUE_NOTIFY_HOUR))
             except Exception as e: log("queue refresh failed: %r" % e)
             try:
@@ -3304,7 +3725,7 @@ def tdarr_missed_scan(trashed, skip):
 # Every app keeps its own list of warnings (Radarr/Sonarr/Prowlarr Health page, Bazarr health, Tdarr nodes) that you only
 # see when you open it. One card per app + warning source; "update available" is a low-key card; an app that doesn't
 # answer is a problem in itself. Refreshed with every scan and hourly with the Downloads cards.
-def _health_card(app, source, typ, msg, wiki, public, page):
+def _health_card(app, source, typ, msg, wiki, public, page, upd_info=None):
     upd = source == "UpdateCheck"
     sev = "bad" if typ == "error" or source == "unreachable" else "att"
     title = "%s: %s" % (app, "update available" if upd else "not answering" if source == "unreachable" else msg[:90] + ("…" if len(msg) > 90 else ""))
@@ -3313,23 +3734,74 @@ def _health_card(app, source, typ, msg, wiki, public, page):
             "This is %s's own warning, shown here so you don't have to open every app." % app)
     links = [{"label": "Open in %s" % app, "url": public.rstrip("/") + page}] if public else []
     if wiki: links.append({"label": "What does this mean?", "url": wiki})
-    return dict(id=iid("apps", app, source), chk="apps", sev=sev, title=title, library=app,
-                detail={"kind": "update" if upd else "health", "source": source, "text": msg, "note": note, "fixes": []}, links=links)
+    detail = {"kind": "update" if upd else "health", "source": source, "text": msg, "note": note, "fixes": []}
+    if upd and upd_info:
+        detail.update(upd_info)
+        detail["fixes"] = (["selfupdate"] if upd_info.get("self") else ["howto"]) + ["skipver"]
+        if upd_info.get("test"):
+            title = "%s: test version %s available" % (app, upd_info.get("new") or "")
+            detail["note"] = ("%s is set to its %s branch, so it offers test (beta) versions. You're on %s. "
+                              "To only be offered finished versions, set Settings → General → Updates → Branch to master in %s, "
+                              "or press Skip this version." % (app, upd_info.get("branch"), upd_info.get("cur") or "?", app))
+        elif not upd_info.get("self"):
+            detail["note"] = ("%s runs in Docker, so it can't update itself: pull the new image (How to update shows the commands). "
+                              "Nothing is broken meanwhile." % app)
+        else:
+            detail["note"] = "%s can update itself: Update now downloads it and restarts %s (about a minute)." % (app, app)
+    return dict(id=iid("apps", app, source), chk="apps", sev=sev, title=title, library=app, detail=detail, links=links)
+
+# v0.1.6: what an "update available" card needs: current/new version, branch, and whether the app can update itself
+# (only when it isn't in Docker and its update mechanism is the built-in one or a script).
+_UPD_RE = re.compile(r"v?(\d+(?:\.\d+){1,3})")
+def _update_info(kind, name, url, key, ver, msg):
+    info = {"ref": {"kind": kind, "name": name}}
+    try:
+        st = http(url.rstrip("/") + "/api/%s/system/status" % ver, {"X-Api-Key": key}, timeout=20)
+        info["cur"] = st.get("version"); info["branch"] = st.get("branch") or ""
+        mech = (st.get("packageUpdateMechanism") or "").lower()
+        info["docker"] = bool(st.get("isDocker")) or mech == "docker"
+        info["self"] = not info["docker"] and mech in ("builtin", "script")
+    except Exception:
+        info.update(docker=True, self=False)
+    try:
+        ups = http(url.rstrip("/") + "/api/%s/update" % ver, {"X-Api-Key": key}, timeout=20)
+        top = next((u for u in ups if u.get("latest")), ups[0] if ups else None) if isinstance(ups, list) else None
+        if top: info["new"] = top.get("version"); info["branch"] = top.get("branch") or info.get("branch", "")
+    except Exception:
+        pass
+    if not info.get("new"):
+        m = _UPD_RE.search(msg or ""); info["new"] = m.group(1) if m else ""
+    info["test"] = (info.get("branch") or "").lower() not in ("", "master", "main", "stable")
+    svc = re.sub(r"[^a-z0-9_-]", "", name.lower()) or "app"
+    info["howto"] = ["docker compose pull %s" % svc, "docker compose up -d %s" % svc]
+    return info
+
+def _skipped(app, new):
+    return bool(new) and (kv_get("apps_skip") or {}).get(app) == new
 
 def apps_cards():
     out = []
-    def arr_like(name, url, key, public, ver, page="/system/status"):
+    def arr_like(name, url, key, public, ver, page="/system/status", kind="arr"):
         try:
             items = http(url.rstrip("/") + "/api/%s/health" % ver, {"X-Api-Key": key}, timeout=20)
         except Exception as e:
             out.append(_health_card(name, "unreachable", "error", "Library Doctor couldn't reach %s (%s)." % (name, getattr(e, "reason", e)), "", public, page)); return
+        if kind == "arr":
+            a_cfg = next((x for x in S.get("arrs", []) if x["name"] == name), None)
+            if a_cfg:
+                try: out.extend(indexer_cards(a_cfg, items))
+                except Exception as e: log("indexer advice %s failed: %r" % (name, e))
         for h in items if isinstance(items, list) else []:
             if (h.get("type") or "").lower() in ("ok", "notice"): continue
-            out.append(_health_card(name, h.get("source") or "health", (h.get("type") or "warning").lower(), h.get("message") or "", h.get("wikiUrl") or "", public, page))
+            src, info = h.get("source") or "health", None
+            if src == "UpdateCheck":
+                info = _update_info(kind, name, url, key, ver, h.get("message") or "")
+                if _skipped(name, info.get("new")): continue
+            out.append(_health_card(name, src, (h.get("type") or "warning").lower(), h.get("message") or "", h.get("wikiUrl") or "", public, page, info))
     for a in S.get("arrs", []):
         arr_like(a["name"], a["url"], a.get("key", ""), a.get("public") or a["url"], "v3")
     pr = S.get("prowlarr") or {}
-    if pr.get("url"): arr_like(pr.get("name") or "Prowlarr", pr["url"], pr.get("key", ""), pr.get("public") or pr["url"], "v1")
+    if pr.get("url"): arr_like(pr.get("name") or "Prowlarr", pr["url"], pr.get("key", ""), pr.get("public") or pr["url"], "v1", kind="prowlarr")
     for b in S.get("bazarr", []) or []:
         try:
             r = http(b["url"].rstrip("/") + "/api/system/health", {"X-API-KEY": b.get("key", "")}, timeout=20)
@@ -3365,6 +3837,101 @@ def apps_refresh():
             c.execute("INSERT OR REPLACE INTO issues VALUES (?,?,?,?,?,?,?,?,?,?)", (it["id"], sid, "apps", it["sev"], it["title"], it["library"],
                       json.dumps(it["detail"]), json.dumps(it["links"]), seen.get(it["id"], now), now))
     return cards, [it for it in cards if it["id"] not in seen]
+
+# v0.1.6: indexers that keep failing and never find anything. Radarr/Sonarr say "Indexers unavailable due to failures: A, B"
+# on their Health page; every hourly check remembers who was named (kv idx_fail), and the arr's own grab history says
+# whether an indexer ever found anything you downloaded. Failing again and again + nothing grabbed in 90 days = a card
+# offering to turn it off in that app (it stays configured, just switched off; turn it back on there any time).
+IDX_DAYS, IDX_MIN_FAILS = 90, 3
+_IDX_RE = re.compile(r"due to failures(?: for more than \d+ hours)?:\s*(.+)$", re.I)
+
+def _failing_names(items):
+    out = set()
+    for h in items if isinstance(items, list) else []:
+        if (h.get("source") or "") not in ("IndexerStatusCheck", "IndexerLongTermStatusCheck"): continue
+        m = _IDX_RE.search(h.get("message") or "")
+        if m: out |= {x.strip() for x in m.group(1).split(", ") if x.strip()}
+    return out
+
+def indexer_cards(a, health_items):
+    now = datetime.now(); log_ = kv_get("idx_fail") or {}
+    hour = now.strftime("%Y-%m-%dT%H")
+    week = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H")
+    cur = _failing_names(health_items)
+    for n in cur:
+        k = "%s|%s" % (a["name"], n); hs = [x for x in log_.get(k, []) if x >= week]
+        if hour not in hs: hs.append(hour)
+        log_[k] = hs
+    for k in list(log_):
+        log_[k] = [x for x in log_[k] if x >= week]
+        if not log_[k]: del log_[k]
+    kv_set("idx_fail", log_)
+    fails = {k.split("|", 1)[1]: len(v) for k, v in log_.items() if k.split("|", 1)[0] == a["name"]}
+    cand = {n: c for n, c in fails.items() if c >= IDX_MIN_FAILS}
+    if not cand: return []
+    try:
+        idx = {i["name"]: i for i in arr(a, "/indexer")}
+        since = (datetime.now(timezone.utc) - timedelta(days=IDX_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        grabs = arr(a, "/history/since?" + urllib.parse.urlencode({"date": since, "eventType": "grabbed"}))
+    except Exception as e:
+        log("indexer check %s failed: %r" % (a["name"], e)); return []
+    used = {}
+    for g in grabs if isinstance(grabs, list) else []:
+        n = (g.get("data") or {}).get("indexer") or ""
+        used[n] = used.get(n, 0) + 1
+    out = []
+    for n, c in sorted(cand.items()):
+        i = idx.get(n)
+        if not i or not (i.get("enableRss") or i.get("enableAutomaticSearch") or i.get("enableInteractiveSearch")): continue
+        if used.get(n): continue
+        out.append(dict(id=iid("apps", a["name"], "indexer", n), chk="apps", sev="att", library=a["name"],
+                        title="%s: %s keeps failing and never finds anything" % (a["name"], n),
+                        detail={"kind": "indexer", "source": "indexer", "indexer": n, "indexer_id": i["id"], "fails": c,
+                                "text": "%s named it as failing in %d hourly check%s over the last 7 days, and nothing you downloaded in the last %d days came from it." % (
+                                    a["name"], c, "" if c == 1 else "s", IDX_DAYS),
+                                "note": "Turning it off stops the warnings and the wasted searches. It stays set up in %s, so you can switch it back on there any time." % a["name"],
+                                "ref": {"kind": "arr", "name": a["name"]}, "fixes": ["idxoff"]},
+                        links=[{"label": "Open indexers in %s" % a["name"], "url": (a.get("public") or a["url"]).rstrip("/") + "/settings/indexers"}]))
+    return out
+
+def apps_fix(issue_id, how):
+    with db() as c:
+        row = c.execute("SELECT * FROM issues WHERE id=? AND chk='apps'", (issue_id,)).fetchone()
+    if not row: return {"ok": False, "error": "That card has gone; press Scan now to refresh."}
+    d = json.loads(row["detail"]); ref = d.get("ref") or {}; app = ref.get("name") or row["library"]
+    if how == "skipver":
+        sk = kv_get("apps_skip") or {}; sk[app] = d.get("new") or ""; kv_set("apps_skip", sk)
+        with db() as c: c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+        event("apps", "Skipping %s %s; Library Doctor tells you again when a newer version comes out." % (app, d.get("new") or ""))
+        return {"ok": True, "text": "Skipped %s %s. You'll see a card again when a newer version comes out." % (app, d.get("new") or "")}
+    if how == "idxoff":
+        a = next((x for x in S.get("arrs", []) if x["name"] == app), None)
+        if not a: return {"ok": False, "error": "%s isn't in Settings any more." % app}
+        try:
+            i = arr(a, "/indexer/%d" % int(d["indexer_id"]))
+            i.update(enableRss=False, enableAutomaticSearch=False, enableInteractiveSearch=False)
+            arr(a, "/indexer/%d?forceSave=true" % int(d["indexer_id"]), i, "PUT")
+        except Exception as e:
+            return {"ok": False, "error": "Couldn't change it in %s (%s)." % (app, getattr(e, "reason", e))}
+        with db() as c: c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+        event("apps", "Turned off %s in %s (it kept failing and never found anything)." % (d.get("indexer"), app))
+        return {"ok": True, "text": "%s is switched off in %s. It's still set up there if you ever want it back." % (d.get("indexer"), app)}
+    if how == "selfupdate":
+        if not d.get("self"): return {"ok": False, "error": "%s runs in Docker, so it can't update itself. Use How to update." % app}
+        if ref.get("kind") == "prowlarr":
+            cfg, ver = S.get("prowlarr") or {}, "v1"
+        else:
+            cfg, ver = next((a for a in S.get("arrs", []) if a["name"] == app), {}), "v3"
+        if not cfg.get("url"): return {"ok": False, "error": "%s isn't in Settings any more." % app}
+        try:
+            http(cfg["url"].rstrip("/") + "/api/%s/command" % ver, {"X-Api-Key": cfg.get("key", "")}, data={"name": "ApplicationUpdate"}, method="POST", timeout=30)
+        except urllib.error.HTTPError as e:
+            return {"ok": False, "error": "%s said %d %s." % (app, e.code, e.reason)}
+        except Exception as e:
+            return {"ok": False, "error": "Couldn't reach %s (%s)." % (app, getattr(e, "reason", e))}
+        event("apps", "Asked %s to update itself to %s." % (app, d.get("new") or "the new version"))
+        return {"ok": True, "text": "%s is downloading %s and restarts by itself in a minute or two. The card goes on the next check." % (app, d.get("new") or "the update")}
+    return {"ok": False, "error": "Unknown fix."}
 
 # ---------------- Downloads: Radarr/Sonarr queues (v33) ----------------
 # 11-15: 4 better copies sat "import blocked" for 12 h, a dead torrent never started and a 4-month-old download no arr knew
@@ -3750,7 +4317,8 @@ def settings_public():
     for k in LISTS: out[k] = [red(e, i) for i, e in enumerate(S.get(k) or [])]
     h, mi, days = sched()
     out["schedule"] = {"hour": h, "minute": mi, "days": days}
-    return {"settings": out, "configured": configured(), "media_root": MEDIA_ROOT}
+    out["language"] = pref_language()
+    return {"settings": out, "configured": configured(), "media_root": MEDIA_ROOT, "languages": sorted(LANGS)}
 
 def _with_secrets(kind, e):
     """Fill blank secret fields of an edited entry from what's saved (matched by _i for lists)."""
@@ -3891,6 +4459,12 @@ def settings_save(new):
             return {"ok": False, "msg": "The scan time isn't valid."}
     elif S.get("schedule"):
         cfg["schedule"] = S["schedule"]                      # a save without the schedule keeps the old one
+    if "language" in (new or {}):                            # v0.1.6: audio language check ("" = off)
+        lg = str(new.get("language") or "")
+        if lg and lg not in LANGS: return {"ok": False, "msg": "Pick a language from the list."}
+        cfg["language"] = lg
+    elif "language" in S:
+        cfg["language"] = S["language"]
     for k in SINGLE:
         e = (new or {}).get(k)
         if isinstance(e, dict) and k in NOTIFY_DEFAULT_URL and not e.get("url"): e["url"] = NOTIFY_DEFAULT_URL[k]
@@ -3899,7 +4473,7 @@ def settings_save(new):
         cfg[k] = [_with_secrets(k, e) for e in (new or {}).get(k) or [] if isinstance(e, dict) and e.get("url")]
     # v0.1.4: keep settings this page doesn't edit (e.g. "qbit" from an older secrets.json) instead of dropping them
     for k, v in S.items():
-        if k not in cfg and k not in SINGLE and k not in LISTS and k != "schedule": cfg[k] = v
+        if k not in cfg and k not in SINGLE and k not in LISTS and k not in ("schedule", "language"): cfg[k] = v
     names = [a.get("name", "") for a in cfg["arrs"]]
     if any(not n for n in names) or len(set(names)) != len(names): return {"ok": False, "msg": "Each Radarr/Sonarr needs its own name."}
     for a in cfg["arrs"]:
@@ -4043,7 +4617,9 @@ def state():
     virus = {"clam": clam_status(cached=True), "last": kv_get("virus_last_incremental"), "full": kv_get("virus_full_last"),
              "full_running": VIRUS_LOCK.locked(), "full_started": (kv_get("virus_full_running") or {}).get("at")}
     coming = {"ytdlp": ytdlp_status(), "busy": TRAILER_LOCK.locked(), "updating": YTDLP_LOCK.locked()}
-    return {"plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "coming": coming, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
+    try: space = space_forecast()
+    except Exception as e: space = None; log("space forecast failed: %r" % e)
+    return {"space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "coming": coming, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
             "scan_hour": sched()[0], "scan_minute": sched()[1], "scan_days": sched()[2], "keep_days": KEEP_DAYS, "stats": stats(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
             "configured": configured(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT,
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
@@ -4187,6 +4763,8 @@ class H(BaseHTTPRequestHandler):
                 how = str(body.get("how", ""))
                 res = [dict(queue_fix(str(i)[:32], how), id=i) for i in ids if i][:50]
                 return self.send(200, {"ok": any(r.get("ok") for r in res), "errors": [r["error"] for r in res if not r.get("ok") and r.get("error")]})
+            if path == "/api/appsfix":
+                return self.send(200, apps_fix(str(body.get("id", ""))[:32], str(body.get("how", ""))))
             if path == "/api/plextidy":
                 return self.send(200, plex_tidy())
             if path == "/api/plexbackup":
@@ -4212,6 +4790,10 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, {"ok": True})
             if path == "/api/virusfull":
                 return self.send(200, virus_full())
+            if path == "/api/gapsearch":
+                return self.send(200, gaps_fix(str(body.get("id", ""))[:32]))
+            if path == "/api/plexsplit":
+                return self.send(200, plex_split(str(body.get("id", ""))[:32]))
             if path == "/api/fixdouble":
                 return self.send(200, fix_double(str(body.get("id", ""))[:32]))
             if path == "/api/done/clear":

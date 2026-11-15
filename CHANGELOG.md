@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.6 (beta)
+
+- **App Health update cards:** an "update available" card now shows the installed and new version and:
+  - **Update now** when the app can update itself (not in Docker): it runs the app's own update.
+  - **How to update** for Docker installs: the exact `docker compose pull` / `up -d` commands with a Copy button, plus notes for pinned image tags, Unraid and Synology. Library Doctor never gets access to Docker itself.
+  - **Skip this version:** hides the card until a newer version comes out.
+  - Test versions are called out: an app on a develop/nightly branch says so, and how to switch to the stable branch.
+- **Audio language (File Health):** flags a film or show made in your language whose only audio is another one (usually a dubbed copy, e.g. an English film with Russian audio only). Untagged audio and foreign-language originals are never flagged; TV is grouped per season. **Replace** moves the files to the trash, blocks that release in Radarr/Sonarr (when it's still in their history) and searches for another copy. Pick your language, or Off, under Settings → Audio language (default English).
+- **Replacements are checked too:** when a file replaced for its audio language arrives, its audio is checked; another dubbed copy gives a warning ("its audio is Russian again — try Interactive Search") instead of a ✓. A season replaced at once only shows ✓ when every episode has arrived ("12 of 25 so far" until then).
+- **Season gaps (Missing Files):** episodes Sonarr has on its wanted list but never got, one card per show with the seasons as ranges ("Season 2: episodes 6–10 · Season 3: 1, 7, 11, 12"). **Search for these** asks Sonarr to look again (whole seasons as season packs). Aired, monitored episodes only, no specials.
+- **Indexer advice (App Health):** an indexer Radarr/Sonarr names as failing in 3+ hourly checks a week that hasn't found anything you downloaded in 90 days gets a card with **Turn it off in Sonarr/Radarr** (it stays set up there).
+- **Disk space panel with a forecast:** free space now, and after a week of daily readings how fast the disk fills and roughly when it's full, plus what the open suggestions could free. The nightly summary warns when it's under 60 days. Several disks under the media folder are added up.
+- **Same title, different film:** "The Fly (1958)" and "The Fly (1986)" were never grouped (different TMDB ids), but if Plex mismatched one so both sat in one item they'd have looked like two copies. Library Doctor now checks the {tmdb-…}/{imdb-…} tags or the (year) in the names first; different films get a "Plex has put different films together" card with **Split in Plex** instead of a clean-up.
+
+**Fixed**
+- A Replace whose film or show was then deleted from Radarr/Sonarr kept being checked every hour; it now says "Removed from Radarr, so there's no new copy to wait for".
+
 ## 0.1.5 (beta)
 
 - **App Health (new tile):** every app's own warnings in one place: Radarr, Sonarr and Prowlarr health checks, Bazarr health, Tdarr nodes, and any app that stops answering. "Update available" shows as a quieter card you can ignore. New warnings go to your notifications once a day. Prowlarr can now be added in Settings.

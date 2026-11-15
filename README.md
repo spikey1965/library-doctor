@@ -12,17 +12,18 @@
 
 | Check | What it finds | Needs |
 |---|---|---|
-| Missing files | Plex, Radarr or Sonarr list a file that isn't on the disk | Plex + Radarr/Sonarr |
-| Duplicates | Two copies of the same film or episode, with which one to keep and why (different Plex editions, like Theatrical and Director's Cut, are never counted as duplicates) | Plex |
+| Missing files | Plex, Radarr or Sonarr list a file that isn't on the disk, and **season gaps**: aired episodes Sonarr wants but never got (Search for these) | Plex + Radarr/Sonarr |
+| Duplicates | Two copies of the same film or episode, with which one to keep and why (different Plex editions, like Theatrical and Director's Cut, are never counted as duplicates, and neither are different films with the same title, like The Fly 1958 and 1986: if Plex mixed them up you get Split in Plex instead) | Plex |
 | Metadata gaps | "Episode 5" titles Sonarr knows the name of, wrong years, things not in Radarr/Sonarr | Plex + Radarr/Sonarr |
-| File health | Broken files and files much shorter than they should be; Replace asks Radarr/Sonarr for a new copy | Plex + Radarr/Sonarr |
+| File health | Broken files, files much shorter than they should be, and **the wrong audio language** (an English film with only Russian audio, a dubbed season). Replace asks Radarr/Sonarr for a new copy and checks it when it arrives | Plex + Radarr/Sonarr |
 | Quality & space | Files far bigger than usual, old .ts/.avi files (Convert to MKV, no re-encoding), episodes much worse than their season, Find a smaller copy | Plex + Radarr/Sonarr |
 | Subtitles | Subtitle files that are only adverts, names that no longer match the video, what Bazarr is still looking for | Bazarr |
 | Unwatched | What nobody has played in a year, biggest first (never deletes anything) | Tautulli |
 | Virus scan | Programs pretending to be films (film.mkv.exe), and ClamAV on every new file | ClamAV (optional) |
 | Coming Soon | Agregarr placeholders playing a generic clip instead of the real trailer | Agregarr (optional) |
-| App Health | Each app's own warnings (Radarr/Sonarr/Prowlarr health, Bazarr, Tdarr nodes) and apps that stop answering | Radarr/Sonarr (Prowlarr optional) |
+| App Health | Each app's own warnings (Radarr/Sonarr/Prowlarr health, Bazarr, Tdarr nodes), apps that stop answering, updates (with Update now, or the Docker commands to copy), and indexers that keep failing and never find anything | Radarr/Sonarr (Prowlarr optional) |
 | Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), torrents stuck at 0% (Remove & try another) | Radarr/Sonarr |
+| Disk space | Free space now and, after a week of daily readings, how fast it fills and roughly when it's full | — |
 
 Tdarr (Convert with Tdarr) and Sportarr (sports libraries) are optional too. For the nightly summary you can add any of Gotify, Discord, Telegram, ntfy, a webhook or email in Settings → Notifications.
 
@@ -59,7 +60,7 @@ Your apps may see the same files at different paths (Plex might say `/data/movie
 No dates, just the order things are likely to happen. Ideas and offers to test are welcome in [Issues](https://github.com/spikey1965/library-doctor/issues).
 
 - **Planned:** qBittorrent, Transmission and SABnzbd in Settings, so a stuck download says why (no seeds, tracker error, slow) with a re-announce button, plus SABnzbd failed downloads.
-- **Being considered:** Jellyfin and Emby support; music libraries; a Home Assistant card.
+- **Being considered:** edition labels on duplicate cards; Jellyfin and Emby support; music libraries; a Home Assistant card.
 
 ## Known limitations
 
