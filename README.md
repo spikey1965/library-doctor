@@ -21,6 +21,7 @@
 | Unwatched | What nobody has played in a year, biggest first (never deletes anything) | Tautulli |
 | Virus scan | Programs pretending to be films (film.mkv.exe), and ClamAV on every new file | ClamAV (optional) |
 | Coming Soon | Agregarr placeholders playing a generic clip instead of the real trailer | Agregarr (optional) |
+| App Health | Each app's own warnings (Radarr/Sonarr/Prowlarr health, Bazarr, Tdarr nodes) and apps that stop answering | Radarr/Sonarr (Prowlarr optional) |
 | Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), torrents stuck at 0% (Remove & try another) | Radarr/Sonarr |
 
 Tdarr (Convert with Tdarr) and Sportarr (sports libraries) are optional too. For the nightly summary you can add any of Gotify, Discord, Telegram, ntfy, a webhook or email in Settings → Notifications.
@@ -52,6 +53,13 @@ Library Doctor needs to see your films and shows inside **one** mount (for examp
 ### Folder mapping
 
 Your apps may see the same files at different paths (Plex might say `/data/movies`, Radarr `/movies`, Library Doctor `/media/movies`). On each app's card in Settings, press **Detect folders**: Library Doctor looks at a few real files from that app, finds them under its own `/media`, and fills in the mapping. You can also add one by hand.
+
+## Roadmap
+
+No dates, just the order things are likely to happen. Ideas and offers to test are welcome in [Issues](https://github.com/spikey1965/library-doctor/issues).
+
+- **Planned:** qBittorrent, Transmission and SABnzbd in Settings, so a stuck download says why (no seeds, tracker error, slow) with a re-announce button, plus SABnzbd failed downloads.
+- **Being considered:** Jellyfin and Emby support; music libraries; a Home Assistant card.
 
 ## Known limitations
 

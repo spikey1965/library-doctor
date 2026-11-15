@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.5 (beta)
+
+- **App Health (new tile):** every app's own warnings in one place: Radarr, Sonarr and Prowlarr health checks, Bazarr health, Tdarr nodes, and any app that stops answering. "Update available" shows as a quieter card you can ignore. New warnings go to your notifications once a day. Prowlarr can now be added in Settings.
+- **Trash expiry warning:** a banner the day before files are deleted for good ("32 GB will be permanently deleted tomorrow — Review now"), counting Library Doctor's trash and the Radarr/Sonarr/qbit_manage recycle bins. The nightly summary includes the recycle bins too.
+- **Plex backup reminder:** before a bulk clean-up (clean up all, replace all, Empty Trash, bulk titles/posters) a gentle reminder offers "Back up Plex now", which starts Plex's own database backup. "Don't ask again today" if you're on a roll.
+- **Light mode:** follows your device, or pick light/dark with the ☀/☾ button in the top bar.
+- **Review all fixes:** one page listing what every suggested fix would do (files to the trash and their size, downloads, conversions, Plex changes), with Download CSV and Print / save as PDF. Nothing runs from it: scans never change anything and every fix waits for your click.
+- **Plex tidy-up:** a sidebar button that runs Plex's own housekeeping now: Clean Bundles (artwork and metadata nothing uses any more, such as old replaced posters) and Optimize Database. Plex's "Empty trash" is deliberately left out.
+
+**Fixed**
+- **Scan now could stay greyed out until you reloaded the page** when Library Doctor sits behind a login like Authentik and that login had expired. Now any button shows "Your login has expired — reload the page" with a Reload button, Scan now always comes back with a message, and a started scan shows "Scanning…" straight away.
+
 ## 0.1.4 (beta)
 
 - Saving Settings keeps any setting the page doesn't show (for example a qBittorrent entry in an older `secrets.json`), instead of dropping it.

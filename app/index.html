@@ -6,11 +6,16 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z' fill='%232bc6b4'/%3E%3Cpath d='M15 34h9l4-9 6 17 4-8h11' fill='none' stroke='%230d1830' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='49' cy='34' r='3.4' fill='%23ff8b3d'/%3E%3C/svg%3E">
 <title>Library Doctor</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap">
+<script>try{var t=localStorage.getItem("ld_theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <style>
 /* Same look as the demo: dark navy, teal = healthy, orange = needs a look, red = problem */
 :root { --bg:#0d1830; --panel:#14213a; --card:#1b2c49; --line:#22355a; --line2:#3a5583; --fg:#eef3fb; --mut:#9fb0c9;
   --teal:#2bc6b4; --teal-bg:#123e45; --orange:#ff8b3d; --orange-bg:#40281a; --red:#ff7b7b; --red-bg:#3e1d27;
   --head:"Outfit",system-ui,-apple-system,"Segoe UI",sans-serif; --font:system-ui,-apple-system,"Segoe UI",sans-serif; color-scheme:dark; }
+/* v0.1.5 light mode: picked with the top-bar button (data-theme on <html>), or the device setting when nothing is picked */
+:root[data-theme="light"] { --bg:#f3f6fb; --panel:#ffffff; --card:#eef2f8; --line:#dbe3ef; --line2:#b6c4d8; --fg:#14202e; --mut:#56677c; --teal:#0b8577; --teal-bg:#dcf2ef; --orange:#b9520c; --orange-bg:#fcebdd; --red:#c0303b; --red-bg:#fbe5e7; color-scheme:light; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg:#f3f6fb; --panel:#ffffff; --card:#eef2f8; --line:#dbe3ef; --line2:#b6c4d8; --fg:#14202e; --mut:#56677c; --teal:#0b8577; --teal-bg:#dcf2ef; --orange:#b9520c; --orange-bg:#fcebdd; --red:#c0303b; --red-bg:#fbe5e7; color-scheme:light; } }
+.themet { font:600 14px var(--font); background:transparent; color:var(--fg); border:1px solid var(--line2); border-radius:9px; padding:4px 9px; cursor:pointer; margin-left:10px; line-height:1; }
 * { box-sizing:border-box; }
 [hidden] { display:none !important; }
 html,body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 var(--font); }
@@ -215,8 +220,22 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
 .hc { margin-top:12px; } .hc h3 { font:700 13px var(--font); margin:0 0 2px; color:var(--fg); } .hc .hv { font-size:12px; color:var(--mut); margin:0 0 4px; }
 .hc svg { width:100%; height:auto; display:block; overflow:visible; } .hc .ax { font:10px var(--font); fill:var(--mut); } .hc .gl { stroke:var(--line); stroke-width:1; }
 .hc .hit { fill:transparent; cursor:default; } .hc .hit:hover + .bar, .hc .hl { opacity:1; }
-#htip { position:fixed; pointer-events:none; z-index:60; background:#0b1426; color:var(--fg); border:1px solid var(--line2); border-radius:8px; padding:6px 9px; font:12px/1.35 var(--font); box-shadow:0 6px 18px rgba(0,0,0,.35); display:none; max-width:220px; }
+#htip { position:fixed; pointer-events:none; z-index:60; background:var(--panel); color:var(--fg); border:1px solid var(--line2); border-radius:8px; padding:6px 9px; font:12px/1.35 var(--font); box-shadow:0 6px 18px rgba(0,0,0,.35); display:none; max-width:220px; }
 #htip b { display:block; font-weight:700; }
+.expw { border-color:var(--orange); }
+.bkm { position:fixed; inset:0; background:rgba(5,10,22,.62); display:grid; place-items:center; z-index:80; padding:16px; }
+.bkbox { background:var(--panel); color:var(--fg); border:1px solid var(--line2); border-radius:16px; padding:18px 20px; max-width:460px; width:100%; box-shadow:0 18px 50px rgba(0,0,0,.45); }
+.bkbox h3 { margin:0 0 8px; font:800 18px var(--head, var(--font)); } .bkbox p { margin:0 0 10px; font-size:14px; color:var(--mut); line-height:1.45; }
+.bkl { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--mut); margin:4px 0 12px; } .bkl input { accent-color:var(--teal); }
+.bkr { font-size:13px; } .bkr.ok { color:var(--teal); } .bkr.bad { color:var(--red); }
+.rvbox { max-width:900px; max-height:calc(100vh - 32px); display:flex; flex-direction:column; }
+.rvh { display:flex; justify-content:space-between; align-items:center; gap:10px; } .rvh h3 { margin:0; }
+.rvsum { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 10px; } .rvsum span { background:var(--card); border-radius:10px; padding:6px 10px; font-size:13px; color:var(--mut); } .rvsum b { color:var(--fg); }
+.rvbody { overflow:auto; min-height:0; } .rvbody h4 { margin:14px 0 6px; font:700 15px var(--head, var(--font)); } .rvbody h4 small { color:var(--mut); font-weight:600; }
+.rvt { width:100%; border-collapse:collapse; font-size:13px; } .rvt td { border-top:1px solid var(--line); padding:7px 6px; vertical-align:top; } .rvt td.t { width:34%; font-weight:600; } .rvt td.t small { display:block; color:var(--mut); font-weight:400; } .rvt td.n { white-space:nowrap; text-align:right; color:var(--mut); }
+@media print { body.rvopen > *:not(#rvModal) { display:none !important; } body.rvopen { background:#fff !important; } .rvm { position:static; background:none; padding:0; display:block; }
+  .rvbox { max-height:none; box-shadow:none; border:0; color:#000; background:#fff; } .rvbox p, .rvsum span, .rvt td.t small, .rvt td.n { color:#333 !important; } .rvsum span { background:#f2f2f2; } .rvacts, #rvX { display:none !important; } .rvbody { overflow:visible; } .rvt td { border-color:#ccc; } }
+.lgexp { position:fixed; left:50%; top:14px; transform:translateX(-50%); z-index:90; background:var(--orange-bg); color:var(--fg); border:1px solid var(--orange); border-radius:12px; padding:10px 14px; font-size:14px; display:flex; gap:10px; align-items:center; box-shadow:0 8px 24px rgba(0,0,0,.35); max-width:calc(100vw - 32px); flex-wrap:wrap; }
 </style>
 </head>
 <body>
@@ -224,7 +243,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
   <div class="nav">
     <div class="logo"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z" fill="#2bc6b4"/><path d="M15 34h9l4-9 6 17 4-8h11" fill="none" stroke="#0d1830" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="49" cy="34" r="3.4" fill="#ff8b3d"/></svg>Library Doctor</div>
     <div class="tabs" role="tablist"><button class="tab on" id="tabScan" role="tab" aria-selected="true">Scan Library</button><button class="tab" id="tabTrash" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Trash <span class="count" id="trashCount" hidden></span></button><button class="tab" id="tabSet" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M5.5 18.5l1.8-1.8M16.7 7.3l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Settings</button></div>
-    <span class="ro" title="Nothing is deleted straight away: clean-up moves copies to the trash, which you can restore for 7 days.">Nothing deleted without asking</span>
+    <button class="themet" id="themeT" type="button" aria-label="Switch light or dark mode" title="Light / dark mode">☾</button><span class="ro" title="Nothing is deleted straight away: clean-up moves copies to the trash, which you can restore for 7 days.">Nothing deleted without asking</span>
     <button class="b-line sm" id="logout" hidden style="margin-left:10px">Log out</button>
   </div>
   <div class="grid" id="scanView">
@@ -239,6 +258,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
             <div class="bar" id="barWrap" hidden><i id="bar" style="width:0"></i></div>
           </div>
           <button class="b-teal" id="scanBtn">Scan now</button>
+          <button class="b-line" id="reviewBtn" title="Everything the suggested fixes would do, on one page. Nothing is changed.">Review all fixes</button>
         </div>
         <div class="rings2">
           <button class="rcard" id="rSpace" title="Open Quality &amp; Space"><div class="ring sm" aria-hidden="true"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--panel)" stroke-width="14"/><circle id="arcSp" cx="60" cy="60" r="50" fill="none" stroke="var(--teal)" stroke-opacity=".4" stroke-width="14" stroke-dasharray="0 999"/><circle id="arcSf" cx="60" cy="60" r="50" fill="none" stroke="var(--teal)" stroke-width="14" stroke-dasharray="0 999"/></svg><b id="ringSp">–</b></div>
@@ -247,6 +267,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
             <span class="rt"><span class="rl">Jobs left</span><span class="rs" id="jobsTxt" title="Episodes are counted one by one, so this can be higher than the number of cards. Unwatched isn't counted: it's information, not a job.">–</span></span></button>
         </div>
         <div class="splitw" id="splitWarn" role="note" hidden></div>
+        <div class="splitw expw" id="expWarn" role="status" hidden></div>
         <div class="checks" id="checks" role="group" aria-label="Checks"></div>
       </div>
       <div class="panel">
@@ -260,6 +281,9 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       <button class="deskbin" id="deskBin" aria-label="Open the Trash"><span id="deskBinArt"></span><span class="dm"><b>Trash</b><span id="deskBinN">Empty</span><small id="deskBinSub">Clean-ups land here first</small></span><span class="go">Open →</span></button>
       <div class="panel"><div class="h"><h2>Scans</h2></div><div class="scans" id="scans"></div>
         <p class="note" id="sched"></p></div>
+      <div class="panel" id="tidyP"><div class="h"><h2>Plex tidy-up</h2></div>
+        <p class="note">Removes artwork and metadata Plex no longer uses (old posters, replaced overlays) and optimises its database. Plex does this itself every so often; this runs it now.</p>
+        <p class="note" id="tidyLast"></p><div class="acts"><button class="b-line sm" id="tidyGo">Tidy up Plex now</button></div></div>
       <div class="panel" id="histP"><div class="h"><h2>History</h2><div class="hseg" role="group" aria-label="Period"><button class="on" data-hd="30">30 days</button><button data-hd="90">90 days</button></div></div><div id="hist"><p class="note">Loading…</p></div></div>
 </div>
     </div>
@@ -316,6 +340,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     coming: '<rect x="3" y="9" width="18" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="m3.5 9 1-4.5 16 3.5-1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m10 12.5 4 2.5-4 2.5z" fill="currentColor"/>',
     quality: '<path d="M4 18h16M6 18V9m4 9V5m4 13v-7m4 7v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     unwatched: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/><path d="M4 4l16 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    apps: '<rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 20h8M12 16v4M7 10h2l1.5-2.5 2 5L14 10h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
     queue: '<path d="M12 3v11m0 0-4.5-4.5M12 14l4.5-4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     ok: '<path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
   };
@@ -328,7 +353,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     { id: "coming", label: "Coming Soon", sev: "att", unit: "to fix", live: true },
     { id: "quality", label: "Quality & Space", sev: "att", unit: "to look at", live: true },
     { id: "unwatched", label: "Unwatched", sev: "att", unit: "unwatched", live: true },
-    { id: "queue", label: "Downloads", sev: "att", unit: "stuck", live: true }
+    { id: "queue", label: "Downloads", sev: "att", unit: "stuck", live: true },
+    { id: "apps", label: "App Health", sev: "att", unit: "warnings", live: true }
   ];
   let addedAway = false;   // set when you open an "Add in Radarr/Sonarr" link; coming back to this tab rescans
   window.addEventListener("focus", async () => {
@@ -346,7 +372,16 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const r = await fetch(path, body === undefined ? { cache: "no-store" } : { method: "POST", headers: { "Content-Type": "application/json", "X-LD": "1" }, body: JSON.stringify(body) });
     if (r.status === 401) { location.href = "/login"; throw new Error("Logged out"); }
     if (!r.ok && r.status !== 409) throw new Error(path + " " + r.status);
+    // v0.1.5: behind Authentik/Authelia an expired session answers with that login page (via a redirect) instead of JSON
+    const ct = r.headers.get("content-type") || "";
+    if (r.redirected || !ct.includes("json")) { loginExpired(); throw new Error("Your login has expired. Reload the page to log in again."); }
     return r.json();
+  }
+  function loginExpired() {
+    if ($("lgExp")) return;
+    const d = document.createElement("div"); d.id = "lgExp"; d.className = "lgexp"; d.setAttribute("role", "alert");
+    d.innerHTML = 'Your login has expired, so Library Doctor can\'t be reached. <button class="b-teal sm" id="lgReload">Reload the page</button>';
+    document.body.appendChild(d); $("lgReload").onclick = () => location.reload();
   }
   // Space saved + Jobs left rings. seg(): one coloured arc starting at `from` (0-1) and `len` long.
   function seg(el, from, len) { const C = 2 * Math.PI * 50; $(el).setAttribute("stroke-dasharray", "0 " + (C * from) + " " + (C * len) + " " + C); }
@@ -418,17 +453,116 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
   }
   document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-hd]"); if (!b) return;
     HIST.days = +b.dataset.hd; document.querySelectorAll("[data-hd]").forEach(x => x.classList.toggle("on", x === b)); histDraw(); });
+
+  /* v0.1.5: gentle Plex-backup reminder before bulk clean-ups. "Don't ask again today" is remembered per browser. */
+  const BK_KEY = "ld_backup_skip";
+  function backupGate(go) {
+    let skip = ""; try { skip = localStorage.getItem(BK_KEY) || ""; } catch (e) {}
+    if (skip === new Date().toDateString()) return go();
+    let m = $("bkModal"); if (m) m.remove();
+    m = document.createElement("div"); m.id = "bkModal"; m.className = "bkm"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true"); m.setAttribute("aria-labelledby", "bkT");
+    const last = S && S.plex_backup_at ? `Last backup Library Doctor asked for: ${esc(fmt(S.plex_backup_at))}. ` : "";
+    m.innerHTML = `<div class="bkbox"><h3 id="bkT">Back up your Plex database first?</h3>
+      <p>Consider backing up your Plex database before large changes. Clean-ups only move files to the trash (you can put them back for ${S ? S.trash_days : 7} days), but Plex's own database is worth a fresh copy. ${last}</p>
+      <p class="bkr" id="bkRes" aria-live="polite"></p>
+      <label class="bkl"><input type="checkbox" id="bkSkip"> Don't ask again today</label>
+      <div class="acts"><button class="b-teal" id="bkNow">Back up Plex now</button><button class="b-line" id="bkGo">Continue</button><button class="b-line" id="bkNo">Cancel</button></div></div>`;
+    document.body.appendChild(m);
+    const close = () => { try { if ($("bkSkip").checked) localStorage.setItem(BK_KEY, new Date().toDateString()); } catch (e) {} m.remove(); };
+    $("bkNo").onclick = () => m.remove();
+    m.onclick = e => { if (e.target === m) m.remove(); };
+    $("bkGo").onclick = () => { close(); go(); };
+    $("bkNow").onclick = async () => { const b = $("bkNow"); b.disabled = true; b.textContent = "Asking Plex…";
+      const r = await api("/api/plexbackup", {});
+      $("bkRes").textContent = r.ok ? "✓ Plex has started a backup (it keeps the copy in its own Databases folder). You can carry on now." : "Couldn't start it: " + (r.error || "no answer") + ". You can still continue.";
+      $("bkRes").className = "bkr " + (r.ok ? "ok" : "bad"); b.textContent = r.ok ? "Backup started ✓" : "Try again"; b.disabled = !!r.ok; if (S && r.ok) S.plex_backup_at = r.at; };
+    $("bkNow").focus();
+  }
+  function themeNow() { const a = document.documentElement.getAttribute("data-theme"); return a || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); }
+  function themeBtn() { const b = $("themeT"); if (b) { const t = themeNow(); b.textContent = t === "light" ? "☾" : "☀"; b.title = t === "light" ? "Switch to dark mode" : "Switch to light mode"; } }
+  document.addEventListener("click", e => { if (!e.target.closest || !e.target.closest("#themeT")) return;
+    const t = themeNow() === "light" ? "dark" : "light"; document.documentElement.setAttribute("data-theme", t);
+    try { localStorage.setItem("ld_theme", t); } catch (x) {} themeBtn(); HIST.drawn = null; histDraw(true); });
+
+  /* v0.1.5 "Review all fixes": a read-only report of what every suggested fix would do (+ CSV / print). Nothing runs from here. */
+  function planOf(i) {
+    const d = i.detail || {}, f = d.fixes || [], arr = (d.ref && d.ref.arr) || (i.links || []).map(l => (l.label.match(/Open in (Radarr|Sonarr)[^,]*/) || [])[0]).filter(Boolean)[0] || "Radarr/Sonarr";
+    const conf = i.chk === "dupes" ? (d.kind === "double" ? "Sure" : isSure(i) ? "Sure" : "Check") : d.confidence === "sure" ? "Sure" : d.confidence === "check" ? "Check" : "";
+    let what = "", files = 0, bytes = 0, kind = "look";
+    if (i.chk === "dupes" && d.kind === "double") { what = "Fix Plex's listing: the file stays where it is"; kind = "plex"; }
+    else if (i.chk === "dupes") { const rm = removable(i), keep = eff(i).find(v => v.action === "keep"); files = rm.length; bytes = rm.reduce((a, v) => a + (v.size || 0), 0);
+      what = `Move ${files} cop${files === 1 ? "y" : "ies"} to the trash${keep ? ", keep " + (keep.desc || "the best copy") : ""}`; kind = "trash"; }
+    else if (i.chk === "health" && f.includes("replace")) { files = 1; bytes = +d.size || 0; what = "Move the broken file to the trash and ask " + arr.replace(/^Open in /, "") + " for a new copy"; kind = "trash"; }
+    else if (i.chk === "virus") { files = 1; bytes = +d.size || 0; what = "Move it to the trash (it's never run)"; kind = "trash"; }
+    else if (i.chk === "subs" && f.length) { what = f.includes("searchall") ? "Ask Bazarr to search for every missing subtitle" : f.includes("rename") ? "Rename the subtitle to match the video" : "Move the subtitle to the trash and ask Bazarr for a real one"; kind = f.includes("searchall") ? "other" : "trash"; if (kind === "trash") files = 1; }
+    else if (i.chk === "meta") { what = f.includes("titles") ? `Copy Sonarr's titles into Plex${d.eps ? " (" + d.eps.length + " episodes)" : ""}` : f.includes("posters") ? "Pick a poster for the seasons without one" : f.includes("refresh") ? "Refresh it in Plex" : "Nothing automatic: open it and decide (e.g. add it in Radarr/Sonarr)"; kind = f.length ? "meta" : "look"; }
+    else if (i.chk === "quality") { const parts = [];
+      if (f.includes("smaller")) parts.push("Find a smaller copy (the old one waits in the recycle bin)");
+      if (f.includes("tdarr")) parts.push(d.kind === "tdarrfail" ? `Retry ${d.count || 1} file${(d.count || 1) === 1 ? "" : "s"} in Tdarr` : d.kind === "tdarrmissed" ? `Send ${d.count} files to Tdarr` : "Convert with Tdarr (shrinks it in place)");
+      if (f.includes("remux")) parts.push("Convert to MKV (same video, old file to the trash)");
+      if (f.includes("search")) parts.push(d.eps ? `Search for better copies of ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}` : "Search for a better copy");
+      if (f.includes("monitor")) parts.push("Monitor in " + arr.replace(/^Open in /, ""));
+      what = parts.join(" · ") || "Nothing automatic: shown for information"; kind = f.includes("tdarr") || f.includes("remux") ? "convert" : f.includes("search") || f.includes("smaller") ? "download" : "look";
+      if (f.includes("smaller")) bytes = d.extra || 0; }
+    else if (i.chk === "coming") { what = f.includes("trailer") ? "Pick the real trailer from YouTube" : f.includes("remove") ? "Remove the placeholder (to the trash)" : f.includes("ytdlp") ? "Update yt-dlp" : f.includes("refresh") ? "Refresh in Plex" : "Nothing automatic"; kind = f.includes("remove") ? "trash" : "other"; if (kind === "trash") files = 1; }
+    else if (i.chk === "queue") { what = f.includes("import") ? `Import ${d.count || 1} download${(d.count || 1) === 1 ? "" : "s"}` : f.includes("retry") ? "Remove it, blocklist that release and search for another" : f.includes("remove") ? "Remove the leftover from qBittorrent and move its files to the trash" : "Nothing automatic (private torrent)"; kind = f.includes("retry") ? "download" : f.includes("remove") ? "trash" : "other"; if (f.includes("remove")) { files = 1; bytes = d.size || 0; } }
+    else if (i.chk === "missing") what = "Nothing automatic: open it in Plex or Radarr/Sonarr";
+    else if (i.chk === "apps") what = "Nothing automatic: open the app and fix the warning";
+    else what = f.length ? f.join(", ") : "Nothing automatic";
+    return { what, files, bytes, kind, conf };
+  }
+  function reviewRows() {
+    return (S.issues || []).filter(i => !i.ignored && i.chk !== "unwatched").map(i => ({ i, p: planOf(i), c: CHECKS.find(c => c.id === i.chk) || { label: i.chk } }));
+  }
+  function reviewCsv(rows) {
+    const q = v => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+    const out = [["Check", "Title", "Library", "What the fix would do", "Files to trash", "Size (bytes)", "Confidence"].map(q).join(",")]
+      .concat(rows.map(r => [r.c.label, r.i.title, r.i.library, r.p.what, r.p.files || "", r.p.bytes || "", r.p.conf].map(q).join(",")));
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([out.join("\r\n")], { type: "text/csv" }));
+    a.download = "library-doctor-review-" + new Date().toISOString().slice(0, 10) + ".csv"; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }
+  function reviewOpen() {
+    const rows = reviewRows(), byK = k => rows.filter(r => r.p.kind === k);
+    const tr = byK("trash"), trF = tr.reduce((a, r) => a + r.p.files, 0), trB = tr.reduce((a, r) => a + r.p.bytes, 0);
+    let m = $("rvModal"); if (m) m.remove();
+    m = document.createElement("div"); m.id = "rvModal"; m.className = "bkm rvm"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true"); m.setAttribute("aria-labelledby", "rvT");
+    const sec = CHECKS.map(c => { const rs = rows.filter(r => r.i.chk === c.id); if (!rs.length) return "";
+      return `<h4>${esc(c.label)} <small>${rs.length}</small></h4><table class="rvt"><tbody>${rs.map(r => `<tr><td class="t">${esc(r.i.title)}<small>${esc(r.i.library || "")}</small></td><td>${esc(r.p.what)}</td><td class="n">${r.p.bytes ? human(r.p.bytes) : ""}</td><td class="n">${r.p.conf ? `<span class="pill ${r.p.conf === "Sure" ? "sure" : ""}">${r.p.conf}</span>` : ""}</td></tr>`).join("")}</tbody></table>`; }).join("");
+    m.innerHTML = `<div class="bkbox rvbox"><div class="rvh"><h3 id="rvT">Review all fixes</h3><button class="b-line sm" id="rvX" aria-label="Close">Close</button></div>
+      <p><b>Nothing has been changed.</b> This is what each suggested fix would do if you pressed its button. Scans never change anything, every fix waits for your click, and clean-ups go to a ${S.trash_days}-day trash you can put things back from.</p>
+      <div class="rvsum"><span><b>${trF}</b> file${trF === 1 ? "" : "s"} to the trash${trB ? " · " + human(trB) : ""}</span><span><b>${byK("download").length}</b> new downloads asked for</span><span><b>${byK("convert").length}</b> conversions</span><span><b>${byK("meta").length + byK("plex").length}</b> Plex changes</span><span><b>${byK("look").length + byK("other").length}</b> to look at yourself</span></div>
+      <div class="acts rvacts"><button class="b-teal sm" id="rvCsv">Download CSV</button><button class="b-line sm" id="rvPrint">Print / save as PDF</button></div>
+      <div class="rvbody">${sec || "<p>Nothing to fix right now.</p>"}</div></div>`;
+    document.body.appendChild(m); document.body.classList.add("rvopen");
+    const close = () => { m.remove(); document.body.classList.remove("rvopen"); };
+    $("rvX").onclick = close; m.onclick = e => { if (e.target === m) close(); };
+    document.addEventListener("keydown", function esck(e) { if (e.key === "Escape") { close(); document.removeEventListener("keydown", esck); } });
+    $("rvCsv").onclick = () => reviewCsv(rows); $("rvPrint").onclick = () => window.print(); $("rvX").focus();
+  }
+  document.addEventListener("click", e => { if (e.target.closest && e.target.closest("#reviewBtn") && S) reviewOpen(); });
+  document.addEventListener("click", e => { if (!e.target.closest || !e.target.closest("#tidyGo")) return;
+    backupGate(async () => { const b = $("tidyGo"); b.disabled = true; b.textContent = "Asking Plex…";
+      try { const r = await api("/api/plextidy", {});
+        flash = { err: !r.ok, text: r.ok ? "Plex is tidying up in the background (" + (r.done || ["Clean Bundles", "Optimize Database"]).join(" and ") + "). It can take a few minutes; Plex stays usable." + (r.error ? " Not done: " + r.error : "") : "Couldn't start it: " + (r.error || "no answer") };
+        if (r.ok && S) S.plex_tidy_at = r.at;
+      } catch (x) { flash = { err: true, text: "Couldn't start it: " + x.message }; }
+      b.disabled = false; b.textContent = "Tidy up Plex now"; render(); }); });
   function render() {
     const scan = S.scans.find(s => s.ok) || null;
     const open = S.issues.filter(i => !i.ignored), ign = S.issues.length - open.length;
     if (!filter) filter = open.some(i => i.chk === "missing") ? "missing" : "dupes";
-    const files = scan ? scan.files : 0, bad = new Set(open.filter(i => !["meta", "subs", "coming", "quality", "unwatched", "queue"].includes(i.chk)).flatMap(i => i.detail.versions ? i.detail.versions.filter(v => v.action !== "keep").map(v => v.path) : [i.detail.path]));
+    const files = scan ? scan.files : 0, bad = new Set(open.filter(i => !["meta", "subs", "coming", "quality", "unwatched", "queue", "apps"].includes(i.chk)).flatMap(i => i.detail.versions ? i.detail.versions.filter(v => v.action !== "keep").map(v => v.path) : [i.detail.path]));
     const score = files ? Math.max(0, 100 - bad.size / files * 100) : 0;
     $("score").textContent = $("ringN").textContent = scan ? (score >= 99.95 ? "100%" : score.toFixed(1) + "%") : "–";
     const C = 2 * Math.PI * 50; $("arc").setAttribute("stroke-dasharray", (C * score / 100) + " " + C);
     rings2(S.stats);
     const sp = S.split_mounts || [];
     $("splitWarn").hidden = !sp.length;
+    // v0.1.5: files that will be deleted for good in the next 24 hours (Library Doctor's trash + Radarr/Sonarr/qbit_manage bins)
+    const soon = (S.trash || []).filter(t => t.empties && new Date(t.empties).getTime() - Date.now() < 864e5), soonSz = soon.reduce((a, t) => a + (t.size || 0), 0);
+    $("expWarn").hidden = !soon.length;
+    if (soon.length) { $("expWarn").innerHTML = `<b>${human(soonSz)} will be permanently deleted tomorrow</b> (${soon.length} item${soon.length === 1 ? "" : "s"} in the trash and recycle bins). <button class="b-line sm" id="expGo">Review now</button>`;
+      $("expGo").onclick = () => { $("binSort").value = "expires"; setView("trash"); }; }
     if (sp.length) $("splitWarn").innerHTML = `<b>Your media is on more than one disk.</b> ${sp.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")}${sp.length > 4 ? ` and ${sp.length - 4} more` : ""} ${sp.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. Scans work, but clean-up, Replace and Convert to MKV can't move files from there into the trash. Mount the folder that holds all your media as one volume instead (see Known limitations in the README).`;
     $("nItems").textContent = scan ? scan.items.toLocaleString("en-GB") : "–";
     $("nFiles").textContent = scan ? scan.files.toLocaleString("en-GB") : "–";
@@ -447,7 +581,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     list();
     $("scans").innerHTML = S.scans.slice(0, 6).map(s => `<div class="sc"><b>${s.ok ? "Scan completed" : "Scan failed"}</b>${s.ok ? `${s.issues} to look at · ${s.items.toLocaleString("en-GB")} items` : esc(s.note)}<br><small>${fmt(s.finished)}</small></div>`).join("") || '<p class="empty">No scans yet.</p>';
     const DN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], sd = S.scan_days || [0, 1, 2, 3, 4, 5, 6];
-    histDraw();
+    histDraw(); themeBtn();
+    if ($("tidyLast")) $("tidyLast").textContent = S.plex_tidy_at ? "Last run from here: " + fmt(S.plex_tidy_at) + "." : "";
     $("sched").innerHTML = (S.scan_hour < 0 ? "Automatic scan is off. Press Scan now to scan." : "Scans automatically " + (sd.length === 7 ? "every day" : "on " + sd.map(d => DN[d]).join(", ")) + " at " + String(S.scan_hour).padStart(2, "0") + ":" + String(S.scan_minute || 0).padStart(2, "0") + ".") +
       `<span class="sched2">${S.gotify ? "Summary via " + (S.notify || []).map(k => APPS[k] ? APPS[k].t : k).join(", ") + " after the scan, only when there's news." : "Notifications: not set up (Settings → Notifications)."}${S.gotify ? '<button class="b-line sm" id="gTest">Send a test</button>' : ""}</span>`;
     const gt = $("gTest"); if (gt) gt.onclick = async () => { gt.disabled = true; gt.textContent = "Sending…";
@@ -681,7 +816,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       flash = { err: !r.ok, text: r.ok ? `Moved ${r.started} file${r.started === 1 ? "" : "s"} to the trash and asked for new copies. Progress shows under Done below.` + (r.errors.length ? " Problems: " + r.errors.join(" ") : "") : r.errors.join(" ") };
       load(); setTimeout(load, 15000); setTimeout(load, 70000); };
     L.querySelectorAll("[data-replace]").forEach(b => b.onclick = () => replaceGo([b.dataset.replace], b));
-    on("hAllGo", () => { confirmAll = "health"; confirmId = null; flash = null; list(); });
+    on("hAllGo", () => backupGate(() => { confirmAll = "health"; confirmId = null; flash = null; list(); }));
     on("hAllYes", () => replaceGo(shown().filter(i => !i.ignored && (i.detail.fixes || []).length && i.detail.confidence === "sure").map(i => i.id), $("hAllYes")));
     const subGo = async (pairs, b) => { if (b) { b.disabled = true; b.textContent = "Working…"; }
       const by = {}; pairs.forEach(([id, how]) => (by[how] = by[how] || []).push(id));
@@ -740,8 +875,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     on("ytUp", async () => { const b = $("ytUp"); b.disabled = true; b.textContent = "Updating yt-dlp…";
       const r = await api("/api/ytdlp/update", {});
       flash = { err: !r.ok, text: r.ok ? (r.old === r.new ? "yt-dlp " + r.new + " was already the latest (downloaded and checked again)." : "Updated yt-dlp " + (r.old || "?") + " → " + r.new + ". Agregarr uses it from its next download.") : r.error }; load(); });
-    on("titlesAll", () => metaGo($("titlesAll").dataset.ids.split(","), "titles", $("titlesAll")));
-    on("postersAll", () => metaGo($("postersAll").dataset.ids.split(","), "posters", $("postersAll")));
+    on("titlesAll", () => backupGate(() => metaGo($("titlesAll").dataset.ids.split(","), "titles", $("titlesAll"))));
+    on("postersAll", () => backupGate(() => metaGo($("postersAll").dataset.ids.split(","), "posters", $("postersAll"))));
     L.querySelectorAll("[data-added]").forEach(a => a.addEventListener("click", () => { addedAway = true; }));
     on("fuNow", async () => { const b = $("fuNow"); b.disabled = true; b.textContent = "Checking…"; await api("/api/followup", {}); setTimeout(load, 6000); setTimeout(load, 20000); });
     on("doneClear", async () => { await api("/api/done/clear", { chk: filter }); load(); });
@@ -749,8 +884,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
                        review = { ids, pos: 0, done: 0, skipped: 0 }; flash = null; confirmId = null; list(); window.scrollTo({ top: $("list").getBoundingClientRect().top + scrollY - 80 }); });
     on("rvStop", () => { flash = { text: "Stopped reviewing: " + review.done + " cleaned up." }; review = null; list(); });
     on("rvSkip", () => { review.pos++; review.skipped++; flash = null; list(); });
-    on("sureGo", () => { confirmAll = "sure"; confirmId = null; flash = null; list(); });
-    on("allGo", () => { confirmAll = "all"; confirmId = null; flash = null; list(); });
+    on("sureGo", () => backupGate(() => { confirmAll = "sure"; confirmId = null; flash = null; list(); }));
+    on("allGo", () => backupGate(() => { confirmAll = "all"; confirmId = null; flash = null; list(); }));
     on("allNo", () => { confirmAll = false; list(); });
     on("allYes", () => { const open = shown().filter(i => !i.ignored && removable(i).length);
                          doClean((confirmAll === "sure" ? open.filter(isSure) : open).map(i => i.id), $("allYes")); });
@@ -836,7 +971,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
   $("deskBin").onclick = () => { binMsg = null; setView("trash"); window.scrollTo(0, 0); };
   $("binSearch").oninput = () => trashPanel(); $("binSort").onchange = () => trashPanel();
   $("binDelete").onclick = () => { binAsk = "delete"; binMsg = null; trashPanel(); };
-  $("binEmpty").onclick = () => { binAsk = "empty"; binMsg = null; trashPanel(); };
+  $("binEmpty").onclick = () => backupGate(() => { binAsk = "empty"; binMsg = null; trashPanel(); });
   $("binRestore").onclick = async () => {
     $("binRestore").disabled = true;
     const r = await api("/api/restore", { ids: [...binSel] });
@@ -854,6 +989,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     bazarr: { t: "Bazarr", list: true, files: true, secret: ["key", "API key"], url: "http://192.168.1.10:6767", help: "For the Subtitles check. API key: Bazarr → Settings → General." },
     tautulli: { t: "Tautulli", secret: ["key", "API key"], url: "http://192.168.1.10:8181", help: "For the Unwatched check. API key: Tautulli → Settings → Web Interface." },
     tdarr: { t: "Tdarr", files: true, secret: ["key", "API key"], url: "http://192.168.1.10:8265", help: "For Convert with Tdarr. Leave the key empty if Tdarr has no login." },
+    prowlarr: { t: "Prowlarr", secret: ["key", "API key"], url: "http://192.168.1.10:9696", help: "For App Health: shows Prowlarr's own warnings (failing indexers, proxies). API key: Prowlarr → Settings → General." },
     sportarr: { t: "Sportarr", files: true, secret: ["key", "API key"], url: "http://192.168.1.10:1867", help: "For sports libraries managed by Sportarr." },
     gotify: { t: "Gotify", secret: ["token", "App token"], url: "http://192.168.1.10:8070", help: "A phone message after the nightly scan, only when there's news. Make an app in Gotify and paste its token." },
     discord: { t: "Discord", notify: true, fixedUrl: "https://discord.com", secret: ["token", "Webhook URL"], url: "", help: "Discord: Channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL." },
@@ -907,8 +1043,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     h += `<h2>Radarr and Sonarr</h2>` + SC.arrs.map((e, i) => entryHtml("arrs", e, i)).join("") + `<div class="acts"><button class="b-line" data-add="arrs:radarr">+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">+ Add Sonarr</button></div>`;
     h += `<h2>Optional <small>each one switches on its own checks</small></h2>`;
     h += SC.bazarr.map((e, i) => entryHtml("bazarr", e, i)).join("");
-    for (const k of ["tautulli", "tdarr", "sportarr"]) if (SC[k]) h += entryHtml(k, SC[k], null);
-    const missing = ["bazarr", "tautulli", "tdarr", "sportarr"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
+    for (const k of ["tautulli", "tdarr", "sportarr", "prowlarr"]) if (SC[k]) h += entryHtml(k, SC[k], null);
+    const missing = ["bazarr", "tautulli", "tdarr", "sportarr", "prowlarr"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
     if (missing.length) h += `<div class="acts">${missing.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}${SC.bazarr.length ? `<button class="b-line" data-add="bazarr">+ Another Bazarr</button>` : ""}</div>`;
     else if (SC.bazarr.length) h += `<div class="acts"><button class="b-line" data-add="bazarr">+ Another Bazarr</button></div>`;
     const NK = ["gotify", "discord", "telegram", "ntfy", "webhook", "email"];
@@ -948,7 +1084,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     el.querySelectorAll("[data-day]").forEach(n => n.onchange = () => { const d = +n.dataset.day, a = SC.schedule.days; if (n.checked) { if (!a.includes(d)) a.push(d); } else SC.schedule.days = a.filter(x => x !== d); SC.schedule.days.sort(); });
     on("setUndo", () => { SC = null; SCmsg = null; Object.keys(TR).forEach(x => delete TR[x]); settingsOpen(); });
     on("setSave", async () => { SCbusy = true; SCmsg = null; settingsDraw();
-      const body = {}; for (const k of ["plex", "tautulli", "tdarr", "sportarr", "gotify", "discord", "telegram", "ntfy", "webhook", "email", "arrs", "bazarr", "schedule"]) if (SC[k]) body[k] = SC[k];
+      const body = {}; for (const k of ["plex", "tautulli", "tdarr", "sportarr", "prowlarr", "gotify", "discord", "telegram", "ntfy", "webhook", "email", "arrs", "bazarr", "schedule"]) if (SC[k]) body[k] = SC[k];
       const r = await api("/api/settings/save", { settings: body }); SCbusy = false;
       if (r.ok) { SCmsg = { ok: true, msg: r.configured ? "Saved. Library Doctor is using the new settings now." : "Saved. Add Plex and at least one Radarr or Sonarr to start scanning." }; const keep = SCmsg; SC = null; await settingsOpen(); SCmsg = keep; settingsDraw(); load(); }
       else { SCmsg = { ok: false, msg: r.msg || r.error || "Couldn't save." }; settingsDraw(); } });
@@ -968,7 +1104,17 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const open = S ? S.issues.filter(i => !i.ignored && i.chk !== "unwatched") : [];
     const c = CHECKS.find(k => k.live && open.some(i => i.chk === k.id)); if (c) { filter = c.id; render(); $("checks").scrollIntoView({ behavior: "smooth", block: "start" }); }
   };
-  $("scanBtn").onclick = async () => { $("scanBtn").disabled = true; await api("/api/scan", {}); load(); };
+  $("scanBtn").onclick = async () => {
+    const b = $("scanBtn"); b.disabled = true; b.textContent = "Starting…";
+    try {
+      const r = await api("/api/scan", {});
+      if (r && r.error) { flash = { err: true, text: r.error }; b.disabled = false; b.textContent = "Scan now"; render(); return; }
+      if (S) { S.running = true; S.step = "Starting"; } render();
+      clearTimeout(poll); poll = setTimeout(load, 1500);
+    } catch (e) {
+      b.disabled = false; b.textContent = "Scan now"; flash = { err: true, text: "Couldn't start the scan: " + e.message }; render();
+    }
+  };
   $("lib").onchange = list; $("showIgn").onchange = list;
   load();
 })();

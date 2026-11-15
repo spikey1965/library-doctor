@@ -35,7 +35,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -66,7 +66,7 @@ def normalize(cfg):
         sp["paths"] = [{"from": sp.pop("container_root"), "to": sp.pop("media_root", None) or MEDIA_ROOT}]
     # optional fields the rest of the code relies on: the browser address falls back to the app's own address
     if isinstance(cfg.get("plex"), dict): cfg["plex"]["public"] = cfg["plex"].get("public") or "https://app.plex.tv"
-    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("gotify", "Gotify")):
+    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("prowlarr", "Prowlarr"), ("gotify", "Gotify")):
         e = cfg.get(k)
         if isinstance(e, dict): e["public"] = e.get("public") or e.get("url", ""); e.setdefault("name", name); e.setdefault("key", e.get("key", ""))
     for k in ("arrs", "bazarr"):
@@ -242,6 +242,35 @@ def plex(path, **params):
     p = S["plex"]
     q = urllib.parse.urlencode(params)
     return map_in(http(p["url"].rstrip("/") + path + ("?" + q if q else ""), {"X-Plex-Token": p["token"]})["MediaContainer"], p)
+
+def plex_backup():
+    """v0.1.5: ask Plex to run its own "Back up database" task now (Plex keeps the copy in its Databases folder)."""
+    p = S.get("plex") or {}
+    if not p.get("url"): return {"ok": False, "error": "Plex isn't set up."}
+    try:
+        http(p["url"].rstrip("/") + "/butler/BackupDatabase", {"X-Plex-Token": p.get("token", "")}, method="POST", timeout=20)
+        kv_set("plex_backup_at", now_iso()); event("backup", "Asked Plex to back up its database.")
+        return {"ok": True, "at": now_iso()}
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "error": "Plex said %d %s." % (e.code, e.reason)}
+    except Exception as e:
+        return {"ok": False, "error": "Couldn't reach Plex: %s" % getattr(e, "reason", e)}
+
+def plex_tidy():
+    """v0.1.5 Plex tidy-up: run Plex's own housekeeping now - Clean Bundles (artwork/metadata no item uses any more, e.g.
+    old uploaded posters) and Optimize Database. Plex's own "Empty trash" is deliberately NOT run (a briefly offline disk
+    would make it drop real items)."""
+    p = S.get("plex") or {}
+    if not p.get("url"): return {"ok": False, "error": "Plex isn't set up."}
+    done, errs = [], []
+    for label, path in (("Clean Bundles", "/library/clean/bundles"), ("Optimize Database", "/library/optimize?async=1")):
+        try:
+            http(p["url"].rstrip("/") + path, {"X-Plex-Token": p.get("token", "")}, method="PUT", timeout=30); done.append(label)
+        except urllib.error.HTTPError as e: errs.append("%s: Plex said %d %s" % (label, e.code, e.reason))
+        except Exception as e: errs.append("%s: %s" % (label, getattr(e, "reason", e)))
+    if done:
+        kv_set("plex_tidy_at", now_iso()); event("plex", "Asked Plex to run %s." % " and ".join(done))
+    return {"ok": bool(done), "done": done, "error": "; ".join(errs), "at": now_iso()}
 
 PLACEHOLDER_ROOT = os.path.join(MEDIA_ROOT, "placeholder")
 
@@ -625,6 +654,8 @@ def scan():
             except Exception as e: log("monitor check failed: %r" % e)
             try: issues += queue_cards()                      # v33: Downloads (Radarr/Sonarr queues)
             except Exception as e: log("queue check failed: %r" % e)
+            try: issues += apps_cards()                       # v0.1.5: App health
+            except Exception as e: log("app health check failed: %r" % e)
         except Exception as e:
             log("quality check failed: %r" % e)
         try:
@@ -1995,7 +2026,7 @@ def notify(title, message, priority=5):
     ok = [k for k, r in res if r.get("ok")]
     return {"ok": bool(ok), "sent": ok, "error": "; ".join(r["error"] for k, r in res if not r.get("ok"))}
 
-CHK_NAMES = {"missing": "missing file", "dupes": "duplicate", "meta": "metadata gap", "health": "broken file", "subs": "subtitle problem", "virus": "virus / fake file", "coming": "Coming Soon problem", "quality": "quality/space item", "unwatched": "unwatched list", "queue": "download problem"}
+CHK_NAMES = {"missing": "missing file", "dupes": "duplicate", "meta": "metadata gap", "health": "broken file", "subs": "subtitle problem", "virus": "virus / fake file", "coming": "Coming Soon problem", "quality": "quality/space item", "unwatched": "unwatched list", "queue": "download problem", "apps": "app warning"}
 
 def nightly_summary():
     last = kv_get("gotify_last_summary") or (datetime.now() - timedelta(days=1)).isoformat(timespec="seconds")
@@ -2012,6 +2043,9 @@ def nightly_summary():
         trash = [dict(r) for r in c.execute("SELECT size, moved_at FROM trash WHERE restored_at IS NULL AND purged_at IS NULL")]
         smaller = [dict(r) for r in c.execute("SELECT title FROM done WHERE chk='quality' AND checked_at > ? AND (note LIKE '\u2713 Smaller copy%' OR note LIKE '\u2713 Tdarr converted%')", (last,))]
     soon = [t for t in trash if datetime.fromisoformat(t["moved_at"]) + timedelta(days=TRASH_DAYS) < datetime.now() + timedelta(days=1)]
+    try:                                                     # v0.1.5: Radarr/Sonarr/qbit_manage recycle bins too
+        soon += [{"size": x["size"], "moved_at": x["moved_at"]} for x in recycle_items() if datetime.fromisoformat(x["empties"]) < datetime.now() + timedelta(days=1)]
+    except Exception as e: log("recycle soon check failed: %r" % e)
     lines, prio = [], 4
     if sc and not sc["ok"]:
         lines.append("**The nightly scan failed:** %s" % (sc["note"] or "unknown error")); prio = 6
@@ -2034,7 +2068,7 @@ def nightly_summary():
     if arrived: lines.append("**Replaced and re-downloaded:** " + ", ".join(d["title"] for d in arrived[:6]) + (" and %d more" % (len(arrived) - 6) if len(arrived) > 6 else ""))
     if failed: lines.append("**Still no good copy:** " + ", ".join(d["title"] for d in failed[:6]) + (" and %d more" % (len(failed) - 6) if len(failed) > 6 else ""))
     if smaller: lines.append("**Smaller now:** " + ", ".join(x["title"] for x in smaller[:6]))
-    if soon: lines.append("**Trash:** %d item%s (%s) delete%s for good in the next 24 hours." % (len(soon), "" if len(soon) == 1 else "s", human(sum(t["size"] or 0 for t in soon)), "s" if len(soon) == 1 else ""))
+    if soon: lines.append("**Trash:** %d item%s (%s) delete%s for good in the next 24 hours (Library Doctor's trash and the recycle bins). Review them in the Trash screen." % (len(soon), "" if len(soon) == 1 else "s", human(sum(t["size"] or 0 for t in soon)), "s" if len(soon) == 1 else ""))
     if not lines:
         log("nightly summary: nothing new, no message sent"); kv_set("gotify_last_summary", now_iso()); return {"ok": True, "sent": False}
     lines.append("Open now: %d to look at \u00b7 trash %d item%s (%s)" % (len(allopen), len(trash), "" if len(trash) == 1 else "s", human(sum(t["size"] or 0 for t in trash))))
@@ -2068,6 +2102,17 @@ def nightly():
             last_queue = now.hour
             try: queue_refresh(notify=(now.hour == QUEUE_NOTIFY_HOUR))
             except Exception as e: log("queue refresh failed: %r" % e)
+            try:
+                cards, _ = apps_refresh()
+                if now.hour == QUEUE_NOTIFY_HOUR and notify_channels():      # once a day: warnings not told about before
+                    with db() as c: hid = hidden_ids(c)
+                    told = set(json.loads(kv_get("apps_notified") or "[]"))
+                    cur = [x for x in cards if x["id"] not in hid and x["detail"]["kind"] != "update"]
+                    bad = [x for x in cur if x["id"] not in told]
+                    if bad:
+                        notify("Library Doctor: %d app warning%s" % (len(bad), "" if len(bad) == 1 else "s"), "\n\n".join("**%s**: %s" % (x["library"], x["detail"]["text"][:200]) for x in bad[:6]), 5)
+                    kv_set("apps_notified", json.dumps([x["id"] for x in cur]))
+            except Exception as e: log("app health refresh failed: %r" % e)
         elif now.minute % 10 == 7 and last_tdarr != (now.hour, now.minute):   # v23: every 10 min while Tdarr has files of ours
             last_tdarr = (now.hour, now.minute)
             try:
@@ -3255,6 +3300,72 @@ def tdarr_missed_scan(trashed, skip):
                         links=[{"label": "Open Tdarr", "url": S["tdarr"]["public"]}] if S["tdarr"].get("public") else []))
     return out
 
+# ---------------- App health (v0.1.5) ----------------
+# Every app keeps its own list of warnings (Radarr/Sonarr/Prowlarr Health page, Bazarr health, Tdarr nodes) that you only
+# see when you open it. One card per app + warning source; "update available" is a low-key card; an app that doesn't
+# answer is a problem in itself. Refreshed with every scan and hourly with the Downloads cards.
+def _health_card(app, source, typ, msg, wiki, public, page):
+    upd = source == "UpdateCheck"
+    sev = "bad" if typ == "error" or source == "unreachable" else "att"
+    title = "%s: %s" % (app, "update available" if upd else "not answering" if source == "unreachable" else msg[:90] + ("…" if len(msg) > 90 else ""))
+    note = ("Update it when convenient; nothing is broken." if upd else
+            "%s can't do its job until this is fixed. Open it to see the details." % app if sev == "bad" else
+            "This is %s's own warning, shown here so you don't have to open every app." % app)
+    links = [{"label": "Open in %s" % app, "url": public.rstrip("/") + page}] if public else []
+    if wiki: links.append({"label": "What does this mean?", "url": wiki})
+    return dict(id=iid("apps", app, source), chk="apps", sev=sev, title=title, library=app,
+                detail={"kind": "update" if upd else "health", "source": source, "text": msg, "note": note, "fixes": []}, links=links)
+
+def apps_cards():
+    out = []
+    def arr_like(name, url, key, public, ver, page="/system/status"):
+        try:
+            items = http(url.rstrip("/") + "/api/%s/health" % ver, {"X-Api-Key": key}, timeout=20)
+        except Exception as e:
+            out.append(_health_card(name, "unreachable", "error", "Library Doctor couldn't reach %s (%s)." % (name, getattr(e, "reason", e)), "", public, page)); return
+        for h in items if isinstance(items, list) else []:
+            if (h.get("type") or "").lower() in ("ok", "notice"): continue
+            out.append(_health_card(name, h.get("source") or "health", (h.get("type") or "warning").lower(), h.get("message") or "", h.get("wikiUrl") or "", public, page))
+    for a in S.get("arrs", []):
+        arr_like(a["name"], a["url"], a.get("key", ""), a.get("public") or a["url"], "v3")
+    pr = S.get("prowlarr") or {}
+    if pr.get("url"): arr_like(pr.get("name") or "Prowlarr", pr["url"], pr.get("key", ""), pr.get("public") or pr["url"], "v1")
+    for b in S.get("bazarr", []) or []:
+        try:
+            r = http(b["url"].rstrip("/") + "/api/system/health", {"X-API-KEY": b.get("key", "")}, timeout=20)
+            for h in (r.get("data") or []) if isinstance(r, dict) else []:
+                msg = "%s: %s" % (h.get("object", ""), h.get("issue", "")) if h.get("object") else (h.get("issue") or str(h))
+                out.append(_health_card(b.get("name") or "Bazarr", "bazarr:" + str(h.get("object", ""))[:40], "warning", msg, "", b.get("public") or b["url"], "/system/status"))
+        except Exception as e:
+            out.append(_health_card(b.get("name") or "Bazarr", "unreachable", "error", "Library Doctor couldn't reach %s (%s)." % (b.get("name") or "Bazarr", getattr(e, "reason", e)), "", b.get("public") or b["url"], "/system/status"))
+    t = S.get("tdarr") or {}
+    if t.get("url"):
+        try:
+            nodes = tdarr_call_get("/api/v2/get-nodes")
+            if not nodes:
+                out.append(_health_card("Tdarr", "nodes", "error", "No Tdarr node is connected, so nothing gets converted.", "", t.get("public") or t["url"], "/"))
+        except Exception as e:
+            out.append(_health_card("Tdarr", "unreachable", "error", "Library Doctor couldn't reach Tdarr (%s)." % getattr(e, "reason", e), "", t.get("public") or t["url"], "/"))
+    return out
+
+def tdarr_call_get(path):
+    t = S.get("tdarr") or {}
+    req = urllib.request.Request(t["url"].rstrip("/") + path, headers={"x-api-key": t.get("key", "")})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        b = r.read().decode() or "{}"
+    return json.loads(b) if b.strip()[:1] in ("{", "[") else {}
+
+def apps_refresh():
+    cards = apps_cards(); now = now_iso()
+    with db() as c:
+        seen = {r["id"]: r["first_seen"] for r in c.execute("SELECT id, first_seen FROM issues WHERE chk='apps'")}
+        sid = (c.execute("SELECT MAX(id) FROM scans").fetchone()[0] or 0)
+        c.execute("DELETE FROM issues WHERE chk='apps'")
+        for it in cards:
+            c.execute("INSERT OR REPLACE INTO issues VALUES (?,?,?,?,?,?,?,?,?,?)", (it["id"], sid, "apps", it["sev"], it["title"], it["library"],
+                      json.dumps(it["detail"]), json.dumps(it["links"]), seen.get(it["id"], now), now))
+    return cards, [it for it in cards if it["id"] not in seen]
+
 # ---------------- Downloads: Radarr/Sonarr queues (v33) ----------------
 # 11-15: 4 better copies sat "import blocked" for 12 h, a dead torrent never started and a 4-month-old download no arr knew
 # about kept 12.6 GB, and nothing said so. queue_cards() reads every arr's queue and makes a card per problem:
@@ -3624,7 +3735,7 @@ def session_end(tok, everyone=False):
 
 # ---------------- settings page ----------------
 SECRET_FIELDS = ("token", "key")
-SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "gotify") + NOTIFY_KINDS
+SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "prowlarr", "gotify") + NOTIFY_KINDS
 LISTS = ("arrs", "bazarr")
 
 def settings_public():
@@ -3678,6 +3789,9 @@ def settings_test(kind, e):
         if kind == "tdarr":
             r = http(u + "/api/v2/status", {"x-api-key": e.get("key", "")}, timeout=15)
             return {"ok": True, "msg": "Connected to Tdarr %s." % (r.get("version", "") if isinstance(r, dict) else "")}
+        if kind == "prowlarr":
+            r = http(u + "/api/v1/system/status", {"X-Api-Key": e.get("key", "")}, timeout=15)
+            return {"ok": True, "msg": "Connected to Prowlarr %s." % r.get("version", "")}
         if kind == "sportarr":
             http(u + "/api/rootfolder", {"X-Api-Key": e.get("key", "")}, timeout=15)
             return {"ok": True, "msg": "Connected to Sportarr."}
@@ -3929,7 +4043,7 @@ def state():
     virus = {"clam": clam_status(cached=True), "last": kv_get("virus_last_incremental"), "full": kv_get("virus_full_last"),
              "full_running": VIRUS_LOCK.locked(), "full_started": (kv_get("virus_full_running") or {}).get("at")}
     coming = {"ytdlp": ytdlp_status(), "busy": TRAILER_LOCK.locked(), "updating": YTDLP_LOCK.locked()}
-    return {"gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "coming": coming, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
+    return {"plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "coming": coming, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
             "scan_hour": sched()[0], "scan_minute": sched()[1], "scan_days": sched()[2], "keep_days": KEEP_DAYS, "stats": stats(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
             "configured": configured(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT,
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
@@ -4016,6 +4130,7 @@ class H(BaseHTTPRequestHandler):
             if path == "/api/scan":
                 if not configured(): return self.send(409, {"error": "Set up Plex and at least one Radarr or Sonarr in Settings first."})
                 if STATE["running"]: return self.send(409, {"error": "A scan is already running."})
+                STATE.update(running=True, step="Starting", progress=0.0)    # v0.1.5: the page sees "running" straight away
                 threading.Thread(target=scan, daemon=True).start()
                 return self.send(202, {"started": True})
             if path in ("/api/ignore", "/api/unignore"):
@@ -4072,6 +4187,10 @@ class H(BaseHTTPRequestHandler):
                 how = str(body.get("how", ""))
                 res = [dict(queue_fix(str(i)[:32], how), id=i) for i in ids if i][:50]
                 return self.send(200, {"ok": any(r.get("ok") for r in res), "errors": [r["error"] for r in res if not r.get("ok") and r.get("error")]})
+            if path == "/api/plextidy":
+                return self.send(200, plex_tidy())
+            if path == "/api/plexbackup":
+                return self.send(200, plex_backup())
             if path == "/api/queuerefresh":
                 return self.send(200, {"ok": True, "cards": queue_refresh()})
             if path == "/api/comingfix":
