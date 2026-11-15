@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.8 (beta)
+
+**New**
+- **A closer look before anything leaves the trash for good.** Before deleting a file, Library Doctor checks again and keeps it back (with the reason shown in the Trash screen, the warning banner and the nightly summary) when: the copy a duplicate clean-up kept is no longer on the disk (an upgraded copy in the same folder counts as fine), a replaced file's new copy hasn't arrived or has gone, an old .ts file's new .mkv is missing, or a Plex listing fix didn't finish (so the file in the trash is the only copy). Empty Trash leaves held files too; delete them one by one if you're sure.
+
+**Security**
+- The page can no longer be shown inside another website (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), which blocks clickjacking, mainly relevant when the built-in login is switched off behind a proxy. Also `Referrer-Policy: same-origin`, `base-uri` and `form-action` limited to the app itself.
+- **Review all fixes → Download CSV:** a file or title starting with `=`, `+`, `-` or `@` is written with a leading apostrophe, so a spreadsheet can't run it as a formula.
+- README: create the password straight away after installing, before the port is reachable from elsewhere.
+- README: Library Doctor is now in Unraid's Community Applications (search Library Doctor in Apps).
+
 ## 0.1.7 (beta)
 
 - **Folder check (Settings):** every app's view of your media side by side with Library Doctor's, ✓/✗ per app with an example file, and **Use suggested mapping** (or **Remove the mapping**) when they don't line up. Runs by itself when you open Settings and after each save.

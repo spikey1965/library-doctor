@@ -94,6 +94,7 @@ button:focus-visible, a.btn:focus-visible, .check:focus-visible, select:focus-vi
 .dbar.hi i { background:var(--orange); } .warnc { color:var(--orange); }
 .fct td { vertical-align:top; padding:6px 8px; } .fct code { font-size:11px; word-break:break-all; } .fc-ok b { color:var(--teal); } .fc-bad b, .fc-partial b { color:var(--orange); } .fc-error b { color:var(--mut); }
 .impact { margin:0; font-size:12px; color:var(--mut); } .impact b { color:var(--fg); }
+.frow .held { display:block; color:var(--orange); font-weight:600; }
 .confirm.howp { background:var(--card); border:1px solid var(--line2); } .howp .det code { display:inline; word-break:normal; } .cmd { margin:0; font:12px/1.5 ui-monospace,Menlo,monospace; background:var(--bg); color:var(--fg); border-radius:8px; padding:8px 10px; white-space:pre-wrap; word-break:break-all; }
 .confirm ul { margin:0; padding-left:18px; } .confirm code { font:12px ui-monospace,Menlo,monospace; word-break:break-all; color:var(--fg); }
 .b-orange { background:var(--orange); color:var(--bg); }
@@ -557,7 +558,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     return (S.issues || []).filter(i => !i.ignored && i.chk !== "unwatched").map(i => ({ i, p: planOf(i), c: CHECKS.find(c => c.id === i.chk) || { label: i.chk } }));
   }
   function reviewCsv(rows) {
-    const q = v => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+    // v0.1.8: a cell starting with = + - @ (or a tab/CR) would run as a formula in Excel/Sheets, so it gets a leading apostrophe
+    const q = v => { let t = String(v == null ? "" : v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
     const out = [["Check", "Title", "Library", "What the fix would do", "Files to trash", "Size (bytes)", "Confidence"].map(q).join(",")]
       .concat(rows.map(r => [r.c.label, r.i.title, r.i.library, r.p.what, r.p.files || "", r.p.bytes || "", r.p.conf].map(q).join(",")));
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([out.join("\r\n")], { type: "text/csv" }));
@@ -601,7 +603,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const sp = S.split_mounts || [];
     $("splitWarn").hidden = !sp.length;
     // v0.1.5: files that will be deleted for good in the next 24 hours (Library Doctor's trash + Radarr/Sonarr/qbit_manage bins)
-    const soon = (S.trash || []).filter(t => t.empties && new Date(t.empties).getTime() - Date.now() < 864e5), soonSz = soon.reduce((a, t) => a + (t.size || 0), 0);
+    const soon = (S.trash || []).filter(t => t.empties && !t.held && new Date(t.empties).getTime() - Date.now() < 864e5), soonSz = soon.reduce((a, t) => a + (t.size || 0), 0);
     const ls = (S.scans || [])[0], fcBad = ls && ((!ls.ok && /Folder check/.test(ls.note || "")) || /^Suspect/.test(ls.note || ""));
     $("fcWarn").hidden = !fcBad;
     if (fcBad) { $("fcWarn").innerHTML = `<b>${ls.ok ? "The last scan looked wrong." : "The last scan stopped."}</b> ${esc(ls.note)} <button class="b-line sm" id="fcGo">Open Folder check</button>`; $("fcGo").onclick = () => setView("settings"); }
@@ -1024,9 +1026,9 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       rows.map(t => { const ext = (base(t.src).split(".").pop() || "").slice(0, 5), side = t.reason === "Leftover side file", dl = daysLeft(t);
         return `<div class="frow ${binSel.has(t.id) ? "sel" : ""}" data-row="${t.id}"><input type="checkbox" data-pick="${t.id}" aria-label="Select ${esc(base(t.src))}" ${binSel.has(t.id) ? "checked" : ""}>
           <span class="ftype ${side ? "side" : ""}">${esc(ext)}</span>
-          <span class="fname"><b>${esc(base(t.src))}</b><small>from ${esc(t.src.slice(0, t.src.lastIndexOf("/")).replace(/^\/media\//, ""))}</small><small class="rs">${t.rb ? `<span class="rbtag">${esc(t.rb)} recycle bin</span> ` : ""}${esc(t.reason)}</small></span>
+          <span class="fname"><b>${esc(base(t.src))}</b><small>from ${esc(t.src.slice(0, t.src.lastIndexOf("/")).replace(/^\/media\//, ""))}</small><small class="rs">${t.rb ? `<span class="rbtag">${esc(t.rb)} recycle bin</span> ` : ""}${esc(t.reason)}</small>${t.held ? `<small class="held" title="Library Doctor took a closer look before deleting it for good">Kept back: ${esc(t.held)}</small>` : ""}</span>
           <span class="fnum">${human(t.size)}</span><span class="fnum">${fmt(t.moved_at)}</span>
-          <span class="fnum ${dl <= 1 ? "soon" : ""}">${dl === 0 ? "today" : dl === 1 ? "1 day" : dl + " days"}<small>${fmt(t.empties)}</small></span></div>`; }).join("");
+          <span class="fnum ${dl <= 1 && !t.held ? "soon" : ""}">${t.held ? "kept back" : dl === 0 ? "today" : dl === 1 ? "1 day" : dl + " days"}<small>${t.held ? "until it's safe" : fmt(t.empties)}</small></span></div>`; }).join("");
     wireBin(rows);
   }
   function wireBin(rows) {
@@ -1038,7 +1040,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     if (yes) yes.onclick = async () => {
       yes.disabled = true;
       const r = await api("/api/purge", binAsk === "delete" ? { ids: [...binSel] } : {});
-      binMsg = { text: `Deleted ${r.deleted} item${r.deleted === 1 ? "" : "s"} for good, ${r.freed} freed.` }; binAsk = null; binSel.clear(); load();
+      binMsg = { text: `Deleted ${r.deleted} item${r.deleted === 1 ? "" : "s"} for good, ${r.freed} freed.` + (r.kept_back ? ` ${r.kept_back} kept back after a closer look (see "Kept back" in the list); select and delete them yourself if you're sure.` : "") }; binAsk = null; binSel.clear(); load();
     };
   }
   $("tabScan").onclick = () => setView("scan");

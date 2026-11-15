@@ -32,7 +32,7 @@ Tdarr (Convert with Tdarr) and Sportarr (sports libraries) are optional too. For
 ## Nothing is deleted without asking
 
 - Library Doctor **only reads** from your apps until you press a fix button.
-- Every clean-up **moves** files into its own trash (`.library-doctor-trash` inside your media folder, same disk, so it's instant). You can put anything back for 7 days, then the trash empties itself.
+- Every clean-up **moves** files into its own trash (`.library-doctor-trash` inside your media folder, same disk, so it's instant). You can put anything back for 7 days (3, 7, 14 or 30 in Settings), then the trash empties itself, but only after a closer look: a file is kept back if the copy that was kept is gone, a replacement hasn't arrived yet, or it would be the only copy.
 - Suggestions are marked **Sure** (a tiny broken copy, a leftover temp file) or **Check** (two good copies, have a look first).
 
 ## Install (Docker Compose)
@@ -45,13 +45,15 @@ Tdarr (Convert with Tdarr) and Sportarr (sports libraries) are optional too. For
    ```sh
    docker compose up -d
    ```
-3. Open `http://<your-server>:8790`, create a password, then add Plex and at least one Radarr or Sonarr under **Settings**. Press **Test** on each one, then **Save** and **Scan now**.
+3. Open `http://<your-server>:8790` and **create a password straight away**: until one is set, anyone who can reach the page could set it, so don't expose the port to the internet before this. Then add Plex and at least one Radarr or Sonarr under **Settings**. Press **Test** on each one, then **Save** and **Scan now**.
 
 After that it scans by itself every night at 3am.
 
 ### Unraid
 
-Until it's in Community Applications: **Docker → Add Container → Template repositories**, add `https://github.com/spikey1965/library-doctor`, then pick **library-doctor** from the template list (or paste the template URL `https://raw.githubusercontent.com/spikey1965/library-doctor/main/extras/unraid/library-doctor.xml`). Set **Media** to the share that holds your films and shows (e.g. `/mnt/user/data/media`); PUID 99 / PGID 100 are Unraid's defaults.
+Library Doctor is in **Community Applications**: open **Apps**, search **Library Doctor** and click Install. Set **Media** to the share that holds your films and shows (e.g. `/mnt/user/data/media`); PUID 99 / PGID 100 are Unraid's defaults. Then open the WebUI and set a password.
+
+If it doesn't show up yet (new apps appear after the next Community Applications update), use **Docker → Add Container → Template repositories**, add `https://github.com/spikey1965/unraid-templates`, and pick **library-doctor**.
 
 ### Mount your media as one folder
 

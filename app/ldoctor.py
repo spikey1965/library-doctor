@@ -35,7 +35,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.1.8"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -1126,15 +1126,98 @@ def restore(trash_id):
         event("restore", "Put back %s" % os.path.basename(t["src"]))
         return {"ok": True}
 
+# v0.1.8: a closer look before anything leaves the trash for good. A file is kept back (and you're told why) when:
+#   - a duplicate clean-up's KEPT copy is no longer on the disk,
+#   - a replaced file (broken / too short / wrong language) has no good new copy yet,
+#   - an old .ts copy's new .mkv isn't there (or is tiny),
+#   - a "Plex fix in progress" file is still in the trash, i.e. the only copy.
+# Side files, subtitles, virus/fake files and old downloads need no check. Deleting chosen files by hand still works.
+_HOLD_SKIP = ("Leftover side file", "Advert-only subtitle", "Virus", "Fake video", "Old download", "Leftover Tdarr temp file")
+
+def purge_check(t):
+    r = t["reason"] or ""
+    if r.startswith(_HOLD_SKIP): return None
+    if r.startswith("Plex fix"):
+        return "it's the only copy: a Plex listing fix didn't finish, so put it back"
+    if r.startswith("Old .ts copy"):
+        mkv = os.path.splitext(t["src"])[0] + ".mkv"
+        try:
+            if os.path.getsize(mkv) >= BROKEN_BYTES: return None
+            return "the new .mkv is only %s" % human(os.path.getsize(mkv))
+        except OSError: return "the new .mkv isn't there"
+    with db() as c:
+        d = c.execute("SELECT * FROM done WHERE issue_id=? ORDER BY id DESC LIMIT 1", (t["issue_id"],)).fetchone() if t["issue_id"] else None
+    if "(replaced)" in r:
+        if not d: return "there's no record of a new copy arriving"
+        if d["status"] in ("waiting", "checking"): return "its new copy hasn't arrived yet"
+        if d["status"] != "ok": return "its new copy had a problem: %s" % (d["note"] or "")[:120]
+        if (d["note"] or "").startswith("Removed from"): return None              # you removed the film/show yourself
+        try:
+            ref = json.loads(d["ref"] or "{}"); a = arr_by_name(ref.get("arr"))
+            if a and ref.get("kind") == "movie":
+                m = arr(a, "/movie/%d" % int(ref["id"])); f = (m.get("movieFile") or {}) if m.get("hasFile") else {}
+                if not f.get("path") or not os.path.exists(f["path"]): return "%s no longer has a new copy on the disk" % a["name"]
+                if (f.get("size") or 0) < BROKEN_BYTES: return "the new copy in %s is only %s" % (a["name"], human(f.get("size") or 0))
+            elif a and ref.get("kind") == "episode":
+                e = arr(a, "/episode/%d" % int(ref["id"]))
+                if not e.get("hasFile"): return "%s no longer has a new copy of the episode" % a["name"]
+        except urllib.error.HTTPError as e:
+            if e.code != 404: return "couldn't check with %s (%s)" % (ref.get("arr"), e.code)
+        except Exception as e:
+            return "couldn't check with %s (%s)" % (ref.get("arr") if isinstance(ref, dict) else "Radarr/Sonarr", getattr(e, "reason", e))
+        return None
+    if d and d["chk"] == "dupes":                                                  # a duplicate clean-up: the kept copy must still be there
+        kept = [k for k in re.split(r"\n|\|", d["kept"] or "") if k.strip()]
+        missing = [k.strip() for k in kept if not os.path.exists(k.strip()) and not _upgraded_copy(k.strip())]
+        if missing: return "the copy that was kept (%s) is no longer on the disk" % os.path.basename(missing[0])
+    return None
+
+_VIDEO_EXT = (".mkv", ".mp4", ".avi", ".m4v", ".ts", ".mov", ".wmv")
+def _upgraded_copy(kept):
+    """Radarr/Sonarr may have upgraded the kept copy since (new name). Fine if the same folder still has a good video for
+    the same film, or for the same SxxEyy episode."""
+    folder, name = os.path.dirname(kept), os.path.basename(kept)
+    ep = EP_RE.search(name)
+    try:
+        for n in os.listdir(folder):
+            if not n.lower().endswith(_VIDEO_EXT): continue
+            if ep:
+                m = EP_RE.search(n)
+                if not m or (int(m.group(1)), int(m.group(2))) != (int(ep.group(1)), int(ep.group(2))): continue
+            if os.path.getsize(os.path.join(folder, n)) >= BROKEN_BYTES: return True
+    except OSError: pass
+    return False
+
+def trash_review(days_ahead=2):
+    """Check the files due to leave the trash soon; remember which are held (shown in the trash and the warning banner)."""
+    with db() as c:
+        rows = c.execute("SELECT * FROM trash WHERE restored_at IS NULL AND purged_at IS NULL").fetchall()
+    soon = datetime.now() + timedelta(days=days_ahead)
+    held = {}
+    for t in rows:
+        if datetime.fromisoformat(t["moved_at"]) + timedelta(days=TRASH_DAYS) > soon: continue
+        try: why = purge_check(t)
+        except Exception as e: why = "couldn't be checked (%s)" % e
+        if why: held[str(t["id"])] = why
+    old = kv_get("trash_held") or {}
+    kv_set("trash_held", held)
+    new = {k: v for k, v in held.items() if k not in old}
+    if new:
+        event("purge", "Kept %d file%s back in the trash after a closer look: %s" % (len(new), "" if len(new) == 1 else "s", "; ".join(list(new.values())[:3])))
+    return held
+
 def purge(older_than_days=None):
-    """Delete trashed files for good. older_than_days=None empties everything."""
+    """Delete trashed files for good. older_than_days=None empties everything. v0.1.8: files the closer look holds back stay."""
+    held = trash_review(0 if older_than_days is not None else 10000)
     with MOVE_LOCK:
         with db() as c:
             rows = c.execute("SELECT * FROM trash WHERE restored_at IS NULL AND purged_at IS NULL").fetchall()
         cutoff = datetime.now() - timedelta(days=older_than_days) if older_than_days is not None else None
         n, freed = 0, 0
+        kept_back = 0
         for t in rows:
             if cutoff and datetime.fromisoformat(t["moved_at"]) > cutoff: continue
+            if str(t["id"]) in held: kept_back += 1; continue
             hl = False
             if os.path.realpath(t["dst"]).startswith(TRASH_DIR + os.sep) and os.path.isfile(t["dst"]):
                 hl = os.stat(t["dst"]).st_nlink > 1        # v0.1.7: another link still holds the data, so nothing is freed
@@ -1147,7 +1230,7 @@ def purge(older_than_days=None):
                 try: os.rmdir(root)
                 except OSError: pass
         if n: event("purge", "Emptied %d file%s from the trash (%s freed)." % (n, "" if n == 1 else "s", human(freed)))
-        return {"ok": True, "deleted": n, "freed": human(freed)}
+        return {"ok": True, "deleted": n, "freed": human(freed), "kept_back": kept_back}
 
 def purge_ids(ids):
     """Delete chosen trash entries for good."""
@@ -2728,6 +2811,10 @@ def nightly_summary():
             lines.append("**Disk space:** %s free, filling by about %s a day, so it's full in about %d days." % (human(sf["free"]), human(sf["rate"]), sf["days_left"]))
             prio = max(prio, 5 if sf["days_left"] < 14 else prio)
     except Exception as e: log("space summary failed: %r" % e)
+    try:
+        hb = kv_get("trash_held") or {}
+        if hb: lines.append("**Kept back in the trash:** %d file%s after a closer look (%s). Check them in the Trash screen." % (len(hb), "" if len(hb) == 1 else "s", list(hb.values())[0]))
+    except Exception: pass
     if soon: lines.append("**Trash:** %d item%s (%s) delete%s for good in the next 24 hours (Library Doctor's trash and the recycle bins). Review them in the Trash screen." % (len(soon), "" if len(soon) == 1 else "s", human(sum(t["size"] or 0 for t in soon)), "s" if len(soon) == 1 else ""))
     if not lines:
         log("nightly summary: nothing new, no message sent"); kv_set("gotify_last_summary", now_iso()); return {"ok": True, "sent": False}
@@ -2816,6 +2903,8 @@ def nightly():
             last_follow = now.hour
             try: followup()
             except Exception as e: log("followup failed: %r" % e)
+            try: trash_review()                                # v0.1.8: closer look at what leaves the trash soon
+            except Exception as e: log("trash review failed: %r" % e)
         elif now.minute == 37 and last_queue != now.hour:      # v33: Downloads cards hourly; 07:37 (night window over) tells Gotify
             last_queue = now.hour
             try: space_record()                                       # v0.1.6: one free-space reading per day (latest wins)
@@ -5149,8 +5238,10 @@ def state():
     for r in rows:
         r["detail"] = json.loads(r["detail"]); r["links"] = json.loads(r["links"]); r["ignored"] = r["id"] in ign
         if r["id"] in snz: r["snoozed"] = snz[r["id"]]
+    held = kv_get("trash_held") or {}
     for t in trash:
         t["empties"] = (datetime.fromisoformat(t["moved_at"]) + timedelta(days=TRASH_DAYS)).isoformat(timespec="seconds")
+        if str(t["id"]) in held: t["held"] = held[str(t["id"])]
     bins = [{"name": "Library Doctor", "days": TRASH_DAYS, "count": len(trash), "size": sum(t["size"] or 0 for t in trash),
              "next": min((t["empties"] for t in trash), default=None)}]
     try:
@@ -5192,7 +5283,9 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com")
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+        self.send_header("X-Frame-Options", "DENY")                 # v0.1.8: never shown inside another site's page (clickjacking)
+        self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Content-Length", str(len(b)))
         self.end_headers()
         self.wfile.write(b)
