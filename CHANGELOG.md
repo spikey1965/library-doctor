@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.10 (beta)
+
+- **The library score in your messages:** the nightly summary (when it has news) and the weekly digest now say the score, how it changed since yesterday or this week, the lowest areas and how many problems keep coming back.
+- **Dismiss** button on the "refused a request" warning. It hides the warning until something else is refused; the request stays in the log and the History list.
+- **Unraid template:** the 0.1.9 settings (Trusted proxies, Allowed host names, Incomplete folder days) are now in the template's advanced view, and the description mentions the Analysis tab.
+
 ## 0.1.9 (beta)
 
 **New**

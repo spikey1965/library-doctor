@@ -35,7 +35,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.9"
+APP_VERSION = "0.1.10"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -2753,6 +2753,25 @@ def health_pct():
         else: bad.add(d.get("path") or r["id"])
     return round(100.0 * (1 - len(bad) / files), 1) if files else None, len(rows) - len([r for r in rows if r["id"] in ign])
 
+def score_line(days=1):
+    """v0.1.10: the library score in one line for the messages: 'Score 97.4 (▲ 1.2 since yesterday) · 2 problems keep coming back'."""
+    sc = library_score()
+    if not sc: return ""
+    cut = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+    with db() as c: old = c.execute("SELECT overall FROM scores WHERE at <= ? ORDER BY at DESC LIMIT 1", (cut,)).fetchone()
+    cur = sc["overall"]
+    txt = "**Score:** %s out of 100" % ("100" if cur >= 99.95 else "%.1f" % cur)
+    if old is not None:
+        d = cur - old["overall"]
+        txt += " (%s %s)" % ("no change" if abs(d) < 0.05 else ("▲ +%.1f" % d if d > 0 else "▼ %.1f" % d), "since yesterday" if days == 1 else "this week")
+    low = [a for a in sc["areas"] if a["score"] < 95]
+    if low: txt += " · lowest: " + ", ".join("%s %.0f" % (a["label"], a["score"]) for a in sorted(low, key=lambda a: a["score"])[:2])
+    try:
+        rc = recurring()["total"]
+        if rc: txt += " · %d problem%s keep%s coming back" % (rc, "" if rc == 1 else "s", "s" if rc == 1 else "")
+    except Exception: pass
+    return txt
+
 def weekly_digest():
     """v0.1.7: one quiet message a week (after Sunday's scan) when Settings → Notifications says Weekly or Both."""
     if (S.get("digest") or "news") not in ("weekly", "both") or not notify_channels(): return
@@ -2766,7 +2785,7 @@ def weekly_digest():
         ign = hidden_ids(c)
         new = [r["chk"] for r in c.execute("SELECT id, chk FROM issues WHERE first_seen > ?", (since,)) if r["id"] not in ign]
         fixed = c.execute("SELECT COUNT(*) FROM done WHERE status='ok' AND at > ?", (since,)).fetchone()[0]
-    lines = ["**Library health:** %s" % ("%.1f%%" % pct if pct is not None else "no scan yet"),
+    lines = [score_line(days=7) or "**Library health:** %s" % ("%.1f%%" % pct if pct is not None else "no scan yet"),
              "**To review:** %d open item%s, %d new this week" % (n_open, "" if n_open == 1 else "s", len(new)), "**Fixed this week:** %d" % fixed]
     try:
         sf = space_forecast()
@@ -2839,6 +2858,10 @@ def nightly_summary():
     if soon: lines.append("**Trash:** %d item%s (%s) delete%s for good in the next 24 hours (Library Doctor's trash and the recycle bins). Review them in the Trash screen." % (len(soon), "" if len(soon) == 1 else "s", human(sum(t["size"] or 0 for t in soon)), "s" if len(soon) == 1 else ""))
     if not lines:
         log("nightly summary: nothing new, no message sent"); kv_set("gotify_last_summary", now_iso()); return {"ok": True, "sent": False}
+    try:                                                     # v0.1.10: the score rides along (never a reason to send by itself)
+        sl = score_line(days=1)
+        if sl: lines.append(sl)
+    except Exception as e: log("score line failed: %r" % e)
     lines.append("Open now: %d to look at \u00b7 trash %d item%s (%s)" % (len(allopen), len(trash), "" if len(trash) == 1 else "s", human(sum(t["size"] or 0 for t in trash))))
     title = "Library Doctor: " + ("%d new to look at" % len(new) if new else "%d replaced file%s arrived" % (len(arrived), "" if len(arrived) == 1 else "s") if arrived else "nightly check")
     r = notify(title, "\n\n".join(lines), prio)
@@ -5918,6 +5941,11 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, settings_import(body.get("data"), body.get("passphrase")))
             if path == "/api/settings/export":
                 return self.send(200, settings_export_encrypted(body.get("passphrase")))
+            if path == "/api/security/dismiss":                      # v0.1.10: hide the "refused a request" warning (the log keeps it)
+                b = kv_get("security_blocked")
+                with db() as c: c.execute("DELETE FROM kv WHERE k='security_blocked'")
+                if b: event("security", "Dismissed the warning about a refused request from %s (%s)." % (b.get("ip", "?"), b.get("why", "")))
+                return self.send(200, {"ok": True})
             if path == "/api/gapsearch":
                 return self.send(200, gaps_fix(str(body.get("id", ""))[:32]))
             if path == "/api/plexsplit":

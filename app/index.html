@@ -705,7 +705,9 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     const sp = S.split_mounts || [];
     $("splitWarn").hidden = !sp.length;
     const sb = S.security_blocked; $("secWarn").hidden = !sb;
-    if (sb) $("secWarn").innerHTML = `<b>Library Doctor refused a request</b> from <code>${esc(sb.ip)}</code> (${esc(String(sb.at).replace("T", " ").slice(0, 16))}): ${esc(sb.why)}. If that wasn't you, check that its port isn't reachable from the internet. Settings → Login explains the options.`;
+    if (sb) $("secWarn").innerHTML = `<b>Library Doctor refused a request</b> from <code>${esc(sb.ip)}</code> (${esc(String(sb.at).replace("T", " ").slice(0, 16))}): ${esc(sb.why)}. If that wasn't you, check that its port isn't reachable from the internet. Settings → Login explains the options. <button class="b-line sm" id="secDismiss" style="margin-left:6px">Dismiss</button>`;
+    const secBtn = $("secDismiss"); if (secBtn) secBtn.onclick = async () => { secBtn.disabled = true; secBtn.textContent = "Dismissing…";
+      const r = await api("/api/security/dismiss", {}); if (r.ok) { S.security_blocked = null; $("secWarn").hidden = true; } else { secBtn.disabled = false; secBtn.textContent = "Dismiss"; } };
     // v0.1.5: files that will be deleted for good in the next 24 hours (Library Doctor's trash + Radarr/Sonarr/qbit_manage bins)
     const soon = (S.trash || []).filter(t => t.empties && !t.held && new Date(t.empties).getTime() - Date.now() < 864e5), soonSz = soon.reduce((a, t) => a + (t.size || 0), 0);
     const ls = (S.scans || [])[0], fcBad = ls && ((!ls.ok && /Folder check/.test(ls.note || "")) || /^Suspect/.test(ls.note || ""));
