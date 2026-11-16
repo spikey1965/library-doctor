@@ -73,8 +73,8 @@ select { font:inherit; background:var(--card); color:var(--fg); border:1px solid
 .bins .bn b { color:var(--fg); font-weight:700; } .bins .bn.has { border-color:var(--teal); }
 .chip-done { font:700 14px var(--font); border-radius:11px; padding:8px 13px; display:inline-flex; align-items:center; gap:7px; background:var(--teal-bg); color:var(--teal); border:1px solid transparent; cursor:default; }
 .chip-done svg { width:15px; height:15px; flex:none; }
-button, a.btn { font:700 14px var(--font); border-radius:11px; padding:8px 13px; cursor:pointer; border:1px solid transparent; text-decoration:none; display:inline-flex; align-items:center; gap:7px; }
-.b-teal { background:var(--teal); color:var(--bg); } .b-line { background:transparent; color:var(--fg); border-color:var(--line2); }
+button, a.btn, a.b-line, label.b-line { font:700 14px var(--font); border-radius:11px; padding:8px 13px; cursor:pointer; border:1px solid transparent; text-decoration:none; display:inline-flex; align-items:center; gap:7px; }
+.b-teal { background:var(--teal); color:var(--bg); } .b-line { background:transparent; color:var(--fg); border-color:var(--line2); } a.b-line, label.b-line { border-color:var(--line2); }
 button:disabled { opacity:.5; cursor:default; }
 button:focus-visible, a.btn:focus-visible, .check:focus-visible, select:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
 .empty { color:var(--mut); font-size:14px; padding:6px 2px; }
@@ -218,6 +218,19 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
 .uw td { padding:5px 8px 5px 0; border-top:1px solid var(--line); vertical-align:middle; } .uw td.n { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--mut); }
 .uw td.a { text-align:right; white-space:nowrap; } .uw a { color:var(--fg); }
 .uww { overflow-x:auto; max-height:420px; overflow-y:auto; }
+.adv { margin:10px 0 2px; border:1px solid var(--line); border-radius:10px; font-size:13px; }
+.adv > div { display:grid; grid-template-columns:96px 1fr; gap:8px; padding:6px 10px; } .adv > div + div { border-top:1px solid var(--line); }
+.adv b { color:var(--mut); font-weight:600; } .adv span { min-width:0; overflow-wrap:anywhere; }
+.lvl { font-style:normal; font-weight:700; font-size:11px; padding:1px 7px; border-radius:20px; margin-right:4px; white-space:nowrap; }
+.lvl-none, .lvl-low { background:rgba(13,148,136,.15); color:var(--teal); } .lvl-med { background:rgba(234,88,12,.15); color:#c2410c; }
+@media (max-width:520px) { .adv > div { grid-template-columns:1fr; gap:2px; } }
+.secw { border-color:#c0392b; } .secw b { color:#c0392b; }
+.secl { margin:6px 0 0; padding-left:18px; font-size:13px; } .secl li { margin:3px 0; } .secl .bad { color:#c0392b; font-weight:600; }
+details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color:var(--teal); font-weight:600; font-size:14px; }
+.getapp { border-top:1px solid var(--line); padding:10px 0; } .getapp h4 { margin:0 0 2px; font-size:14px; } .getapp p { margin:2px 0; font-size:13px; }
+.getapp a { color:var(--teal); } .getapp details > summary { cursor:pointer; font-size:13px; font-weight:600; margin-top:4px; }
+.getpre { background:var(--bg); border:1px solid var(--line2); border-radius:9px; padding:10px; font-size:12px; overflow-x:auto; white-space:pre; margin:8px 0 6px; max-width:100%; }
+.inc { display:flex; gap:10px; align-items:center; padding:7px 0; border-top:1px solid var(--line); font-size:13px; } .inc > div { flex:1; min-width:0; overflow-wrap:anywhere; } .inc small { display:block; color:var(--mut); margin-top:2px; }
 .rvbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-variant-numeric:tabular-nums; }
 .days { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; } .day { display:inline-flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line2); border-radius:10px; padding:6px 10px; font-size:13px; cursor:pointer; } .day input { accent-color:var(--teal); }
 #histP .h { display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -243,13 +256,49 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
 @media print { body.rvopen > *:not(#rvModal) { display:none !important; } body.rvopen { background:#fff !important; } .rvm { position:static; background:none; padding:0; display:block; }
   .rvbox { max-height:none; box-shadow:none; border:0; color:#000; background:#fff; } .rvbox p, .rvsum span, .rvt td.t small, .rvt td.n { color:#333 !important; } .rvsum span { background:#f2f2f2; } .rvacts, #rvX { display:none !important; } .rvbody { overflow:visible; } .rvt td { border-color:#ccc; } }
 .lgexp { position:fixed; left:50%; top:14px; transform:translateX(-50%); z-index:90; background:var(--orange-bg); color:var(--fg); border:1px solid var(--orange); border-radius:12px; padding:10px 14px; font-size:14px; display:flex; gap:10px; align-items:center; box-shadow:0 8px 24px rgba(0,0,0,.35); max-width:calc(100vw - 32px); flex-wrap:wrap; }
+
+/* v0.1.9 Analysis tab. Chart colours checked with the palette validator: resolution = one-hue ordinal ramp (4K strongest),
+   codecs = categorical slots 1-5. Each mode has its own steps. */
+:root { --r4k:#b7d3f6; --r1080:#6da7ec; --r720:#3987e5; --rsd:#256abf; --runk:#4b5b75;
+  --c1:#3987e5; --c2:#d95926; --c3:#199e70; --c4:#c98500; --c5:#d55181; --cunk:#4b5b75; }
+:root[data-theme="light"] { --r4k:#184f95; --r1080:#256abf; --r720:#5598e7; --rsd:#86b6ef; --runk:#c3ccd8;
+  --c1:#2a78d6; --c2:#eb6834; --c3:#1baf7a; --c4:#eda100; --c5:#e87ba4; --cunk:#c3ccd8; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --r4k:#184f95; --r1080:#256abf; --r720:#5598e7; --rsd:#86b6ef; --runk:#c3ccd8;
+  --c1:#2a78d6; --c2:#eb6834; --c3:#1baf7a; --c4:#eda100; --c5:#e87ba4; --cunk:#c3ccd8; } }
+.ana { max-width:1180px; margin:0 auto; } .ana h2 { font:700 19px var(--head); margin:26px 0 10px; } .ana h2:first-child { margin-top:6px; }
+.ana .anahead { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+.tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; }
+.tile { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px 16px; }
+.tile b { display:block; font:700 26px var(--head); color:var(--fg); font-variant-numeric:tabular-nums; } .tile span { font-size:12px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+.apanel { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px 18px; }
+.scoretop { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:8px; } .scoretop b { font:800 44px var(--head); }
+.chip { font-size:12px; font-weight:700; padding:2px 9px; border-radius:20px; background:var(--card); color:var(--mut); } .chip.up { color:var(--teal); } .chip.down { color:var(--orange); }
+.arow { display:grid; grid-template-columns:130px 1fr 48px; gap:12px; align-items:center; padding:9px 0; border-top:1px solid var(--line); }
+.arow .bar { height:10px; background:var(--card); border-radius:5px; overflow:hidden; } .arow .bar i { display:block; height:100%; background:var(--teal); border-radius:5px; }
+.arow .n { text-align:right; font-weight:700; font-variant-numeric:tabular-nums; } .arow .sub { grid-column:2 / 4; font-size:12px; color:var(--mut); margin-top:-4px; }
+.arow .lbl small { display:block; color:var(--mut); font-size:11px; font-weight:400; }
+.agrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px; }
+.spark h3 { margin:0 0 2px; font:600 14px var(--font); } .spark p { margin:0 0 6px; font-size:12px; color:var(--mut); }
+.spark svg { width:100%; height:120px; display:block; overflow:visible; } .spark .tip { font-size:12px; color:var(--fg); min-height:18px; font-variant-numeric:tabular-nums; }
+.lrow { display:grid; grid-template-columns:minmax(110px, 180px) 1fr 140px; gap:12px; align-items:center; padding:8px 0; border-top:1px solid var(--line); font-size:13px; }
+.lrow .bar { height:12px; background:var(--card); border-radius:6px; overflow:hidden; } .lrow .bar i { display:block; height:100%; background:var(--teal); border-radius:6px; }
+.lrow .n { text-align:right; color:var(--mut); font-variant-numeric:tabular-nums; }
+.stack { display:flex; height:14px; border-radius:7px; overflow:hidden; gap:2px; background:var(--panel); } .stack i { display:block; height:100%; min-width:3px; }
+.qlib { padding:12px 0; border-top:1px solid var(--line); } .qlib:first-child { border-top:0; } .qlib h4 { margin:0 0 6px; font-size:14px; display:flex; justify-content:space-between; gap:8px; }
+.qlib h4 span { color:var(--mut); font-weight:600; font-size:12px; } .qlib .sl { font-size:11px; color:var(--mut); margin:8px 0 4px; text-transform:uppercase; letter-spacing:.04em; }
+.leg { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:6px; font-size:12px; color:var(--mut); } .leg i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+.leg b { color:var(--fg); font-weight:600; }
+.rtab { width:100%; border-collapse:collapse; font-size:13px; } .rtab th { text-align:left; color:var(--mut); font-weight:600; font-size:12px; padding:6px 8px 6px 0; }
+.rtab td { padding:7px 8px 7px 0; border-top:1px solid var(--line); vertical-align:top; } .rtab td.n { text-align:right; font-variant-numeric:tabular-nums; }
+.pill2 { font-size:11px; font-weight:700; padding:1px 7px; border-radius:20px; background:var(--card); color:var(--mut); white-space:nowrap; } .pill2.open { color:var(--orange); }
+@media (max-width:620px) { .lrow { grid-template-columns:1fr auto; } .lrow .n { white-space:nowrap; } .lrow .bar { grid-column:1 / 3; grid-row:2; } .arow { grid-template-columns:100px 1fr 40px; } .scoretop b { font-size:36px; } .rtab .hide-s { display:none; } }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="nav">
     <div class="logo"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z" fill="#2bc6b4"/><path d="M15 34h9l4-9 6 17 4-8h11" fill="none" stroke="#0d1830" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="49" cy="34" r="3.4" fill="#ff8b3d"/></svg>Library Doctor</div>
-    <div class="tabs" role="tablist"><button class="tab on" id="tabScan" role="tab" aria-selected="true">Scan Library</button><button class="tab" id="tabTrash" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Trash <span class="count" id="trashCount" hidden></span></button><button class="tab" id="tabSet" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M5.5 18.5l1.8-1.8M16.7 7.3l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Settings</button></div>
+    <div class="tabs" role="tablist"><button class="tab on" id="tabScan" role="tab" aria-selected="true">Scan Library</button><button class="tab" id="tabAna" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Analysis</button><button class="tab" id="tabTrash" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Trash <span class="count" id="trashCount" hidden></span></button><button class="tab" id="tabSet" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M5.5 18.5l1.8-1.8M16.7 7.3l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Settings</button></div>
     <button class="themet" id="themeT" type="button" aria-label="Switch light or dark mode" title="Light / dark mode">☾</button><span class="ro" title="Nothing is deleted straight away: clean-up moves copies to the trash, which you can restore for 7 days.">Nothing deleted without asking</span>
     <button class="b-line sm" id="logout" hidden style="margin-left:10px">Log out</button>
   </div>
@@ -274,6 +323,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
             <span class="rt"><span class="rl">Jobs left</span><span class="rs" id="jobsTxt" title="Episodes are counted one by one, so this can be higher than the number of cards. Unwatched isn't counted: it's information, not a job.">–</span></span></button>
         </div>
         <div class="splitw" id="splitWarn" role="note" hidden></div>
+        <div class="splitw secw" id="secWarn" role="alert" hidden></div>
         <div class="splitw expw" id="expWarn" role="status" hidden></div>
         <div class="splitw expw" id="fcWarn" role="status" hidden></div>
         <div class="checks" id="checks" role="group" aria-label="Checks"></div>
@@ -298,6 +348,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     </div>
   </div>
   <section class="set" id="setView" hidden aria-label="Settings"></section>
+  <section class="ana" id="anaView" hidden aria-label="Analysis"><p class="note">Loading…</p></section>
   <section class="bin" id="trashView" hidden aria-label="Trash">
     <div class="binhead" id="binHead">
       <svg class="bigbin" viewBox="0 0 160 170" role="img" aria-label="Trash">
@@ -545,6 +596,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       what = parts.join(" · ") || "Nothing automatic: shown for information"; kind = f.includes("tdarr") || f.includes("remux") ? "convert" : f.includes("search") || f.includes("smaller") ? "download" : "look";
       if (f.includes("smaller")) bytes = d.extra || 0; }
     else if (i.chk === "coming") { what = f.includes("trailer") ? "Pick the real trailer from YouTube" : f.includes("remove") ? "Remove the placeholder (to the trash)" : f.includes("ytdlp") ? "Update yt-dlp" : f.includes("refresh") ? "Refresh in Plex" : "Nothing automatic"; kind = f.includes("remove") ? "trash" : "other"; if (kind === "trash") files = 1; }
+    else if (i.chk === "queue" && f.includes("clearinc")) { what = `Move ${d.count} leftover${d.count === 1 ? "" : "s"} from the incomplete folder to the trash`; kind = "trash"; files = d.count; bytes = d.size || 0; }
     else if (i.chk === "queue") { what = f.includes("import") ? `Import ${d.count || 1} download${(d.count || 1) === 1 ? "" : "s"}` : f.includes("retry") ? "Remove it, blocklist that release and search for another" : f.includes("remove") ? "Remove the leftover from qBittorrent and move its files to the trash" : "Nothing automatic (private torrent)"; kind = f.includes("retry") ? "download" : f.includes("remove") ? "trash" : "other"; if (f.includes("remove")) { files = 1; bytes = d.size || 0; } }
     else if (i.chk === "missing" && d.kind === "gaps") { what = `Ask ${(d.ref && d.ref.arr) || "Sonarr"} to search for ${d.count} missing episode${d.count === 1 ? "" : "s"}`; kind = "download"; }
     else if (i.chk === "missing") what = "Nothing automatic: open it in Plex or Radarr/Sonarr";
@@ -553,6 +605,56 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     else if (i.chk === "apps") what = f.includes("selfupdate") ? `Update ${d.ref && d.ref.name || "the app"} to ${d.new || "the new version"} (it updates itself)` : f.includes("howto") ? "Nothing automatic: How to update shows the Docker commands, or Skip this version" : "Nothing automatic: open the app and fix the warning";
     else what = f.length ? f.join(", ") : "Nothing automatic";
     return { what, files, bytes, kind, conf };
+  }
+  /* v0.1.9: every card says the best fix, how risky it is and what space it frees, in the same three lines. */
+  const TCONV = [0.3, 0.5];          // a typical HEVC/AV1 re-encode saves roughly 30-50% (depends on Tdarr's settings)
+  function adviceOf(i) {
+    const d = i.detail || {}, f = d.fixes || [], p = planOf(i), td = (S && S.trash_days) || 7;
+    const later = ` once the trash empties (after ${td} days; Put back works until then)`;
+    const R = (lvl, t) => ({ lvl, t });
+    let risk = R("none", "Nothing changes until you press a button."), save = "", none = !f.length && !["dupes"].includes(i.chk);
+    const est = b => `roughly ${human(b * TCONV[0])}–${human(b * TCONV[1])} (an estimate: it depends on Tdarr's settings)`;
+    if (i.chk === "dupes" && d.kind === "double") { risk = R("low", "The file never leaves the disk: it's moved out for a moment and straight back so Plex lists it once."); save = "None: it's one file listed twice."; }
+    else if (i.chk === "dupes" && d.kind === "mismatch") { risk = R("none", "Nothing is deleted; Plex only separates the films it put together."); save = "None."; }
+    else if (i.chk === "dupes") {
+      const rm = removable(i), real = rm.filter(v => (v.links || 1) <= 1).reduce((a, v) => a + (v.size || 0), 0), hl = rm.length - rm.filter(v => (v.links || 1) <= 1).length;
+      risk = p.conf === "Sure" ? R("low", "The copy kept is as good or better on every check (quality, length, language). The others wait in the trash.")
+                               : R("med", "Library Doctor isn't certain which copy is better (different edition, length or language, or your custom formats disagree). Look at both before cleaning up.");
+      save = real ? human(real) + later : "None";
+      if (hl) save += ` · ${hl} cop${hl === 1 ? "y is" : "ies are"} hardlinked to a seeding torrent, so ${hl === 1 ? "it frees" : "they free"} nothing until the torrent is removed`; }
+    else if (i.chk === "health" && f.includes("replace")) {
+      risk = d.kind === "lang" ? R("med", "Audio labels are sometimes wrong: play a minute first. Until the new copy arrives there's no file; if none is found, Put back restores the old one.")
+                               : R("low", "The broken file is unplayable anyway. Until the new copy arrives there's no file; if none is found, Put back restores it.");
+      save = "About none: the new copy takes its place (its size depends on the copy found)."; }
+    else if (i.chk === "virus") { risk = R("low", "It's a program or fake file, not a video. It's moved, never opened or run."); save = p.bytes ? human(p.bytes) + later : "Very little."; }
+    else if (i.chk === "subs") { risk = f.includes("rename") ? R("low", "Only the subtitle's file name changes.") : f.includes("searchall") ? R("none", "Only a search in Bazarr.") : R("low", "If Bazarr finds nothing better, the title has no subtitle in that language (Put back restores it)."); save = "A few KB."; }
+    else if (i.chk === "meta") { risk = f.includes("titles") ? R("low", "Plex's episode titles are replaced with Sonarr's; a full metadata refresh in Plex could bring the old ones back.") : R("none", "Only Plex's metadata changes; no files are touched."); save = "None."; }
+    else if (i.chk === "quality") {
+      if (f.includes("remux")) { risk = R("low", "The same video and audio go into a new container; nothing is re-encoded. The old file waits in the trash."); save = "About none: same streams, different container."; }
+      else if (f.includes("tdarr")) { const b = d.kind === "hog" ? (d.extra || d.size || 0) : d.kind === "tdarrmissed" ? (d.total || 0) : (d.size || 0);
+        risk = R("med", "Tdarr re-encodes the file and replaces it in place: picture quality changes slightly, and there's no copy in Library Doctor's trash. Fine for most libraries; skip it for files you treasure.");
+        save = d.kind === "hog" && d.extra ? `About ${human(d.extra)} (the part above the usual size for this resolution); a re-encode often saves ${est(d.size || 0)}` : b ? est(b) : "Depends on the file."; }
+      else if (f.includes("smaller")) { risk = R("med", "The smaller copy may look worse. The old file waits in Radarr's recycle bin until you're happy."); save = d.extra ? `About ${human(d.extra)} (the part above the usual size); the exact figure shows per copy when you pick one` : "Shown per copy when you pick one."; }
+      else if (f.includes("blockgroup")) { risk = R("low", "Future releases from that group are skipped. Undo in Settings → Profiles → Release Profiles in Radarr/Sonarr."); save = "None now; fewer bad downloads later."; }
+      else if (f.includes("search")) { risk = R("low", "A new download only replaces the file if Radarr/Sonarr rate it better; the old one goes to their recycle bin."); save = "None: a better copy is usually bigger, so it may use more space."; }
+      else if (f.includes("monitor")) { risk = R("none", "Radarr/Sonarr will upgrade it by themselves when a better copy appears."); save = "None: upgrades are usually bigger."; }
+      else { save = d.extra ? `Up to ${human(d.extra)} if you replace it` : "None."; } }
+    else if (i.chk === "coming") { risk = f.includes("remove") ? R("low", "Only the placeholder goes; your real films are untouched.") : R("none", "Only the trailer or Plex listing changes."); save = f.includes("remove") && p.bytes ? human(p.bytes) + later : "A few MB at most."; }
+    else if (i.chk === "queue") {
+      if (f.includes("clearinc")) { risk = R("low", `Only items no download client knows about and nothing has touched for days; each is checked again just before it moves.`); save = human(d.size || 0) + later; }
+      else if (f.includes("import")) { risk = R("low", "Radarr/Sonarr only import files they have no objection to; the old copy goes to their recycle bin."); save = "About none: the download replaces the old copy."; }
+      else if (f.includes("retry")) { risk = R("low", "That release is blocklisted and another is searched for; it downloads in your download window."); save = "None."; }
+      else if (f.includes("remove")) { risk = R("med", "The torrent stops seeding, which can matter for your ratio on that tracker."); save = (d.size ? human(d.size) : "Its size") + later; }
+      else { save = "None."; } }
+    else if (i.chk === "missing") { risk = d.kind === "gaps" ? R("none", "Only a search in Sonarr.") : R("none", "Nothing automatic: you decide in Plex or Radarr/Sonarr."); save = d.kind === "gaps" ? "None: it adds episodes." : "None."; }
+    else if (i.chk === "apps") { risk = f.includes("selfupdate") ? R("med", "New versions can change things; Library Doctor checks the app comes back healthy.") : f.includes("idxoff") ? R("low", "That indexer stops being searched until you switch it back on.") : R("none", "Nothing automatic."); save = "None."; }
+    if (none && i.chk !== "quality") risk = R("none", "Nothing automatic: nothing changes unless you act.");
+    return { fix: p.what, risk, save: save || "None." };
+  }
+  function advHtml(i) {
+    if (i.chk === "unwatched") return "";
+    const a = adviceOf(i), L = { none: "No risk", low: "Low risk", med: "Check first" };
+    return `<div class="adv"><div><b>Best fix</b><span>${esc(a.fix)}</span></div><div><b>Risk</b><span><i class="lvl lvl-${a.risk.lvl}">${L[a.risk.lvl]}</i> ${esc(a.risk.t)}</span></div><div><b>Space saved</b><span>${esc(a.save)}</span></div></div>`;
   }
   function reviewRows() {
     return (S.issues || []).filter(i => !i.ignored && i.chk !== "unwatched").map(i => ({ i, p: planOf(i), c: CHECKS.find(c => c.id === i.chk) || { label: i.chk } }));
@@ -596,12 +698,14 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const open = S.issues.filter(i => !i.ignored), ign = S.issues.length - open.length;
     if (!filter) filter = open.some(i => i.chk === "missing") ? "missing" : "dupes";
     const files = scan ? scan.files : 0, bad = new Set(open.filter(i => !["meta", "subs", "coming", "quality", "unwatched", "queue", "apps"].includes(i.chk) && !["gaps", "mismatch"].includes(i.detail.kind)).flatMap(i => i.detail.versions ? i.detail.versions.filter(v => v.action !== "keep").map(v => v.path) : [i.detail.path]));
-    const score = files ? Math.max(0, 100 - bad.size / files * 100) : 0;
+    const score = S.score && S.score.overall != null ? S.score.overall : files ? Math.max(0, 100 - bad.size / files * 100) : 0;   // v0.1.9: the area-weighted library score
     $("score").textContent = $("ringN").textContent = scan ? (score >= 99.95 ? "100%" : score.toFixed(1) + "%") : "–";
     const C = 2 * Math.PI * 50; $("arc").setAttribute("stroke-dasharray", (C * score / 100) + " " + C);
     rings2(S.stats);
     const sp = S.split_mounts || [];
     $("splitWarn").hidden = !sp.length;
+    const sb = S.security_blocked; $("secWarn").hidden = !sb;
+    if (sb) $("secWarn").innerHTML = `<b>Library Doctor refused a request</b> from <code>${esc(sb.ip)}</code> (${esc(String(sb.at).replace("T", " ").slice(0, 16))}): ${esc(sb.why)}. If that wasn't you, check that its port isn't reachable from the internet. Settings → Login explains the options.`;
     // v0.1.5: files that will be deleted for good in the next 24 hours (Library Doctor's trash + Radarr/Sonarr/qbit_manage bins)
     const soon = (S.trash || []).filter(t => t.empties && !t.held && new Date(t.empties).getTime() - Date.now() < 864e5), soonSz = soon.reduce((a, t) => a + (t.size || 0), 0);
     const ls = (S.scans || [])[0], fcBad = ls && ((!ls.ok && /Folder check/.test(ls.note || "")) || /^Suspect/.test(ls.note || ""));
@@ -677,8 +781,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
             : h === "monitor" ? `<button class="b-line" data-qfix="${esc(i.id)}|monitor" title="${esc(monTip(d))}">Monitor</button>`
             : `<button class="b-teal" data-qfix="${esc(i.id)}|${h}">${QF[h]}</button>`).join("") + (d.monitored ? `<span class="chip-done" title="${esc(d.ref && d.ref.kind === "movie" ? "Radarr" : "Sonarr")} upgrades ${d.ref && d.ref.kind === "movie" ? "it" : "these"} by itself when a better copy turns up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Monitored in ${esc((d.ref && d.ref.arr) || "Sonarr")}</span>` : "");
     } else if (i.chk === "queue" && !i.ignored) {
-      const QQ = { import: d.count === 1 ? "Import" : `Import all ${d.count}`, retry: "Remove & try another", remove: "Move to trash", reannounce: "Re-announce" };
-      act = (d.fixes || []).map(h => `<button class="${h === "remove" ? "b-orange" : h === "retry" && (d.fixes || []).includes("reannounce") ? "b-line" : "b-teal"}" data-queuefix="${esc(i.id)}|${h}">${QQ[h]}</button>`).join("");
+      const QQ = { import: d.count === 1 ? "Import" : `Import all ${d.count}`, retry: "Remove & try another", remove: "Move to trash", reannounce: "Re-announce", clearinc: d.count === 1 ? "Move to trash" : `Move all ${d.count} to trash` };
+      act = (d.fixes || []).map(h => `<button class="${h === "remove" || h === "clearinc" ? "b-orange" : h === "retry" && (d.fixes || []).includes("reannounce") ? "b-line" : "b-teal"}" data-queuefix="${esc(i.id)}|${h}">${QQ[h]}</button>`).join("");
     } else if (i.chk === "coming" && !i.ignored) {
       const CF = { refresh: "Refresh in Plex", remove: "Remove placeholder", ytdlp: "Update yt-dlp" };
       act = (d.fixes || []).map(h => h === "trailer" ? (pick && pick.id === i.id ? "" : `<button class="b-teal" data-tpick="${esc(i.id)}">Pick trailer</button>`)
@@ -724,8 +828,8 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     } else if (inReview) act = `<button class="b-line" id="rvSkip">Next</button>`;
     const block = act.startsWith("<div") ? act : "", inline = act.startsWith("<div") ? "" : act;
     return `<div class="item ${i.ignored ? "ign" : i.sev === "bad" ? "bad" : ""}"><h3>${esc(i.title)} <span class="pill lib">${esc(i.library)}</span>${conf}${i.ignored ? (i.snoozed ? `<span class="pill lib" title="Searched, nothing better yet. Searched again by itself on this date.">Snoozed till ${esc(new Date(i.snoozed).toLocaleDateString(undefined, { day: "numeric", month: "short" }))}</span>` : '<span class="pill lib">Ignored</span>') : ""}</h3>
-      <p class="det">${esc(d.text)}${d.note ? " " + esc(d.note) : ""}${(d.links || 1) > 1 ? " <b>Hardlinked:</b> this file has another link (usually a torrent still seeding), so moving it frees no space until that is removed too." : ""}${path}</p>${pick && pick.id === i.id ? pickHtml() : ""}${small && small.id === i.id ? smallHtml() : ""}${i.chk === "quality" && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td>${esc(e.res)}</td></tr>`).join("")}</table></div></details>` : ""}${i.chk === "unwatched" ? uwHtml(i) : ""}${d.kind === "tdarrmissed" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.name)}">${esc(x.name.split("/").length === 2 ? x.name.split("/")[0] : x.name.split("/").pop())}</td><td class="n">${esc(x.codec.toUpperCase())}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div>${d.count > d.items.length ? `<p class="det">…and ${d.count - d.items.length} smaller.</p>` : ""}</details>` : ""}${i.chk === "queue" && d.items && d.items.length ? `<details class="eps"><summary>Show the ${d.count === 1 ? "download" : d.count + " downloads"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.title)}">${esc(x.ep ? x.ep + " · " : "")}${esc(x.title)}</td><td>${esc((x.protocol || "") + (x.client ? " · " + x.client : ""))}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "lang" && d.files && d.files.length > 1 ? `<details class="eps"><summary>Show the ${d.files.length} episodes</summary><div class="uww"><table class="uw">${d.files.map(x => `<tr><td>${esc(x.se || "")}</td><td title="${esc(x.path)}">${esc(base(x.path))}</td><td class="n">${esc(x.audio || "")}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "tdarrfail" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.path)}">${esc(x.name.split("/").pop())}</td><td>${esc(x.why)}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${eps}${seas}${wanted}${dbl ? `<p class="det">The fix moves the file out for a moment so Plex drops both entries, then puts it straight back so Plex adds it once. The file never leaves the disk. It takes 1–3 minutes; the result shows under Done.</p>` : vers}${loLine}${block}
-      <div class="acts">${i.chk === "quality" ? links + inline : inline}${reset}${plexBtn}${i.chk === "quality" ? "" : links}${inReview ? "" : `<button class="b-line" data-${i.ignored ? "un" : ""}ign="${esc(i.id)}" data-t="${esc(i.title)}"${i.chk === "dupes" && !i.ignored ? ' title="You want these copies (e.g. a 4K and a 1080p for phones). Hides this card for good; Show ignored brings it back."' : ""}>${i.ignored ? "Stop ignoring" : i.chk === "dupes" ? ((d.versions || []).length > 2 ? "Keep them all" : "Keep both") : "Ignore"}</button>`}</div></div>`;
+      <p class="det">${esc(d.text)}${d.note ? " " + esc(d.note) : ""}${(d.links || 1) > 1 ? " <b>Hardlinked:</b> this file has another link (usually a torrent still seeding), so moving it frees no space until that is removed too." : ""}${path}</p>${pick && pick.id === i.id ? pickHtml() : ""}${small && small.id === i.id ? smallHtml() : ""}${i.chk === "quality" && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td>${esc(e.res)}</td></tr>`).join("")}</table></div></details>` : ""}${i.chk === "unwatched" ? uwHtml(i) : ""}${d.kind === "tdarrmissed" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.name)}">${esc(x.name.split("/").length === 2 ? x.name.split("/")[0] : x.name.split("/").pop())}</td><td class="n">${esc(x.codec.toUpperCase())}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div>${d.count > d.items.length ? `<p class="det">…and ${d.count - d.items.length} smaller.</p>` : ""}</details>` : ""}${d.kind === "incomplete" && d.items ? `<details class="eps" open><summary>Show the ${d.count === 1 ? "leftover" : d.count + " leftovers"}</summary><div class="uww">${d.items.map(x => `<div class="inc"><div title="${esc(x.path)}">${esc(x.title)}<small>${esc(x.why || "untouched for " + x.days + " day" + (x.days === 1 ? "" : "s"))} · ${human(x.size)}${x.files ? " · " + x.files + " file" + (x.files === 1 ? "" : "s") : ""}</small></div>${i.ignored ? "" : `<button class="b-line sm" data-incone="${esc(i.id)}" data-incpath="${esc(x.path)}">Trash</button>`}</div>`).join("")}</div></details>` : ""}${i.chk === "queue" && d.kind !== "incomplete" && d.items && d.items.length ? `<details class="eps"><summary>Show the ${d.count === 1 ? "download" : d.count + " downloads"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.title)}">${esc(x.ep ? x.ep + " · " : "")}${esc(x.title)}</td><td>${esc((x.protocol || "") + (x.client ? " · " + x.client : ""))}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "lang" && d.files && d.files.length > 1 ? `<details class="eps"><summary>Show the ${d.files.length} episodes</summary><div class="uww"><table class="uw">${d.files.map(x => `<tr><td>${esc(x.se || "")}</td><td title="${esc(x.path)}">${esc(base(x.path))}</td><td class="n">${esc(x.audio || "")}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "tdarrfail" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.path)}">${esc(x.name.split("/").pop())}</td><td>${esc(x.why)}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${eps}${seas}${wanted}${dbl ? `<p class="det">The fix moves the file out for a moment so Plex drops both entries, then puts it straight back so Plex adds it once. The file never leaves the disk. It takes 1–3 minutes; the result shows under Done.</p>` : vers}${loLine}${block}
+      ${advHtml(i)}<div class="acts">${i.chk === "quality" ? links + inline : inline}${reset}${plexBtn}${i.chk === "quality" ? "" : links}${inReview ? "" : `<button class="b-line" data-${i.ignored ? "un" : ""}ign="${esc(i.id)}" data-t="${esc(i.title)}"${i.chk === "dupes" && !i.ignored ? ' title="You want these copies (e.g. a 4K and a 1080p for phones). Hides this card for good; Show ignored brings it back."' : ""}>${i.ignored ? "Stop ignoring" : i.chk === "dupes" ? ((d.versions || []).length > 2 ? "Keep them all" : "Keep both") : "Ignore"}</button>`}</div></div>`;
   }
   const monTip = d => d.unmon && d.unmon.movie ? "Radarr isn't monitoring this film, so it never upgrades it by itself. Monitor turns that on."
     : `${d.unmon && d.unmon.eps ? d.unmon.eps.length + " of these episodes aren't" : "These episodes are"} monitored${d.unmon && d.unmon.series ? " (nor is the series)" : ""}, so Sonarr never upgrades them by itself. Monitor turns it on for just these episodes, not whole seasons.`;
@@ -937,7 +1041,15 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       else { small.busy = null; small.err = r.error; }
       load(); });
     on("smClose", () => { small = null; list(); });
-    L.querySelectorAll("[data-queuefix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.queuefix.split("|"); b.disabled = true; b.textContent = how === "import" ? "Importing…" : how === "retry" ? "Removing…" : how === "reannounce" ? "Re-announcing…" : "Moving…";
+    const lockCard = b => { const c = b.closest(".item"); if (c) c.querySelectorAll("button").forEach(x => x.disabled = true); };
+    L.querySelectorAll("[data-incone]").forEach(b => b.onclick = async () => { lockCard(b); b.textContent = "Moving…";
+      const r = await api("/api/queuefix", { ids: [b.dataset.incone], how: "clearinc", path: b.dataset.incpath });
+      flash = { err: !r.ok, text: r.ok ? "Moved to the trash (Put back works until the trash is emptied)." : (r.errors || []).join(" ") || "That didn't work." };
+      await load(); });
+    L.querySelectorAll("[data-queuefix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.queuefix.split("|");
+      if (how === "clearinc" && !b.dataset.sure) {             // v0.1.9: moving several folders asks once more (second click within 6 s)
+        b.dataset.sure = "1"; const was = b.textContent; b.textContent = "Sure? " + was; setTimeout(() => { if (b.isConnected && !b.disabled) { delete b.dataset.sure; b.textContent = was; } }, 6000); return; }
+      lockCard(b); b.textContent = how === "import" ? "Importing…" : how === "retry" ? "Removing…" : how === "reannounce" ? "Re-announcing…" : "Moving…";
       const r = await api("/api/queuefix", { ids: [id], how });
       flash = { err: !r.ok, text: r.ok ? (how === "reannounce" ? "Asked every tracker for people sharing it again. Give it an hour; if it's still stuck, try Remove & try another." : how === "import" ? "Imported. The result shows under Done below." : how === "retry" ? "Removed and blocklisted; searching for another copy. It downloads in the night window." : "Moved to the trash (Put back works for 7 days).") + (r.errors && r.errors.length ? " Not done: " + r.errors.join(" ") : "") : (r.errors || []).join(" ") || "That didn't work." };
       load(); setTimeout(load, 15000); });
@@ -982,12 +1094,105 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     confirmId = null; confirmAll = false; load();
   }
   // ---- Trash: a bin you can go into, like the Mac Bin or Windows Recycle Bin ----
+  /* v0.1.9 Analysis: overview, library score, trends, storage and quality per library. Read-only; nothing runs from here. */
+  const AN = { d: null, h: null, busy: false };
+  async function anaOpen() {
+    if (AN.busy) return; AN.busy = true;
+    try { const [d, h] = await Promise.all([api("/api/analysis"), api("/api/history?days=90")]); AN.d = d; AN.h = h; }
+    catch (e) { $("anaView").innerHTML = `<p class="note">Couldn't load the analysis: ${esc(e.message || e)}</p>`; AN.busy = false; return; }
+    AN.busy = false; anaDraw();
+  }
+  const fmtN = n => (n == null ? "–" : Number(n).toLocaleString());
+  const when = t => t ? String(t).replace("T", " ").slice(0, 16) : "";
+  const CHKN = { missing: "Missing file", dupes: "Duplicate", meta: "Metadata", health: "File health", subs: "Subtitles", virus: "Virus / fake", coming: "Coming Soon", quality: "Quality", queue: "Download", apps: "App" };
+  function spark(id, pts, fmt, opts) {   // one series, 2px line, crosshair + tooltip on hover
+    if (pts.length < 2) return `<div class="spark"><h3>${esc(opts.title)}</h3><p>${esc(opts.empty)}</p></div>`;
+    const W = 600, H = 120, P = 6, ys = pts.map(p => p.y), lo = opts.min != null ? Math.min(opts.min, ...ys) : Math.min(...ys), hi = Math.max(...ys, lo + (opts.span || 1));
+    const X = i => P + i * (W - 2 * P) / (pts.length - 1), Y = v => H - P - (v - lo) / (hi - lo || 1) * (H - 2 * P);
+    const d = pts.map((p, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(p.y).toFixed(1)).join(" ");
+    AN["sp_" + id] = { pts, X, Y, fmt };
+    return `<div class="spark"><h3>${esc(opts.title)}</h3><p>${esc(opts.sub)}</p>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" data-spark="${id}" role="img" aria-label="${esc(opts.title)}">
+        <line x1="${P}" x2="${W - P}" y1="${H - P}" y2="${H - P}" stroke="var(--line)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+        <path d="${d}" fill="none" stroke="var(--teal)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+        <line class="xh" x1="0" x2="0" y1="0" y2="${H}" stroke="var(--mut)" stroke-width="1" vector-effect="non-scaling-stroke" visibility="hidden"/>
+        <circle class="dot" r="4" fill="var(--teal)" stroke="var(--panel)" stroke-width="2" visibility="hidden"/>
+        <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/></svg>
+      <div class="tip" id="tip-${id}">${esc(fmt(pts[pts.length - 1]))}</div></div>`;
+  }
+  function stack(map, order, vars, total) {
+    return `<div class="stack" role="img" aria-label="${esc(order.filter(k => map[k]).map(k => k + " " + map[k]).join(", "))}">${order.filter(k => map[k]).map(k => `<i style="flex:${map[k]};background:var(${vars[k]})" title="${esc(k)}: ${fmtN(map[k])} (${(100 * map[k] / total).toFixed(1)}%)"></i>`).join("")}</div>
+      <div class="leg">${order.filter(k => map[k]).map(k => `<span><i style="background:var(${vars[k]})"></i>${esc(k)} <b>${fmtN(map[k])}</b> (${(100 * map[k] / total).toFixed(0)}%)</span>`).join("")}</div>`;
+  }
+  function anaDraw() {
+    const d = AN.d, h = AN.h || {}, el = $("anaView"); if (!d) return;
+    const t = d.totals || {}, sc = d.score, libs = d.libraries || [];
+    let x = `<div class="anahead"><h2>Library overview</h2><button class="b-line sm" id="anaCsv">Download CSV</button></div>`;
+    x += `<div class="tiles">${[[fmtN(t.items || (S && S.scans[0] && S.scans[0].items)), "Titles"], [fmtN(t.files), "Files"], [t.size ? human(t.size) : "–", "Total size"], [fmtN(t.movies), "Movies"], [fmtN(t.episodes), "Episodes"],
+      [d.disk && d.disk.free != null ? human(d.disk.free) : "–", "Free on the disk"]].map(([v, l]) => `<div class="tile"><b>${v}</b><span>${l}</span></div>`).join("")}</div>`;
+    if (!libs.length) x += `<p class="note">Size, resolution and codec per library appear after the next scan.</p>`;
+    // score
+    x += `<h2>Library score</h2><div class="apanel">`;
+    if (!sc) x += `<p class="note">The score appears after the first scan.</p>`;
+    else {
+      const dl = (v, lbl) => v == null ? "" : `<span class="chip ${v > 0.05 ? "up" : v < -0.05 ? "down" : ""}">${v > 0 ? "▲ +" : v < 0 ? "▼ " : "■ "}${v.toFixed(1)} in ${lbl}</span>`;
+      x += `<div class="scoretop"><b>${sc.overall >= 99.95 ? "100" : sc.overall.toFixed(1)}</b><span class="note">out of 100</span>${dl(d.delta7, "7 days")}${dl(d.delta30, "30 days")}${d.delta7 == null && d.delta30 == null ? `<span class="chip">History starts ${esc(when(d.since).slice(0, 10)) || "today"}</span>` : ""}</div>`;
+      x += sc.areas.map(a => `<div class="arow"><div class="lbl"><b>${esc(a.label)}</b><small>${Math.round(a.weight * 100)}% of the score</small></div><div class="bar" role="img" aria-label="${esc(a.label)} ${a.score}"><i style="width:${Math.max(0, Math.min(100, a.score))}%"></i></div><div class="n">${a.score >= 99.95 ? "100" : a.score.toFixed(1)}</div>
+        <div class="sub">${esc(a.what)}${a.top.length ? " · most weight: " + a.top.map(z => esc(z.title)).join(", ") : ""}</div></div>`).join("");
+      x += `<p class="note" style="margin:10px 0 0">Ignored cards don't count. Small numbers are weighted up so they show: 1% broken files costs about 25 points, 1% extra copies 10.</p>`;
+    }
+    x += `</div>`;
+    // trends
+    const scorePts = (d.points || []).map(p => ({ y: p.overall, l: when(p.at) }));
+    const scans = (h.scans || []).map(s2 => ({ y: s2.issues, l: when(s2.t) }));
+    const space = (h.space || []).map(s2 => ({ y: s2.total, l: s2.d }));
+    const rc = d.recovered || {};
+    x += `<h2>Trends</h2><div class="tiles">${[[human(rc.freed || 0), "Space freed for good"], [human(rc.pending || 0), "Waiting in trash / recycle bins"], [human(rc.last30 || 0), "Recovered in 30 days"],
+      [d.issues_now == null ? "–" : fmtN(d.issues_now), "Open problems now" + (d.issues_first != null && d.issues_scans > 1 ? ` (was ${fmtN(d.issues_first)})` : "")]].map(([v, l]) => `<div class="tile"><b>${v}</b><span>${l}</span></div>`).join("")}</div>
+      <div class="agrid" style="margin-top:12px">
+      <div class="apanel">${spark("score", scorePts, p => `${p.l}: ${p.y.toFixed(1)}`, { title: "Library score", sub: "One point after each scan, at least daily.", empty: "The score history starts now: a point is added after every scan.", min: 0, span: 5 })}</div>
+      <div class="apanel">${spark("iss", scans, p => `${p.l}: ${fmtN(p.y)} problem${p.y === 1 ? "" : "s"} found`, { title: "Problems found per scan", sub: "Last 90 days; going down = getting healthier.", empty: "Needs two scans.", min: 0 })}</div>
+      <div class="apanel">${spark("space", space, p => `${p.l}: ${human(p.y)} recovered in total`, { title: "Storage recovered", sub: "Running total, last 90 days.", empty: "Nothing recovered yet.", min: 0 })}</div></div>`;
+    const R = d.recurring || {}, items = R.items || [];
+    x += `<h2>Problems that keep coming back</h2><div class="apanel">${items.length ? `<table class="rtab"><thead><tr><th>Problem</th><th class="hide-s">Type</th><th>Why it's listed</th><th class="n">Times</th><th class="hide-s">Last</th></tr></thead><tbody>
+      ${items.map(r => `<tr><td>${esc(r.title)}${r.library ? `<br><small class="note">${esc(r.library)}</small>` : ""} ${r.open ? '<span class="pill2 open">open</span>' : ""}</td><td class="hide-s">${esc(CHKN[r.chk] || r.chk)}</td><td>${esc(r.why)}</td><td class="n">${r.times}</td><td class="hide-s">${esc(when(r.last).slice(0, 10))}</td></tr>`).join("")}</tbody></table>${R.total > items.length ? `<p class="note">…and ${R.total - items.length} more.</p>` : ""}`
+      : `<p class="note">Nothing keeps coming back in the last ${R.days || 90} days. Listed here: problems that return after a fix, show up again and again between scans, or the same title fixed more than once. Ignored cards and running totals (like missing subtitles) are left out.</p>`}</div>`;
+    // storage + quality
+    if (libs.length) {
+      const big = Math.max(...libs.map(l => l.size)), all = libs.reduce((a, l) => a + l.size, 0) || 1;
+      x += `<h2>Storage by library</h2><div class="apanel">${libs.map(l => `<div class="lrow"><b>${esc(l.name)}</b><div class="bar" role="img" aria-label="${esc(l.name)} ${human(l.size)}"><i style="width:${(100 * l.size / big).toFixed(1)}%"></i></div><div class="n">${human(l.size)} · ${(100 * l.size / all).toFixed(0)}% · ${fmtN(l.items)} ${l.kind === "movie" ? "films" : "episodes"}</div></div>`).join("")}</div>`;
+      const RES = ["4K", "1080p", "720p", "SD", "Unknown"], RV = { "4K": "--r4k", "1080p": "--r1080", "720p": "--r720", "SD": "--rsd", "Unknown": "--runk" };
+      const COD = ["HEVC", "H.264", "AV1", "Older", "Other", "Unknown"], CV = { HEVC: "--c1", "H.264": "--c2", AV1: "--c3", Older: "--c4", Other: "--c5", Unknown: "--cunk" };
+      x += `<h2>Quality by library</h2><div class="apanel">${libs.map(l => { const rt = Object.values(l.res || {}).reduce((a, b) => a + b, 0) || 1, ct = Object.values(l.codec || {}).reduce((a, b) => a + b, 0) || 1;
+        return `<div class="qlib"><h4>${esc(l.name)} <span>${l.hd}% HD (720p or better)</span></h4><div class="sl">Resolution</div>${stack(l.res || {}, RES, RV, rt)}<div class="sl">Video codec</div>${stack(l.codec || {}, COD, CV, ct)}</div>`; }).join("")}
+        <p class="note" style="margin:10px 0 0">From the last scan (${esc(when(d.at))}). "Older" = MPEG-2, VC-1, Xvid/DivX and similar: usually the best candidates for Convert with Tdarr.</p></div>`;
+    }
+    el.innerHTML = x;
+    el.querySelectorAll("[data-spark]").forEach(svg => { const id = svg.dataset.spark, sp = AN["sp_" + id], tip = $("tip-" + id);
+      const at = ev => { const r = svg.getBoundingClientRect(), fx = (ev.clientX - r.left) / r.width * 600; let best = 0;
+        sp.pts.forEach((p, i) => { if (Math.abs(sp.X(i) - fx) < Math.abs(sp.X(best) - fx)) best = i; });
+        const xh = svg.querySelector(".xh"), dot = svg.querySelector(".dot"); xh.setAttribute("x1", sp.X(best)); xh.setAttribute("x2", sp.X(best)); xh.setAttribute("visibility", "visible");
+        dot.setAttribute("cx", sp.X(best)); dot.setAttribute("cy", sp.Y(sp.pts[best].y)); dot.setAttribute("visibility", "visible"); tip.textContent = sp.fmt(sp.pts[best]); };
+      svg.addEventListener("mousemove", at); svg.addEventListener("touchstart", e => at(e.touches[0]), { passive: true });
+      svg.addEventListener("mouseleave", () => { svg.querySelector(".xh").setAttribute("visibility", "hidden"); svg.querySelector(".dot").setAttribute("visibility", "hidden"); tip.textContent = sp.fmt(sp.pts[sp.pts.length - 1]); }); });
+    const cb = $("anaCsv"); if (cb) cb.onclick = () => {
+      const q = v => { const s2 = String(v == null ? "" : v); return /^[=+\-@\t\r]/.test(s2) ? "'" + s2 : /[",\n]/.test(s2) ? '"' + s2.replace(/"/g, '""') + '"' : s2; };
+      const rows = [["Section", "Name", "Value", "Detail"]];
+      if (sc) { rows.push(["Score", "Overall", sc.overall, ""]); sc.areas.forEach(a => rows.push(["Score", a.label, a.score, a.what])); }
+      rows.push(["Storage", "Freed for good (bytes)", rc.freed || 0, ""], ["Storage", "Waiting in trash/bins (bytes)", rc.pending || 0, ""], ["Storage", "Recovered in 30 days (bytes)", rc.last30 || 0, ""]);
+      libs.forEach(l => { rows.push(["Library", l.name, l.size, `${l.items} items, ${l.files} files, ${l.hd}% HD`]);
+        Object.entries(l.res || {}).forEach(([k, v]) => rows.push(["Resolution", l.name, v, k])); Object.entries(l.codec || {}).forEach(([k, v]) => rows.push(["Codec", l.name, v, k])); });
+      items.forEach(r => rows.push(["Recurring", r.title, r.times, `${r.library} · ${r.why}`]));
+      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([rows.map(r => r.map(q).join(",")).join("\n")], { type: "text/csv" }));
+      a.download = "library-doctor-analysis-" + new Date().toISOString().slice(0, 10) + ".csv"; document.body.appendChild(a); a.click(); a.remove(); };
+  }
   let view = "scan", binSel = new Set(), binAsk = null, binMsg = null;
   function setView(v) {
-    view = v; $("scanView").hidden = v !== "scan"; $("trashView").hidden = v !== "trash"; $("setView").hidden = v !== "settings";
-    for (const [id, k] of [["tabScan", "scan"], ["tabTrash", "trash"], ["tabSet", "settings"]]) { $(id).classList.toggle("on", v === k); $(id).setAttribute("aria-selected", v === k); }
-    try { history.replaceState(null, "", v === "trash" ? "#trash" : v === "settings" ? "#settings" : location.pathname); } catch (e) {}
+    view = v; $("scanView").hidden = v !== "scan"; $("trashView").hidden = v !== "trash"; $("setView").hidden = v !== "settings"; $("anaView").hidden = v !== "analysis";
+    for (const [id, k] of [["tabScan", "scan"], ["tabAna", "analysis"], ["tabTrash", "trash"], ["tabSet", "settings"]]) { $(id).classList.toggle("on", v === k); $(id).setAttribute("aria-selected", v === k); }
+    try { history.replaceState(null, "", v === "trash" ? "#trash" : v === "settings" ? "#settings" : v === "analysis" ? "#analysis" : location.pathname); } catch (e) {}
     if (v === "settings") settingsOpen();
+    if (v === "analysis") anaOpen();
     if (S) trashPanel();
   }
   function daysLeft(t) { return Math.max(0, Math.ceil((new Date(t.empties) - Date.now()) / 86400000)); }
@@ -1045,6 +1250,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
   }
   $("tabScan").onclick = () => setView("scan");
   $("tabTrash").onclick = () => { binMsg = null; setView("trash"); };
+  $("tabAna").onclick = () => setView("analysis");
   { const art = document.querySelector("#binHead .bigbin").cloneNode(true); art.removeAttribute("role"); art.setAttribute("aria-hidden", "true"); $("deskBinArt").replaceWith(art); }
   $("deskBin").onclick = () => { binMsg = null; setView("trash"); window.scrollTo(0, 0); };
   $("binSearch").oninput = () => trashPanel(); $("binSort").onchange = () => trashPanel();
@@ -1099,17 +1305,71 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       ${FC.busy && !FC.rows ? `<p class="note">Checking…</p>` : FC.rows && FC.rows.length ? `<div class="uww"><table class="uw fct">${rows}</table></div><p class="note">${bad ? `<b>${bad} app${bad === 1 ? "" : "s"} need${bad === 1 ? "s" : ""} attention.</b>` : "Everything lines up."}</p>` : `<p class="note">Add your apps below first.</p>`}
       <div class="acts"><button class="b-line sm" id="fcRun" ${FC.busy ? "disabled" : ""}>${FC.busy ? "Checking…" : "Check again"}</button></div></div>`;
   }
+  /* v0.1.9 "Don't have it?": what each optional app adds, a compose snippet filled in with what Library Doctor knows, and where to read more.
+     Nothing is installed from here: that would need the Docker socket (root on the server). */
+  const G = "https://mymediabuild.uk/", UTM = "?utm_source=library-doctor&utm_medium=settings";
+  const GET = {
+    bazarr: { adds: "Turns on the Subtitles check: missing and advert-only subtitles, wrong names, and Bazarr's own summary.", image: "lscr.io/linuxserver/bazarr:latest", port: 6767, cfg: "bazarr", media: true, guide: "how-to-set-up-bazarr-with-docker-compose/" },
+    tautulli: { adds: "Turns on the Unwatched check: films and shows nobody has watched for a long time, with their size.", image: "ghcr.io/tautulli/tautulli:latest", port: 8181, cfg: "tautulli", lsio: false },
+    tdarr: { adds: "Adds Convert with Tdarr for old or oversized files, and shows the files Tdarr failed on or never saw.", image: "ghcr.io/haveagitgat/tdarr:latest", port: 8265, cfg: "tdarr", media: true, tdarr: true, guide: "how-to-set-up-tdarr-with-docker-compose/" },
+    sportarr: { adds: "Lets the scans understand sports libraries that Sportarr manages.", image: "sportarr/sportarr:latest", port: 1867, cfg: "sportarr", media: true, lsio: false, guide: "how-to-set-up-sportarr-docker-compose/" },
+    prowlarr: { adds: "Adds Prowlarr's own warnings (failing indexers, proxies) to App Health.", image: "lscr.io/linuxserver/prowlarr:latest", port: 9696, cfg: "prowlarr", guide: "prowlarr-the-indexer-hub-for-your-arr-stack/" },
+    qbit: { adds: "Downloads: why a torrent is stuck, a Re-announce button, old finished downloads nothing uses, and leftovers in its incomplete folder.", image: "lscr.io/linuxserver/qbittorrent:latest", port: 8080, cfg: "qbittorrent", media: true, env: ["WEBUI_PORT=8080"], extraPorts: ["6881:6881", "6881:6881/udp"], name: "qBittorrent", guide: "how-to-set-up-qbittorrent-with-docker-compose/" },
+    transmission: { adds: "Downloads: why a torrent is stuck, a Re-announce button, and leftovers in its incomplete folder.", image: "lscr.io/linuxserver/transmission:latest", port: 9091, cfg: "transmission", media: true, extraPorts: ["51413:51413", "51413:51413/udp"], guide: "how-to-set-up-transmission-with-docker-compose/" },
+    sabnzbd: { adds: "Downloads: SABnzbd's own status, why a usenet download failed, and leftovers in its incomplete folder.", image: "lscr.io/linuxserver/sabnzbd:latest", port: 8080, cfg: "sabnzbd", media: true, guide: "how-to-set-up-sabnzbd-with-docker-compose/", note: "Uses port 8080 like qBittorrent: change the left number if you run both." },
+    nzbget: { adds: "Downloads: NZBGet's own status, why a usenet download failed, and leftovers in its incomplete folder.", image: "lscr.io/linuxserver/nzbget:latest", port: 6789, cfg: "nzbget", media: true, guide: "how-to-set-up-nzbget-with-docker-compose/" },
+    gotify: { adds: "A message on your phone after the nightly scan, only when there's news.", image: "gotify/server:latest", port: 8070, inner: 80, cfg: "gotify", lsio: false, data: "/app/data", guide: "how-to-set-up-gotify-docker-compose/" },
+  };
+  function mediaTarget() {        // how Radarr/Sonarr see the media: Bazarr, Tdarr and the downloaders must use the same folder or paths won't match
+    const r = (FC.rows || []).find(x => /radarr|sonarr/i.test(x.app || "") && x.example && x.example.app);
+    const top = r ? "/" + (r.example.app.split("/").filter(Boolean)[0] || "") : "";
+    return top && top !== "/" ? top : "/data";
+  }
+  function getSnippet(k) {
+    const g = GET[k], h = SC._hints || {}, svc = k === "qbit" ? "qbittorrent" : k, m = mediaTarget();
+    const L = [`services:`, `  ${svc}:`, `    image: ${g.image}`, `    container_name: ${svc}`];
+    if (g.lsio === false && k !== "tautulli") L.push(`    user: "${h.puid || 1000}:${h.pgid || 1000}"`);
+    L.push(`    environment:`);
+    if (g.lsio !== false || k === "tautulli") L.push(`      - PUID=${h.puid || 1000}`, `      - PGID=${h.pgid || 1000}`);
+    L.push(`      - TZ=${h.tz || "Etc/UTC"}`);
+    (g.env || []).forEach(e => L.push(`      - ${e}`));
+    if (g.tdarr) L.push(`      - serverIP=0.0.0.0`, `      - serverPort=8266`, `      - webUIPort=8265`, `      - internalNode=true`, `      - nodeName=MainNode`);
+    L.push(`    volumes:`, `      - ./${g.cfg}${g.tdarr ? "/server" : ""}:${g.data || (g.tdarr ? "/app/server" : "/config")}`);
+    if (g.tdarr) L.push(`      - ./${g.cfg}/configs:/app/configs`, `      - ./${g.cfg}/logs:/app/logs`, `      - ./${g.cfg}/cache:/temp`);
+    if (g.media) L.push(`      - /path/to/media:${m}   # the same folder you gave Radarr and Sonarr`);
+    L.push(`    ports:`, `      - ${g.port}:${g.inner || g.port}`);
+    (g.extraPorts || []).forEach(p => L.push(`      - ${p}`));
+    if (g.tdarr) L.push(`      - 8266:8266`);
+    L.push(`    restart: unless-stopped`);
+    return L.join("\n");
+  }
+  function getHtml(missing) {
+    const ks = missing.filter(k => GET[k]).concat(SC.gotify ? [] : ["gotify"]);
+    if (!ks.length) return "";
+    return `<details class="get"><summary>Don't have these yet? What each one adds, and how to get it</summary>
+      <p class="help">Library Doctor doesn't install apps itself (that would need full control of Docker on your server). Each one below says what it adds; the Docker Compose lines are filled in with your user, group and time zone. Change <code>/path/to/media</code> to your media folder, then <code>docker compose up -d</code> in that folder.</p>
+      ${ks.map(k => { const g = GET[k], nm = g.name || APPS[k].t; return `<div class="getapp"><h4>${esc(nm)}</h4><p>${esc(g.adds)}</p>
+        <details><summary>Install it</summary><pre class="getpre" id="get-${k}">${esc(getSnippet(k))}</pre>
+        <div class="acts"><button class="b-line sm" data-getcopy="${k}">Copy</button></div>
+        <p class="note">${g.note ? esc(g.note) + " " : ""}On <b>Unraid</b>: Apps → search <i>${esc(nm)}</i>. On <b>TrueNAS</b>: Apps → Discover Apps → search <i>${esc(nm)}</i>.${g.guide ? ` <a href="${G}${g.guide}${UTM}" target="_blank" rel="noopener">Step-by-step guide →</a>` : ""}</p>
+        <p class="note">Then come back here, press <b>+ ${esc(APPS[k].t)}</b> ${k === "gotify" ? "under Notifications" : "above"} and paste its address and key.</p></details></div>`; }).join("")}
+    </details>`;
+  }
   let AUTH = null, PWmsg = null;
-  async function settingsOpen() { if (!SC) { const r = await api("/api/settings"); SC = r.settings; SC.arrs = SC.arrs || []; SC.bazarr = SC.bazarr || []; SC._conf = r.configured; SC._root = r.media_root; SC._langs = r.languages || []; }
+  async function settingsOpen() { if (!SC) { const r = await api("/api/settings"); SC = r.settings; SC.arrs = SC.arrs || []; SC.bazarr = SC.bazarr || []; SC._conf = r.configured; SC._root = r.media_root; SC._langs = r.languages || []; SC._hints = r.hints || {}; }
     try { AUTH = await api("/api/auth"); } catch (e) {} settingsDraw(); }
   function pwHtml() {
     if (!AUTH) return "";
-    if (!AUTH.on) return `<h2>Login</h2><div class="app"><p class="help">The login is switched off (LD_AUTH=off), so anyone who can reach this page can use it. Only do this when another login (Authentik, your proxy) sits in front of Library Doctor.</p></div>`;
+    const SI = AUTH.security || {}, tp = SI.trusted || [], ah = SI.hosts || [];
+    const proxyList = `<ul class="secl">
+      <li><b>LD_TRUSTED_PROXIES</b>: ${tp.length ? esc(tp.join(", ")) : "not set"}. ${AUTH.on ? "Lets the login lock-out see each visitor's real address behind your proxy." : tp.length ? "Only these addresses get an answer." : "Without it, only local network addresses get an answer."}</li>
+      <li><b>LD_ALLOWED_HOSTS</b>: ${ah.length ? esc(ah.join(", ")) : `<span class="${AUTH.on ? "" : "bad"}">not set</span>`}. ${ah.length ? "Requests for any other name are refused." : AUTH.on ? "Optional with the login on." : "Set it to the name you open Library Doctor by (e.g. <code>ld.example.com</code>): with the login off it stops a web page from making your browser talk to Library Doctor (DNS rebinding)."}</li></ul>`;
+    if (!AUTH.on) return `<h2>Login</h2><div class="app"><p class="help">The login is switched off (LD_AUTH=off), so anyone who can reach this page can use it. Only do this when another login (Authentik, your proxy) sits in front of Library Doctor.</p>${proxyList}</div>`;
     return `<h2>Login</h2><div class="app"><p class="help">Changing the password logs out every other browser.</p><div class="fl">
       <label>Current password<input type="password" id="pwOld" autocomplete="current-password"></label>
       <label>New password (10+ characters)<input type="password" id="pwNew" autocomplete="new-password"></label>
       <label>New password again<input type="password" id="pwNew2" autocomplete="new-password"></label></div>
-      ${PWmsg ? `<div class="tres2 ${PWmsg.ok ? "ok" : "bad"}">${esc(PWmsg.msg)}</div>` : ""}<div class="acts"><button class="b-teal sm" id="pwGo">Change password</button></div></div>`;
+      ${PWmsg ? `<div class="tres2 ${PWmsg.ok ? "ok" : "bad"}">${esc(PWmsg.msg)}</div>` : ""}<div class="acts"><button class="b-teal sm" id="pwGo">Change password</button></div>${tp.length || ah.length ? proxyList : `<p class="note">Behind a reverse proxy? See LD_TRUSTED_PROXIES and LD_ALLOWED_HOSTS in the README.</p>`}</div>`;
   }
   const fv = (e, k) => esc(e[k] == null ? "" : e[k]);
   function entryHtml(kind, e, i) {
@@ -1149,6 +1409,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const missing = ["bazarr", "tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
     if (missing.length) h += `<div class="acts">${missing.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}${SC.bazarr.length ? `<button class="b-line" data-add="bazarr">+ Another Bazarr</button>` : ""}</div>`;
     else if (SC.bazarr.length) h += `<div class="acts"><button class="b-line" data-add="bazarr">+ Another Bazarr</button></div>`;
+    h += getHtml(missing);
     const NK = ["gotify", "discord", "telegram", "ntfy", "webhook", "pushover", "email"];
     h += `<h2>Notifications <small>the nightly summary goes to every one you add</small></h2>`;
     for (const k of NK) if (SC[k]) h += entryHtml(k, SC[k], null);
@@ -1165,8 +1426,9 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const LG = (SC._langs || []);
     h += `<h2>Audio language</h2><div class="app"><p class="help">File Health flags a film or show that was made in this language but whose only audio is another one (usually a dubbed copy). Untagged audio and foreign-language originals are never flagged.</p>
       <div class="fl"><label>Your language<select id="langSel"><option value="" ${SC.language === "" ? "selected" : ""}>Off (don't check)</option>${LG.map(l => `<option ${SC.language === l ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>`;
-    h += `<h2>Backup</h2><div class="app"><p class="help">Download everything on this page as a file, to move Library Doctor to another server or keep a copy. It includes your API keys, so keep it somewhere safe. The password isn't in it.</p>
-      <div class="acts"><a class="b-line" href="/api/settings/export" download id="bkExport">Download settings</a><label class="b-line" style="cursor:pointer">Restore from a file<input type="file" id="bkImport" accept=".json,application/json" hidden></label></div>${SC._imp ? `<div class="tres2 ${SC._imp.ok ? "ok" : "bad"}">${esc(SC._imp.msg)}</div>` : ""}</div>`;
+    h += `<h2>Backup</h2><div class="app"><p class="help">Download everything on this page as a file, to move Library Doctor to another server or keep a copy. Without keys, restoring keeps the keys already saved here (on a new server you type them in again). With keys, the file is encrypted with a passphrase you choose; don't lose it. The login password is never in the file.</p>
+      <div class="fl"><label>Passphrase (10+ characters, for a file with keys)<input type="password" id="bkPass" autocomplete="new-password"></label></div>
+      <div class="acts"><a class="b-line" href="/api/settings/export" download id="bkExport">Download without API keys</a><button class="b-line" id="bkEnc">Download with API keys (encrypted)</button><label class="b-line" style="cursor:pointer">Restore from a file<input type="file" id="bkImport" accept=".json,application/json" hidden></label></div>${SC._imp ? `<div class="tres2 ${SC._imp.ok ? "ok" : "bad"}">${esc(SC._imp.msg)}</div>` : ""}</div>`;
     h += pwHtml();
     h += `<div class="savebar"><button class="b-teal" id="setSave" ${SCbusy ? "disabled" : ""}>${SCbusy ? "Saving…" : "Save settings"}</button><button class="b-line" id="setUndo">Undo changes</button>${SCmsg ? `<div class="tres2 ${SCmsg.ok ? "ok" : "bad"}">${esc(SCmsg.msg)}</div>` : ""}</div>`;
     el.innerHTML = h; settingsWire();
@@ -1179,6 +1441,10 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     el.querySelectorAll("[data-prm]").forEach(n => n.onclick = () => { const [, , e] = entryOf(n); e.paths.splice(+n.dataset.prm, 1); settingsDraw(); });
     el.querySelectorAll("[data-padd]").forEach(n => n.onclick = () => { const [, , e] = entryOf(n); (e.paths = e.paths || []).push({ from: "", to: SC._root }); settingsDraw(); });
     el.querySelectorAll("[data-rm]").forEach(n => n.onclick = () => { const [k, i] = entryOf(n); if (i == null) delete SC[k]; else SC[k].splice(i, 1); Object.keys(TR).forEach(x => delete TR[x]); settingsDraw(); });
+    el.querySelectorAll("[data-getcopy]").forEach(b => b.onclick = async () => { const t = ($("get-" + b.dataset.getcopy) || {}).textContent || "";
+      try { await navigator.clipboard.writeText(t); b.textContent = "Copied"; }
+      catch (e) { const r = document.createRange(); r.selectNodeContents($("get-" + b.dataset.getcopy)); const sl = getSelection(); sl.removeAllRanges(); sl.addRange(r); b.textContent = "Selected: press Ctrl/Cmd+C"; }
+      setTimeout(() => { b.textContent = "Copy"; }, 2500); });
     el.querySelectorAll("[data-add]").forEach(n => n.onclick = () => { const [k, sub] = n.dataset.add.split(":");
       if (k === "arrs") SC.arrs.push({ name: sub === "sonarr" ? (SC.arrs.some(a => a.name === "Sonarr") ? "Sonarr 2" : "Sonarr") : (SC.arrs.some(a => a.name === "Radarr") ? "Radarr 2" : "Radarr"), kind: sub, url: "", paths: [] });
       else if (k === "bazarr") SC.bazarr.push({ name: SC.bazarr.length ? "Bazarr " + (SC.bazarr.length + 1) : "Bazarr", url: "", paths: [] });
@@ -1193,9 +1459,18 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
       const r = await api("/api/auth/change", { old: o, new: a }); PWmsg = { ok: r.ok, msg: r.ok ? "Password changed. Other browsers are logged out." : r.msg }; settingsDraw(); });
     const lg = $("langSel"); if (lg) lg.onchange = () => { SC.language = lg.value; };
     const dg = $("dgSel"); if (dg) dg.onchange = () => { SC.digest = dg.value; };
+    const be = $("bkEnc"); if (be) be.onclick = async () => { const pass = ($("bkPass") || {}).value || "";
+      if (pass.length < 10) { SC._imp = { ok: false, msg: "Type a passphrase of at least 10 characters first." }; settingsDraw(); return; }
+      be.disabled = true; be.textContent = "Encrypting…";
+      const r = await api("/api/settings/export", { passphrase: pass });
+      if (r.ok) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(r.file, null, 1)], { type: "application/json" }));
+        a.download = "library-doctor-settings-" + new Date().toISOString().slice(0, 10).replace(/-/g, "") + "-encrypted.json"; document.body.appendChild(a); a.click(); a.remove();
+        SC._imp = { ok: true, msg: "Downloaded, with the API keys encrypted. You'll need the same passphrase to restore it." }; }
+      else SC._imp = { ok: false, msg: r.msg || "Couldn't make the file." };
+      settingsDraw(); };
     const bi = $("bkImport"); if (bi) bi.onchange = async () => { const f = bi.files && bi.files[0]; if (!f) return;
       let data = null; try { data = JSON.parse(await f.text()); } catch (e) { SC._imp = { ok: false, msg: "That file isn't valid JSON." }; settingsDraw(); return; }
-      const r = await api("/api/settings/import", { data });
+      const r = await api("/api/settings/import", { data, passphrase: ($("bkPass") || {}).value || "" }); bi.value = "";
       if (r.ok) { SC = null; await settingsOpen(); SC._imp = { ok: true, msg: "Settings restored from the file. Library Doctor is using them now." }; settingsDraw(); load(); folderCheck(true); }
       else { SC._imp = { ok: false, msg: r.msg || "Couldn't restore that file." }; settingsDraw(); } };
     const td = $("tdSel"); if (td) td.onchange = () => { SC.trash_days = +td.value; };
@@ -1224,7 +1499,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
     const checking = S && (S.done || []).some(x => x.status === "checking");
     clearTimeout(poll); poll = setTimeout(load, S && (S.running || checking) ? 1500 : 30000);
   }
-  if (location.hash === "#trash") setView("trash"); else if (location.hash === "#settings") setView("settings");
+  if (location.hash === "#trash") setView("trash"); else if (location.hash === "#settings") setView("settings"); else if (location.hash === "#analysis") setView("analysis");
   $("rSpace").onclick = () => { filter = "quality"; render(); $("checks").scrollIntoView({ behavior: "smooth", block: "start" }); };
   $("rJobs").onclick = () => {     // first check (in tile order) that still has a job; Unwatched isn't a job
     const open = S ? S.issues.filter(i => !i.ignored && i.chk !== "unwatched") : [];

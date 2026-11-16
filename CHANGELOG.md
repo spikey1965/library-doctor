@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.9 (beta)
+
+**New**
+- **Incomplete folder clean-up (Downloads):** when a download fails or is removed, SABnzbd, qBittorrent, Transmission or NZBGet can leave its half-finished files in the "incomplete" folder, and nothing ever empties it. Library Doctor asks each download client where that folder is, lists what's in it that no client is working on and that nothing has touched for 3 days (`LD_INCOMPLETE_DAYS`), with the size really used on the disk, and offers **Move all to trash** (asks once more first) or **Trash** per item. Everything is checked again just before it's moved, and if any download client can't be reached nothing is offered, because Library Doctor can't tell what's still downloading. qBittorrent's per-category folders are looked inside. `LD_INCOMPLETE_DIRS` adds folders by hand.
+- **"Don't have these yet?" in Settings:** under the optional apps, one line each on what Bazarr, Tautulli, Tdarr, Sportarr, Prowlarr, qBittorrent, Transmission, SABnzbd, NZBGet and Gotify add, with a Docker Compose snippet filled in with your user, group, time zone and the media folder Radarr/Sonarr use (Copy button), where to find it on Unraid and TrueNAS, and a step-by-step guide. Library Doctor still never installs anything itself.
+- **Analysis tab:** a new page with:
+  - **Library overview:** titles, files, total size, movies, episodes, free space.
+  - **Library score** out of 100, split into File integrity, Quality, App sync, Metadata and Duplicates, each with what weighs on it most. Small problems are weighted up so they show (1% broken files costs about 25 points). The main ring now shows this score.
+  - **Trends:** score over time (a point after every scan, at least daily) with the change over 7 and 30 days, problems found per scan, and storage recovered (freed for good, waiting in the trash, last 30 days).
+  - **Problems that keep coming back:** back after a fix, seen again and again between scans, or the same title fixed more than once (ignored cards and running totals left out).
+  - **Storage by library** and **Quality by library** (share in HD, resolution and video codec mix), plus **Download CSV**.
+- **Best fix / Risk / Space saved** on every card: the recommended fix, how risky it is (No risk / Low risk / Check first, with the reason) and the space it frees (hardlinked copies excluded; Tdarr conversions as an estimate).
+
+**Security**
+- **Reverse proxies:** `X-Forwarded-For` and `X-Forwarded-Proto` are now only believed from addresses in the new `LD_TRUSTED_PROXIES`. Before, anyone could send a made-up `X-Forwarded-For` to get round the per-address login lock-out (the overall limit still applied).
+- **Login switched off (`LD_AUTH=off`):** Library Doctor now only answers your proxy (`LD_TRUSTED_PROXIES`) or, if that isn't set, local network addresses, so a port opened to the internet by mistake isn't an open door. New `LD_ALLOWED_HOSTS` refuses requests for any other host name (stops DNS rebinding). Refused requests show a red warning on the main screen, and Settings → Login shows what's set.
+- **Settings backup:** now either without API keys (restoring keeps the keys already saved) or with the keys encrypted by a passphrase you choose (AES-256, `openssl enc` format, so it can also be opened by hand). Older backup files still restore. The image now includes `openssl`.
+- **Logs never show keys:** API keys, tokens, passwords, Discord webhook and Telegram bot URLs are masked in everything Library Doctor logs.
+
 ## 0.1.8 (beta)
 
 **New**

@@ -24,7 +24,7 @@
 | Virus scan | Programs pretending to be films (film.mkv.exe), and ClamAV on every new file | ClamAV (optional) |
 | Coming Soon | Agregarr placeholders playing a generic clip instead of the real trailer | Agregarr (optional) |
 | App Health | Each app's own warnings (Radarr/Sonarr/Prowlarr health, Bazarr, Tdarr nodes), apps that stop answering, updates (with Update now, or the Docker commands to copy), and indexers that keep failing and never find anything | Radarr/Sonarr (Prowlarr optional) |
-| Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), downloads that are stuck, with the reason from your download client (no seeds, tracker error, slow, usenet failure) and Re-announce / Remove & try another | Radarr/Sonarr (qBittorrent, Transmission, SABnzbd, NZBGet optional) |
+| Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), downloads that are stuck, with the reason from your download client (no seeds, tracker error, slow, usenet failure) and Re-announce / Remove & try another, and leftovers in the download clients' incomplete folder | Radarr/Sonarr (qBittorrent, Transmission, SABnzbd, NZBGet optional) |
 | Disk space | Free space now and, after a week of daily readings, how fast it fills and roughly when it's full | — |
 
 Tdarr (Convert with Tdarr) and Sportarr (sports libraries) are optional too. For the nightly summary you can add any of Gotify, Discord, Telegram, ntfy, a webhook or email in Settings → Notifications.
@@ -88,6 +88,13 @@ This is a beta, so a few things are worth knowing before you start:
 
 Library Doctor has its own login. If Authentik, Authelia or your proxy already protects it, you can switch the built-in login off with `LD_AUTH=off`. Only do that when something else is in front: Library Doctor can move files.
 
+Behind a reverse proxy, also set:
+
+- `LD_TRUSTED_PROXIES` to your proxy's address or range (e.g. `172.16.0.0/12` for a proxy in Docker, `127.0.0.1` for one on the same host). Only then are `X-Forwarded-For` / `X-Forwarded-Proto` believed, so the login lock-out sees each visitor's real address. With `LD_AUTH=off`, Library Doctor then answers **only** those addresses; without it, only local network addresses.
+- `LD_ALLOWED_HOSTS` to the name you open it by (e.g. `ld.example.com`). Requests for any other name are refused, which stops a web page from making your browser talk to Library Doctor (DNS rebinding). Strongly recommended with `LD_AUTH=off`. IP addresses and `localhost` always work.
+
+Refused requests show a red warning on the main screen for a week.
+
 ## Settings (environment variables)
 
 | Variable | Default | What it does |
@@ -97,6 +104,8 @@ Library Doctor has its own login. If Authentik, Authelia or your proxy already p
 | `LD_TRASH_DAYS` | `7` | Days before the trash empties itself, until you pick 3, 7, 14 or 30 in Settings → Trash |
 | `LD_KEEP_DAYS` | `182` | How long "Keep" hides an unwatched item |
 | `LD_AUTH` | `on` | `off` = no built-in login (only behind another login) |
+| `LD_TRUSTED_PROXIES` | (empty) | Your reverse proxy's address(es)/ranges, comma-separated. See Behind a reverse proxy |
+| `LD_ALLOWED_HOSTS` | (empty) | The name(s) you open Library Doctor by, comma-separated; other names are refused |
 | `LD_PORT` | `8790` | Port inside the container |
 | `LD_CLAMD_HOST` / `LD_CLAMD_PORT` | `127.0.0.1` / `3310` | Your ClamAV (clamd), for the Virus Scan check |
 | `LD_CLAM_ROOT` | `/scandir` | Where ClamAV sees the same media folder |
@@ -104,6 +113,8 @@ Library Doctor has its own login. If Authentik, Authelia or your proxy already p
 | `LD_DOWNLOAD_WINDOW_END` | (unset) | If downloads only run at night, the hour the window ends (e.g. `7`); a torrent is "stuck" after a whole window at 0%. Unset = after 24 hours |
 | `LD_QUEUE_NOTIFY_HOUR` | `8` | Hour the Downloads check sends new problems to your notifications (the window end, if set) |
 | `LD_PROTECT_TAGS` | (empty) | qBittorrent tags never offered for removal, comma-separated (private torrents never are) |
+| `LD_INCOMPLETE_DAYS` | `3` | Days an item in the incomplete folder must be untouched (and unknown to every download client) before it's offered for the trash |
+| `LD_INCOMPLETE_DIRS` | (empty) | Extra incomplete folders to check, comma-separated, as Library Doctor sees them (the download clients' own folders are found by themselves) |
 
 Everything else (apps, API keys, folder mapping) is set on the Settings page and saved in `/config/config.json`. API keys stay on your server and are never shown again after saving.
 

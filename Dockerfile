@@ -3,7 +3,7 @@
 #   deno            - the JavaScript runtime yt-dlp needs for YouTube (only used with Agregarr's Coming Soon trailers)
 FROM python:3.12-alpine
 
-RUN apk add --no-cache ffmpeg deno tzdata su-exec
+RUN apk add --no-cache ffmpeg deno tzdata su-exec openssl
 
 COPY app/ /app/
 # readable by whatever user the container runs as (compose "user:"), writable by nobody

@@ -13,6 +13,8 @@ services:
       - LD_SCAN_HOUR=3              # hour of the nightly scan
       - LD_TRASH_DAYS=7             # how long cleaned-up files stay in the trash before they're deleted
       # - LD_AUTH=off               # only if another login (Authentik, Authelia, your proxy) protects this page
+      # - LD_TRUSTED_PROXIES=172.16.0.0/12   # behind a reverse proxy: its address or range
+      # - LD_ALLOWED_HOSTS=ld.example.com    # the name you open it by (strongly recommended with LD_AUTH=off)
       # - LD_CLAMD_HOST=clamav      # optional: your ClamAV (clamd) for the Virus Scan check
       # - LD_CLAMD_PORT=3310
       # - LD_CLAM_ROOT=/scandir     # where ClamAV sees the same media folder
