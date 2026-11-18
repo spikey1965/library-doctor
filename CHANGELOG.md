@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.12 (beta)
+
+- **A new Settings page that uses the whole screen.** A menu on the left (a row of tabs on a phone) jumps to each part: Folder check, Plex & arrs, Optional apps, Notifications, General, Backup and Login. The menu shows how many apps each part has, and an orange count when something needs a look.
+- **Apps that work fold down to one line** with a coloured dot (green = connected, orange = folders don't line up, red = test failed, grey = not tested yet), the address, and Test / Edit buttons. A new app, one that isn't set up yet or one whose test failed opens by itself; **Done** folds it back. App cards sit two to a row on wide screens.
+- **Test all apps** button tests Plex, every Radarr/Sonarr and the optional apps in one go (not the notifications, so nobody gets test messages).
+- **General** is one card: automatic scan time and days, when to send messages, how long the trash keeps files, and your audio language.
+- **Folder check** shows one line when every app lines up (details behind "Show details") and the full table only when something is wrong.
+- The Save bar says how many unsaved changes there are, and the browser asks before you close the tab with changes not saved.
+
 ## 0.1.11 (beta)
 
 - **A cleaner main screen**: the check tiles are now rows, with the icon on the left and the count coloured by how serious it is, and tiles that are all clear are dimmed so the ones with work stand out. The Scans list is a compact timeline (date, items checked, how many to look at). Panels have clearer edges, the tabs are pills with hover and keyboard-focus outlines, and the score is shown once (in the ring). Movement is turned off if your device asks for reduced motion.

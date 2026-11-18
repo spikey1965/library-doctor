@@ -112,7 +112,31 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
 .count { font:700 11px var(--font); background:var(--orange); color:var(--bg); border-radius:999px; padding:1px 7px; }
 #openTrash svg, .tb button svg { width:16px; height:16px; }
 .bin { display:flex; flex-direction:column; gap:14px; }
-.set { display:flex; flex-direction:column; gap:14px; max-width:880px; }
+.set { display:flex; flex-direction:column; gap:14px; max-width:1180px; margin:0 auto; }
+.setl { display:grid; grid-template-columns:190px minmax(0,1fr); gap:24px; align-items:start; }
+.setnav { position:sticky; top:12px; display:flex; flex-direction:column; gap:2px; background:var(--panel); border-radius:14px; padding:8px; }
+.setnav button { font:600 14px var(--font); text-align:left; justify-content:space-between; color:var(--mut); background:transparent; border-radius:9px; padding:8px 10px; }
+.setnav button:hover { color:var(--fg); background:var(--card); } .setnav button.on { color:var(--fg); background:var(--card); box-shadow:inset 3px 0 0 var(--teal); }
+.nb { font:700 11px var(--font); font-style:normal; background:var(--card); color:var(--mut); border:1px solid var(--line2); border-radius:999px; padding:0 7px; } .nb.ok { color:var(--teal); border-color:var(--teal); } .nb.bad { color:var(--orange); border-color:var(--orange); }
+.setc { display:flex; flex-direction:column; gap:26px; min-width:0; }
+.sec { display:flex; flex-direction:column; gap:12px; scroll-margin-top:12px; min-width:0; }
+.sech { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; } .set .sech h2 { margin:0; }
+.appgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr)); gap:12px; align-items:start; }
+.app.row { flex-direction:row; align-items:center; gap:12px; padding:11px 14px; }
+.rowt { flex:1; min-width:0; display:flex; flex-direction:column; } .rowt .nm { font:700 15px var(--head); }
+.rmeta { font-size:12px; color:var(--mut); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.app.row .acts { flex-wrap:nowrap; }
+.dot { width:10px; height:10px; border-radius:50%; flex:none; background:var(--line2); display:inline-block; } .dot.ok { background:var(--teal); } .dot.bad { background:var(--red); } .dot.warn { background:var(--orange); } .dot.none { background:transparent; border:2px solid var(--line2); box-sizing:border-box; }
+.app h3 .hst { margin-left:auto; font:500 12px var(--font); color:var(--mut); }
+.gen .genf { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+.gen label:not(.day) { display:flex; flex-direction:column; gap:4px; font-size:12px; font-weight:700; color:var(--mut); min-width:0; }
+.gen label small { font-weight:400; font-size:12px; }
+.gen input[type=time], .gen select { font:inherit; font-size:14px; font-weight:400; background:var(--card); color:var(--fg); border:1px solid var(--line2); border-radius:10px; padding:8px 10px; width:100%; box-sizing:border-box; }
+.gen .days { align-items:center; margin-top:4px; }
+.fcok { margin:0; font-size:14px; display:flex; align-items:center; gap:8px; } details.fcd > summary { cursor:pointer; color:var(--teal); font-size:13px; font-weight:600; }
+.dirty { font-size:13px; color:var(--mut); } .dirty.on { color:var(--orange); font-weight:700; }
+@media (max-width:860px) { .setl { grid-template-columns:minmax(0,1fr); gap:14px; } .setnav { flex-direction:row; overflow-x:auto; top:0; z-index:5; border-radius:12px; scrollbar-width:none; } .setnav button { white-space:nowrap; flex:none; gap:6px; } .setnav button.on { box-shadow:inset 0 -2px 0 var(--teal); } }
+@media (max-width:520px) { .app.row { padding:10px 12px; gap:10px; } .app.row .acts { gap:6px; } }
 .set .intro { color:var(--mut); font-size:14px; margin:0; } .set h2 { margin:6px 0 0; font:800 20px var(--head); } .set h2 small { font:500 13px var(--font); color:var(--mut); margin-left:6px; }
 .start { background:var(--orange-bg, #40281a); color:var(--fg); border:1px solid var(--orange); border-radius:14px; padding:12px 14px; font-size:14px; } .start b { color:var(--orange); }
 .app { background:var(--panel); border-radius:16px; padding:14px 16px; display:flex; flex-direction:column; gap:10px; min-width:0; }
@@ -1305,8 +1329,9 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       <td>${r.example && r.example.app ? `<code>${esc(r.example.app)}</code><br>→ <code>${esc(r.example.local)}</code>` : ""}</td>
       <td>${esc(r.msg || "")}${Array.isArray(r.suggest) && r.status !== "ok" && !r.applied ? `<br><span class="note">${esc(r.suggest_msg || "")}</span><br><button class="b-teal sm" data-fcuse="${n}">${r.suggest.length ? "Use suggested mapping" : "Remove the mapping"}</button>` : r.suggest_msg && r.status !== "ok" ? `<br><span class="note">${esc(r.suggest_msg)}</span>` : ""}${r.applied ? `<br><span class="note">Filled in: press Save settings.</span>` : ""}</td></tr>`).join("");
     const bad = (FC.rows || []).filter(r => r.status === "bad" || r.status === "partial").length;
-    return `<h2>Folder check</h2><div class="app"><p class="help">Each app may see your media under a different folder (Plex <code>/data/movies</code>, Radarr <code>/movies</code>, Library Doctor <code>${esc(SC._root || "/media")}</code>). This asks every app for a few real files and looks for them here. A scan stops instead of reporting everything as missing when Plex's or Radarr/Sonarr's files can't be found.</p>
-      ${FC.busy && !FC.rows ? `<p class="note">Checking…</p>` : FC.rows && FC.rows.length ? `<div class="uww"><table class="uw fct">${rows}</table></div><p class="note">${bad ? `<b>${bad} app${bad === 1 ? "" : "s"} need${bad === 1 ? "s" : ""} attention.</b>` : "Everything lines up."}</p>` : `<p class="note">Add your apps below first.</p>`}
+    return `<div class="app"><p class="help">Each app may see your media under a different folder (Plex <code>/data/movies</code>, Radarr <code>/movies</code>, Library Doctor <code>${esc(SC._root || "/media")}</code>). This asks every app for a few real files and looks for them here. A scan stops instead of reporting everything as missing when Plex's or Radarr/Sonarr's files can't be found.</p>
+      ${FC.busy && !FC.rows ? `<p class="note">Checking…</p>` : FC.rows && FC.rows.length ? (bad ? `<div class="uww"><table class="uw fct">${rows}</table></div><p class="note"><b>${bad} app${bad === 1 ? "" : "s"} need${bad === 1 ? "s" : ""} attention.</b></p>`
+        : `<p class="fcok"><span class="dot ok"></span> All ${FC.rows.length} apps line up: Library Doctor can find their files.</p><details class="fcd"><summary>Show details</summary><div class="uww"><table class="uw fct">${rows}</table></div></details>`) : `<p class="note">Add your apps below first.</p>`}
       <div class="acts"><button class="b-line sm" id="fcRun" ${FC.busy ? "disabled" : ""}>${FC.busy ? "Checking…" : "Check again"}</button></div></div>`;
   }
   /* v0.1.9 "Don't have it?": what each optional app adds, a compose snippet filled in with what Library Doctor knows, and where to read more.
@@ -1358,8 +1383,56 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
         <p class="note">Then come back here, press <b>+ ${esc(APPS[k].t)}</b> ${k === "gotify" ? "under Notifications" : "above"} and paste its address and key.</p></details></div>`; }).join("")}
     </details>`;
   }
+  /* v0.1.12 Settings layout: section menu, collapsed rows for apps that work, status dots, Test all, unsaved-change count */
+  const OPEN = new WeakSet(), TA = { busy: false, n: 0, done: 0 }; let SC0 = null, SECON = "folders", NAVOBS = null;
+  const scSnap = () => JSON.stringify(SC, (k, v) => k.startsWith("_") ? undefined : v);
+  function scDirty() {
+    if (!SC || SC0 == null) return 0;
+    const a = JSON.parse(SC0), b = JSON.parse(scSnap()); let n = 0;
+    for (const k of new Set(Object.keys(a).concat(Object.keys(b)))) {
+      const x = a[k], y = b[k];
+      if (Array.isArray(x) || Array.isArray(y)) { const X = x || [], Y = y || []; for (let i = 0; i < Math.max(X.length, Y.length); i++) if (JSON.stringify(X[i]) !== JSON.stringify(Y[i])) n++; }
+      else if (JSON.stringify(x) !== JSON.stringify(y)) n++;
+    }
+    return n;
+  }
+  function updDirty() { const d = $("setDirty"); if (!d) return; const n = scDirty(); d.textContent = n ? `${n} unsaved change${n === 1 ? "" : "s"}` : SCmsg ? "" : "No unsaved changes"; d.classList.toggle("on", n > 0); }
+  window.addEventListener("beforeunload", e => { if (view === "settings" && scDirty()) { e.preventDefault(); e.returnValue = ""; } });
+  function entStatus(kind, i, e) {        // → [dot class, short text]
+    const key = kind + (i == null ? "" : ":" + i), tr = TR[key];
+    if (tr) return tr.ok ? ["ok", "Connected"] : ["bad", "Test failed"];
+    const fc = (FC.rows || []).find(r => r.kind === kind && (r.i == null ? i == null : r.i === i));
+    if (fc && !scDirty()) { if (fc.status === "ok") return ["ok", "Connected, folders line up"]; if (fc.status === "error") return ["bad", "Can't connect"]; if (fc.status === "bad" || fc.status === "partial") return ["warn", "Folders don't line up"]; if (fc.status === "empty") return ["ok", "Connected, no files yet"]; }
+    const A = APPS[kind], saved = A.secret && e[A.secret[0] + "_set"];
+    return [saved || e.url ? "idle" : "none", saved || e.url ? "Not tested yet" : "Not set up"];
+  }
+  function stBadge(keys) {
+    let bad = 0, n = 0;
+    for (const key of keys) { const [k, i] = key.split(":"), e = i == null ? SC[k] : SC[k][+i]; if (!e) continue; n++; const s = entStatus(k, i == null ? null : +i, e)[0]; if (s === "bad" || s === "warn") bad++; }
+    return n ? `<i class="nb ${bad ? "bad" : ""}">${bad ? bad + " !" : n}</i>` : "";
+  }
+  function fcBadge() { const b = (FC.rows || []).filter(r => r.status === "bad" || r.status === "partial").length; return FC.rows && FC.rows.length ? `<i class="nb ${b ? "bad" : "ok"}">${b ? b + " !" : "✓"}</i>` : ""; }
+  function isOpen(kind, i, e) {
+    const key = kind + (i == null ? "" : ":" + i), tr = TR[key];
+    if (OPEN.has(e) || (tr && !tr.ok)) return true;
+    const A = APPS[kind]; return !(e.url || A.fixedUrl) || !(A.secret && (e[A.secret[0] + "_set"] || e[A.secret[0]]) || !A.need);
+  }
+  function hostOf(e, A) { if (A.fixedUrl) return A.t; try { const u = new URL(e.url); return u.host; } catch (x) { return e.url || ""; } }
+  function navWatch() {
+    if (NAVOBS) NAVOBS.disconnect(); if (!("IntersectionObserver" in window)) return;
+    NAVOBS = new IntersectionObserver(es => { for (const x of es) if (x.isIntersecting) { SECON = x.target.dataset.sec; document.querySelectorAll(".setnav button").forEach(b => b.classList.toggle("on", b.dataset.go === SECON)); } }, { rootMargin: "-20% 0px -70% 0px" });
+    document.querySelectorAll("#setView .sec").forEach(s => NAVOBS.observe(s));
+  }
+  async function testAll() {
+    const L = [["plex", null, SC.plex]].concat(SC.arrs.map((e, i) => ["arrs", i, e]), SC.bazarr.map((e, i) => ["bazarr", i, e]), ["tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"].filter(k => SC[k]).map(k => [k, null, SC[k]]))
+      .filter(([, , e]) => e && e.url);
+    TA.busy = true; TA.n = L.length; TA.done = 0; settingsDraw();
+    await Promise.all(L.map(async ([k, i, e]) => { let r; try { r = await api("/api/settings/test", { kind: k, cfg: e }); } catch (x) { r = { ok: false, msg: String(x.message || x) }; }
+      TR[k + (i == null ? "" : ":" + i)] = { ok: r.ok, msg: r.msg || r.error || "No answer." }; TA.done++; const b = $("testAll"); if (b) b.textContent = `Testing ${TA.done} of ${TA.n}…`; }));
+    TA.busy = false; settingsDraw();
+  }
   let AUTH = null, PWmsg = null;
-  async function settingsOpen() { if (!SC) { const r = await api("/api/settings"); SC = r.settings; SC.arrs = SC.arrs || []; SC.bazarr = SC.bazarr || []; SC._conf = r.configured; SC._root = r.media_root; SC._langs = r.languages || []; SC._hints = r.hints || {}; }
+  async function settingsOpen() { if (!SC) { const r = await api("/api/settings"); SC = r.settings; SC.arrs = SC.arrs || []; SC.bazarr = SC.bazarr || []; SC._conf = r.configured; SC._root = r.media_root; SC._langs = r.languages || []; SC._hints = r.hints || {}; SC0 = null; }
     try { AUTH = await api("/api/auth"); } catch (e) {} settingsDraw(); }
   function pwHtml() {
     if (!AUTH) return "";
@@ -1367,8 +1440,8 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     const proxyList = `<ul class="secl">
       <li><b>LD_TRUSTED_PROXIES</b>: ${tp.length ? esc(tp.join(", ")) : "not set"}. ${AUTH.on ? "Lets the login lock-out see each visitor's real address behind your proxy." : tp.length ? "Only these addresses get an answer." : "Without it, only local network addresses get an answer."}</li>
       <li><b>LD_ALLOWED_HOSTS</b>: ${ah.length ? esc(ah.join(", ")) : `<span class="${AUTH.on ? "" : "bad"}">not set</span>`}. ${ah.length ? "Requests for any other name are refused." : AUTH.on ? "Optional with the login on." : "Set it to the name you open Library Doctor by (e.g. <code>ld.example.com</code>): with the login off it stops a web page from making your browser talk to Library Doctor (DNS rebinding)."}</li></ul>`;
-    if (!AUTH.on) return `<h2>Login</h2><div class="app"><p class="help">The login is switched off (LD_AUTH=off), so anyone who can reach this page can use it. Only do this when another login (Authentik, your proxy) sits in front of Library Doctor.</p>${proxyList}</div>`;
-    return `<h2>Login</h2><div class="app"><p class="help">Changing the password logs out every other browser.</p><div class="fl">
+    if (!AUTH.on) return `<div class="app"><p class="help">The login is switched off (LD_AUTH=off), so anyone who can reach this page can use it. Only do this when another login (Authentik, your proxy) sits in front of Library Doctor.</p>${proxyList}</div>`;
+    return `<div class="app"><p class="help">Changing the password logs out every other browser.</p><div class="fl">
       <label>Current password<input type="password" id="pwOld" autocomplete="current-password"></label>
       <label>New password (10+ characters)<input type="password" id="pwNew" autocomplete="new-password"></label>
       <label>New password again<input type="password" id="pwNew2" autocomplete="new-password"></label></div>
@@ -1393,57 +1466,72 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     const ps = e.paths || [], nm = esc(e.name || (kind === "arrs" ? (e.kind === "sonarr" ? "Sonarr" : "Radarr") : A.t));
     const pm = A.files ? `<div class="pm"><span class="ph">Folders</span>${ps.length ? ps.map((m, j) => `<div class="pr"><input data-p="${j}" data-pf="from" value="${esc(m.from)}" placeholder="${esc(kind === "plex" ? "/data" : "/movies")}" aria-label="Folder in ${nm}"><span>→</span><input data-p="${j}" data-pf="to" value="${esc(m.to)}" placeholder="${esc(SC._root)}" aria-label="Same folder in Library Doctor"><button class="b-line sm" data-prm="${j}">Remove</button></div>`).join("") + `<p>Left: the folder as ${nm} sees it. Right: the same folder in Library Doctor.</p>`
       : `<p>Same folders as Library Doctor (nothing to change). If ${nm} sees your media somewhere else, press Detect folders.</p>`}<div class="acts"><button class="b-line sm" data-det="1">Detect folders</button><button class="b-line sm" data-padd="1">Add by hand</button></div></div>` : "";
-    return `<div class="app" data-kind="${kind}" ${i == null ? "" : `data-i="${i}"`}><h3>${esc(kind === "arrs" || kind === "bazarr" ? (e.name || (kind === "arrs" ? (e.kind === "sonarr" ? "Sonarr" : "Radarr") : "Bazarr")) : A.t)}${A.need ? "" : '<span class="opt">Optional</span>'}</h3>
+    const title = esc(kind === "arrs" || kind === "bazarr" ? (e.name || (kind === "arrs" ? (e.kind === "sonarr" ? "Sonarr" : "Radarr") : "Bazarr")) : A.t), [dot, stx] = entStatus(kind, i, e), di = i == null ? "" : `data-i="${i}"`;
+    const kindTag = kind === "arrs" && e.name && !new RegExp(e.kind || "radarr", "i").test(e.name) ? ` <span class="opt">${e.kind === "sonarr" ? "Sonarr" : "Radarr"}</span>` : "";
+    if (!isOpen(kind, i, e)) return `<div class="app row" data-kind="${kind}" ${di}><span class="dot ${dot}" title="${esc(stx)}"></span><div class="rowt"><b class="nm">${title}</b>${kindTag}<span class="rmeta">${esc(stx)}${tr && tr.ok && tr.msg ? " · " + esc(tr.msg) : ""} · ${esc(hostOf(e, A))}</span></div>
+      <div class="acts"><button class="b-line sm" data-test="1">Test</button><button class="b-line sm" data-edit="1">Edit</button></div></div>`;
+    return `<div class="app" data-kind="${kind}" ${di}><h3><span class="dot ${dot}" title="${esc(stx)}"></span><span class="nm">${title}</span>${kindTag}${A.need ? "" : '<span class="opt">Optional</span>'}<span class="hst">${esc(stx)}</span></h3>
       ${i == null || i === 0 ? `<p class="help">${A.help}</p>` : ""}<div class="fl">${fields}</div>${pm}
       ${tr ? `<div class="tres2 ${tr.ok ? "ok" : "bad"}">${esc(tr.msg)}</div>` : ""}
-      <div class="acts"><button class="b-teal sm" data-test="1">Test</button>${A.need && !A.list ? "" : `<button class="b-line sm" data-rm="1">Remove</button>`}</div></div>`;
+      <div class="acts"><button class="b-teal sm" data-test="1">Test</button>${(e.url || A.fixedUrl) && !(tr && !tr.ok) ? `<button class="b-line sm" data-close="1">Done</button>` : ""}${A.need && !A.list ? "" : `<button class="b-line sm" data-rm="1">Remove</button>`}</div></div>`;
   }
   function settingsDraw() {
     const el = $("setView"); if (!SC) { el.innerHTML = "<p class='intro'>Loading…</p>"; return; }
-    let h = `<h2>Settings</h2><p class="intro">Library Doctor only reads from these apps until you press a fix button. API keys stay on this server and are never shown again after saving.</p>`;
-    if (S && (S.split_mounts || []).length) h += `<div class="splitw" role="note" style="margin-top:0"><b>Your media is on more than one disk.</b> ${S.split_mounts.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")} ${S.split_mounts.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. Scans will work, but clean-up can't move files from there. Mount the folder that holds all your media as one volume if you can (see Known limitations in the README).</div>`;
-    h += fcHtml();
-    if (!SC._conf) h += `<div class="start"><b>Start here:</b> add Plex and at least one Radarr or Sonarr, press Test on each, then Save. The first scan runs when you press Scan now.</div>`;
-    h += entryHtml("plex", SC.plex || (SC.plex = { url: "", public: "https://app.plex.tv" }), null);
-    h += `<h2>Radarr and Sonarr</h2>` + SC.arrs.map((e, i) => entryHtml("arrs", e, i)).join("") + `<div class="acts"><button class="b-line" data-add="arrs:radarr">+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">+ Add Sonarr</button></div>`;
-    h += `<h2>Optional <small>each one switches on its own checks</small></h2>`;
-    h += SC.bazarr.map((e, i) => entryHtml("bazarr", e, i)).join("");
-    for (const k of ["tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"]) if (SC[k]) h += entryHtml(k, SC[k], null);
-    const missing = ["bazarr", "tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
-    if (missing.length) h += `<div class="acts">${missing.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}${SC.bazarr.length ? `<button class="b-line" data-add="bazarr">+ Another Bazarr</button>` : ""}</div>`;
-    else if (SC.bazarr.length) h += `<div class="acts"><button class="b-line" data-add="bazarr">+ Another Bazarr</button></div>`;
-    h += getHtml(missing);
-    const NK = ["gotify", "discord", "telegram", "ntfy", "webhook", "pushover", "email"];
-    h += `<h2>Notifications <small>the nightly summary goes to every one you add</small></h2>`;
-    for (const k of NK) if (SC[k]) h += entryHtml(k, SC[k], null);
-    const nmiss = NK.filter(k => !SC[k]);
-    if (nmiss.length) h += `<div class="acts">${nmiss.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}</div>`;
-    const DG = SC.digest || "news";
-    h += `<div class="app"><p class="help">When to send a message.</p><div class="fl"><label>Messages<select id="dgSel"><option value="news" ${DG === "news" ? "selected" : ""}>After a scan, only when there's something new</option><option value="weekly" ${DG === "weekly" ? "selected" : ""}>Once a week (Sunday), plus anything urgent</option><option value="both" ${DG === "both" ? "selected" : ""}>Both</option></select></label></div></div>`;
-    const TD = SC.trash_days || 7;
-    h += `<h2>Trash</h2><div class="app"><p class="help">Clean-ups move files into a hidden trash folder on the same disk first, so you can put them back. After this many days they're deleted for good (you get a warning the day before).</p><div class="fl"><label>Keep files in the trash for<select id="tdSel">${[3, 7, 14, 30].map(n => `<option value="${n}" ${TD === n ? "selected" : ""}>${n} days</option>`).join("")}</select></label></div></div>`;
+    const keepY = window.scrollY;
+    const sec = (id, title, small, body, head) => `<section class="sec" id="sec-${id}" data-sec="${id}"><div class="sech"><h2>${title}${small ? ` <small>${small}</small>` : ""}</h2>${head || ""}</div>${body}</section>`;
+    let top = `<h2>Settings</h2><p class="intro">Library Doctor only reads from these apps until you press a fix button. API keys stay on this server and are never shown again after saving.</p>`;
+    if (S && (S.split_mounts || []).length) top += `<div class="splitw" role="note" style="margin-top:0"><b>Your media is on more than one disk.</b> ${S.split_mounts.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")} ${S.split_mounts.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. Scans will work, but clean-up can't move files from there into the trash. Mount the one parent folder instead.</div>`;
+    if (!SC._conf) top += `<div class="start"><b>Start here:</b> add Plex and at least one Radarr or Sonarr, press Test on each, then Save. The first scan runs when you press Scan now.</div>`;
+    let body = "";
+    body += sec("folders", "Folder check", "", fcHtml());
+    if (!SC.plex) SC.plex = { url: "", public: "https://app.plex.tv" };
+    const main = [entryHtml("plex", SC.plex, null)].concat(SC.arrs.map((e, i) => entryHtml("arrs", e, i)));
+    body += sec("apps", "Plex, Radarr and Sonarr", "", `<div class="appgrid">${main.join("")}</div><div class="acts"><button class="b-line" data-add="arrs:radarr">+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">+ Add Sonarr</button></div>`,
+      `<button class="b-line sm" id="testAll" ${TA.busy ? "disabled" : ""}>${TA.busy ? `Testing ${TA.done} of ${TA.n}…` : "Test all apps"}</button>`);
+    const OK = ["tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"];
+    const opt = SC.bazarr.map((e, i) => entryHtml("bazarr", e, i)).concat(OK.filter(k => SC[k]).map(k => entryHtml(k, SC[k], null)));
+    const missing = ["bazarr"].concat(OK).filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
+    let ob = opt.length ? `<div class="appgrid">${opt.join("")}</div>` : `<p class="note">None added yet. Each one switches on its own checks.</p>`;
+    ob += `<div class="acts">${missing.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}${SC.bazarr.length ? `<button class="b-line" data-add="bazarr">+ Another Bazarr</button>` : ""}</div>`;
+    ob += getHtml(missing);
+    body += sec("optional", "Optional apps", "each one switches on its own checks", ob);
+    const NK = ["gotify", "discord", "telegram", "ntfy", "webhook", "pushover", "email"], nmiss = NK.filter(k => !SC[k]);
+    const nl = NK.filter(k => SC[k]).map(k => entryHtml(k, SC[k], null));
+    body += sec("notify", "Notifications", "the nightly summary goes to every one you add",
+      (nl.length ? `<div class="appgrid">${nl.join("")}</div>` : `<p class="note">None added yet.</p>`) + (nmiss.length ? `<div class="acts">${nmiss.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}</div>` : ""));
+    const DG = SC.digest || "news", TD = SC.trash_days || 7, LG = SC._langs || [];
     const SCH = SC.schedule || (SC.schedule = { hour: 3, minute: 0, days: [0, 1, 2, 3, 4, 5, 6] });
-    h += `<h2>Automatic scan</h2><div class="app"><p class="help">When the scan runs by itself. Pick a quiet time (it reads every file's details from Plex and your apps). Scan now still works any time.</p>
-      <div class="fl"><label>Time (empty = no automatic scan)<input type="time" id="schTime" value="${SCH.hour < 0 ? "" : String(SCH.hour).padStart(2, "0") + ":" + String(SCH.minute).padStart(2, "0")}"></label></div>
-      <div class="days" role="group" aria-label="Days">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => `<label class="day"><input type="checkbox" data-day="${i}" ${SCH.days.includes(i) ? "checked" : ""}> ${d}</label>`).join("")}</div></div>`;
-    const LG = (SC._langs || []);
-    h += `<h2>Audio language</h2><div class="app"><p class="help">File Health flags a film or show that was made in this language but whose only audio is another one (usually a dubbed copy). Untagged audio and foreign-language originals are never flagged.</p>
-      <div class="fl"><label>Your language<select id="langSel"><option value="" ${SC.language === "" ? "selected" : ""}>Off (don't check)</option>${LG.map(l => `<option ${SC.language === l ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div></div>`;
-    h += `<h2>Backup</h2><div class="app"><p class="help">Download everything on this page as a file, to move Library Doctor to another server or keep a copy. Without keys, restoring keeps the keys already saved here (on a new server you type them in again). With keys, the file is encrypted with a passphrase you choose; don't lose it. The login password is never in the file.</p>
+    body += sec("general", "General", "", `<div class="app gen"><div class="genf">
+      <label>Automatic scan time<input type="time" id="schTime" value="${SCH.hour < 0 ? "" : String(SCH.hour).padStart(2, "0") + ":" + String(SCH.minute).padStart(2, "0")}"><small>Empty = no automatic scan. Pick a quiet time.</small></label>
+      <label>Messages<select id="dgSel"><option value="news" ${DG === "news" ? "selected" : ""}>When there's news</option><option value="weekly" ${DG === "weekly" ? "selected" : ""}>Weekly (Sunday) + urgent</option><option value="both" ${DG === "both" ? "selected" : ""}>Both</option></select><small>Goes to every notification above.</small></label>
+      <label>Keep files in the trash for<select id="tdSel">${[3, 7, 14, 30].map(n => `<option value="${n}" ${TD === n ? "selected" : ""}>${n} days</option>`).join("")}</select><small>Then deleted for good (warning the day before).</small></label>
+      <label>Your audio language<select id="langSel"><option value="" ${SC.language === "" ? "selected" : ""}>Off (don't check)</option>${LG.map(l => `<option ${SC.language === l ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small>Flags dubbed copies of films made in this language.</small></label></div>
+      <div class="days" role="group" aria-label="Scan days"><span class="note">Scan on</span>${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => `<label class="day"><input type="checkbox" data-day="${i}" ${SCH.days.includes(i) ? "checked" : ""}> ${d}</label>`).join("")}</div></div>`);
+    body += sec("backup", "Backup", "", `<div class="app"><p class="help">Download everything on this page as a file, to move Library Doctor to another server or keep a copy. Without keys, restoring keeps the keys already saved here (on a new server you type them in again). With keys, the file is encrypted with a passphrase you choose; don't lose it. The login password is never in the file.</p>
       <div class="fl"><label>Passphrase (10+ characters, for a file with keys)<input type="password" id="bkPass" autocomplete="new-password"></label></div>
-      <div class="acts"><a class="b-line" href="/api/settings/export" download id="bkExport">Download without API keys</a><button class="b-line" id="bkEnc">Download with API keys (encrypted)</button><label class="b-line" style="cursor:pointer">Restore from a file<input type="file" id="bkImport" accept=".json,application/json" hidden></label></div>${SC._imp ? `<div class="tres2 ${SC._imp.ok ? "ok" : "bad"}">${esc(SC._imp.msg)}</div>` : ""}</div>`;
-    h += pwHtml();
-    h += `<div class="savebar"><button class="b-teal" id="setSave" ${SCbusy ? "disabled" : ""}>${SCbusy ? "Saving…" : "Save settings"}</button><button class="b-line" id="setUndo">Undo changes</button>${SCmsg ? `<div class="tres2 ${SCmsg.ok ? "ok" : "bad"}">${esc(SCmsg.msg)}</div>` : ""}</div>`;
-    el.innerHTML = h; settingsWire();
+      <div class="acts"><a class="b-line" href="/api/settings/export" download id="bkExport">Download without API keys</a><button class="b-line" id="bkEnc">Download with API keys (encrypted)</button><label class="b-line" style="cursor:pointer">Restore from a file<input type="file" id="bkImport" accept=".json,application/json" hidden></label></div>${SC._imp ? `<div class="tres2 ${SC._imp.ok ? "ok" : "bad"}">${esc(SC._imp.msg)}</div>` : ""}</div>`);
+    const pw = pwHtml(); if (pw) body += sec("login", "Login", "", pw);
+    body += `<div class="savebar"><button class="b-teal" id="setSave" ${SCbusy ? "disabled" : ""}>${SCbusy ? "Saving…" : "Save settings"}</button><button class="b-line" id="setUndo">Undo changes</button><span class="dirty" id="setDirty"></span>${SCmsg ? `<div class="tres2 ${SCmsg.ok ? "ok" : "bad"}">${esc(SCmsg.msg)}</div>` : ""}</div>`;
+    const NAV = [["folders", "Folder check", fcBadge()], ["apps", "Plex & arrs", stBadge(["plex"].concat(SC.arrs.map((_, i) => "arrs:" + i)))], ["optional", "Optional apps", stBadge(SC.bazarr.map((_, i) => "bazarr:" + i).concat(OK.filter(k => SC[k])))],
+      ["notify", "Notifications", nl.length ? `<i class="nb">${nl.length}</i>` : ""], ["general", "General", ""], ["backup", "Backup", ""]].concat(pw ? [["login", "Login", ""]] : []);
+    el.innerHTML = top + `<div class="setl"><nav class="setnav" aria-label="Settings sections">${NAV.map(([id, t, b]) => `<button data-go="${id}" class="${SECON === id ? "on" : ""}">${t}${b}</button>`).join("")}</nav><div class="setc">${body}</div></div>`;
+    if (SC0 == null) SC0 = scSnap();
+    settingsWire(); updDirty(); navWatch();
+    if (window.scrollY !== keepY) window.scrollTo(0, keepY);
   }
   function entryOf(node) { const a = node.closest(".app"), k = a.dataset.kind, i = a.dataset.i; return [k, i == null ? null : +i, i == null ? SC[k] : SC[k][+i]]; }
   function settingsWire() {
     const el = $("setView"), on = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
-    el.querySelectorAll("[data-f]").forEach(n => n.oninput = n.onchange = () => { const [k, i, e] = entryOf(n); e[n.dataset.f] = n.value; if (n.dataset.f === "name" || n.dataset.f === "kind") { const h = n.closest(".app").querySelector("h3"); if (h && n.dataset.f === "name") h.firstChild.nodeValue = n.value || h.firstChild.nodeValue; } });
-    el.querySelectorAll("[data-p]").forEach(n => n.oninput = () => { const [, , e] = entryOf(n); e.paths[+n.dataset.p][n.dataset.pf] = n.value; });
+    el.querySelectorAll("[data-f]").forEach(n => n.oninput = n.onchange = () => { const [k, i, e] = entryOf(n); e[n.dataset.f] = n.value; if (n.dataset.f === "name" || n.dataset.f === "kind") { const h = n.closest(".app").querySelector("h3"); const nm = h && h.querySelector(".nm"); if (nm && n.dataset.f === "name" && n.value) nm.textContent = n.value; } updDirty(); });
+    el.querySelectorAll("[data-p]").forEach(n => n.oninput = () => { const [, , e] = entryOf(n); e.paths[+n.dataset.p][n.dataset.pf] = n.value; updDirty(); });
     el.querySelectorAll("[data-prm]").forEach(n => n.onclick = () => { const [, , e] = entryOf(n); e.paths.splice(+n.dataset.prm, 1); settingsDraw(); });
     el.querySelectorAll("[data-padd]").forEach(n => n.onclick = () => { const [, , e] = entryOf(n); (e.paths = e.paths || []).push({ from: "", to: SC._root }); settingsDraw(); });
     el.querySelectorAll("[data-rm]").forEach(n => n.onclick = () => { const [k, i] = entryOf(n); if (i == null) delete SC[k]; else SC[k].splice(i, 1); Object.keys(TR).forEach(x => delete TR[x]); settingsDraw(); });
+    el.querySelectorAll("[data-edit]").forEach(n => n.onclick = () => { const [, , e] = entryOf(n); OPEN.add(e); settingsDraw(); });
+    el.querySelectorAll("[data-close]").forEach(n => n.onclick = () => { const [k, i, e] = entryOf(n); OPEN.delete(e); const t = TR[k + (i == null ? "" : ":" + i)]; if (t && !t.ok) delete TR[k + (i == null ? "" : ":" + i)]; settingsDraw(); });
+    el.querySelectorAll("[data-go]").forEach(n => n.onclick = () => { SECON = n.dataset.go; el.querySelectorAll(".setnav button").forEach(b => b.classList.toggle("on", b === n)); const t = $("sec-" + n.dataset.go);
+      if (t) t.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" }); });
+    on("testAll", testAll);
     el.querySelectorAll("[data-getcopy]").forEach(b => b.onclick = async () => { const t = ($("get-" + b.dataset.getcopy) || {}).textContent || "";
       try { await navigator.clipboard.writeText(t); b.textContent = "Copied"; }
       catch (e) { const r = document.createRange(); r.selectNodeContents($("get-" + b.dataset.getcopy)); const sl = getSelection(); sl.removeAllRanges(); sl.addRange(r); b.textContent = "Selected: press Ctrl/Cmd+C"; }
@@ -1451,7 +1539,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     el.querySelectorAll("[data-add]").forEach(n => n.onclick = () => { const [k, sub] = n.dataset.add.split(":");
       if (k === "arrs") SC.arrs.push({ name: sub === "sonarr" ? (SC.arrs.some(a => a.name === "Sonarr") ? "Sonarr 2" : "Sonarr") : (SC.arrs.some(a => a.name === "Radarr") ? "Radarr 2" : "Radarr"), kind: sub, url: "", paths: [] });
       else if (k === "bazarr") SC.bazarr.push({ name: SC.bazarr.length ? "Bazarr " + (SC.bazarr.length + 1) : "Bazarr", url: "", paths: [] });
-      else SC[k] = { url: APPS[k].fixedUrl || "", paths: [], ...(APPS[k].tls ? { tls: "starttls" } : {}) }; settingsDraw(); });
+      else SC[k] = { url: APPS[k].fixedUrl || "", paths: [], ...(APPS[k].tls ? { tls: "starttls" } : {}) }; const ne = k === "arrs" ? SC.arrs[SC.arrs.length - 1] : k === "bazarr" ? SC.bazarr[SC.bazarr.length - 1] : SC[k]; if (ne) OPEN.add(ne); settingsDraw(); });
     el.querySelectorAll("[data-test],[data-det]").forEach(n => n.onclick = async () => { const [k, i, e] = entryOf(n), det = !!n.dataset.det, key = k + (i == null ? "" : ":" + i);
       n.disabled = true; n.textContent = det ? "Looking…" : "Testing…";
       const r = await api(det ? "/api/settings/detect" : "/api/settings/test", { kind: k, cfg: e });
@@ -1460,8 +1548,8 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     on("pwGo", async () => { const o = $("pwOld").value, a = $("pwNew").value, b = $("pwNew2").value;
       if (a !== b) { PWmsg = { ok: false, msg: "The new passwords don't match." }; return settingsDraw(); }
       const r = await api("/api/auth/change", { old: o, new: a }); PWmsg = { ok: r.ok, msg: r.ok ? "Password changed. Other browsers are logged out." : r.msg }; settingsDraw(); });
-    const lg = $("langSel"); if (lg) lg.onchange = () => { SC.language = lg.value; };
-    const dg = $("dgSel"); if (dg) dg.onchange = () => { SC.digest = dg.value; };
+    const lg = $("langSel"); if (lg) lg.onchange = () => { SC.language = lg.value; updDirty(); };
+    const dg = $("dgSel"); if (dg) dg.onchange = () => { SC.digest = dg.value; updDirty(); };
     const be = $("bkEnc"); if (be) be.onclick = async () => { const pass = ($("bkPass") || {}).value || "";
       if (pass.length < 10) { SC._imp = { ok: false, msg: "Type a passphrase of at least 10 characters first." }; settingsDraw(); return; }
       be.disabled = true; be.textContent = "Encrypting…";
@@ -1476,14 +1564,14 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       const r = await api("/api/settings/import", { data, passphrase: ($("bkPass") || {}).value || "" }); bi.value = "";
       if (r.ok) { SC = null; await settingsOpen(); SC._imp = { ok: true, msg: "Settings restored from the file. Library Doctor is using them now." }; settingsDraw(); load(); folderCheck(true); }
       else { SC._imp = { ok: false, msg: r.msg || "Couldn't restore that file." }; settingsDraw(); } };
-    const td = $("tdSel"); if (td) td.onchange = () => { SC.trash_days = +td.value; };
+    const td = $("tdSel"); if (td) td.onchange = () => { SC.trash_days = +td.value; updDirty(); };
     on("fcRun", () => folderCheck(true));
     el.querySelectorAll("[data-fcuse]").forEach(b => b.onclick = () => { const r = (FC.rows || [])[+b.dataset.fcuse]; if (!r) return;
       const ent = r.i == null ? SC[r.kind] : (SC[r.kind] || [])[r.i]; if (!ent) return;
       ent.paths = (r.suggest || []).map(x => ({ from: x.from, to: x.to })); r.applied = true;
       SCmsg = { ok: true, msg: "Mapping filled in for " + r.app + ". Press Save settings to use it; the folder check runs again after saving." }; settingsDraw(); });
-    const st = $("schTime"); if (st) st.onchange = () => { if (!st.value) { SC.schedule.hour = -1; SC.schedule.minute = 0; return; } const [hh, mm] = st.value.split(":").map(Number); if (!isNaN(hh)) { SC.schedule.hour = hh; SC.schedule.minute = mm || 0; } };
-    el.querySelectorAll("[data-day]").forEach(n => n.onchange = () => { const d = +n.dataset.day, a = SC.schedule.days; if (n.checked) { if (!a.includes(d)) a.push(d); } else SC.schedule.days = a.filter(x => x !== d); SC.schedule.days.sort(); });
+    const st = $("schTime"); if (st) st.onchange = () => { if (!st.value) { SC.schedule.hour = -1; SC.schedule.minute = 0; updDirty(); return; } const [hh, mm] = st.value.split(":").map(Number); if (!isNaN(hh)) { SC.schedule.hour = hh; SC.schedule.minute = mm || 0; } updDirty(); };
+    el.querySelectorAll("[data-day]").forEach(n => n.onchange = () => { const d = +n.dataset.day, a = SC.schedule.days; if (n.checked) { if (!a.includes(d)) a.push(d); } else SC.schedule.days = a.filter(x => x !== d); SC.schedule.days.sort(); updDirty(); });
     on("setUndo", () => { SC = null; SCmsg = null; Object.keys(TR).forEach(x => delete TR[x]); settingsOpen(); });
     on("setSave", async () => { SCbusy = true; SCmsg = null; settingsDraw();
       const body = {}; for (const k of ["plex", "tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify", "discord", "telegram", "ntfy", "webhook", "pushover", "email", "arrs", "bazarr", "schedule"]) if (SC[k]) body[k] = SC[k];
