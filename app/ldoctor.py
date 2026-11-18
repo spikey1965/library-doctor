@@ -32,7 +32,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.13"
+APP_VERSION = "0.1.14"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -385,6 +385,58 @@ def plex_link(rating_key):
     return {"label": "Open in Plex", "url": "%s/desktop/#!/server/%s/details?key=%s" % (
         p.get("public", "https://app.plex.tv").rstrip("/"), p["machine"], urllib.parse.quote("/library/metadata/%s" % rating_key, safe=""))}
 
+_RK_RE = re.compile(r"key=%2Flibrary%2Fmetadata%2F(\d+)")
+def live_plex_links(links, kind, row_id):
+    """v0.1.13: Plex gives an item a new ID when it merges or re-adds it (after a restore, a clean-up, a replace).
+    'Open in Plex' goes through /api/plex-open, which checks the saved ID and finds the item by its file if it moved."""
+    out = []
+    for l in links or []:
+        m = _RK_RE.search(l.get("url", "")) if l.get("label") == "Open in Plex" else None
+        out.append(dict(l, url="/api/plex-open?" + urllib.parse.urlencode({"rk": m.group(1), kind: row_id})) if m else l)
+    return out
+
+def _video_paths(v, out):
+    if isinstance(v, str):
+        if v.lower().endswith(VIDEO_EXT) and v.startswith(MEDIA_ROOT): out.append(v)
+    elif isinstance(v, dict):
+        for x in v.values(): _video_paths(x, out)
+    elif isinstance(v, list):
+        for x in v: _video_paths(x, out)
+    return out
+
+def plex_open(rk, issue_id=None, done_id=None):
+    """URL to open: the saved Plex item if it still exists, else the item that now holds one of the files, else None."""
+    try:
+        plex("/library/metadata/%s" % int(rk)); return plex_link(rk)["url"]
+    except urllib.error.HTTPError as e:
+        if e.code != 404: return plex_link(rk)["url"]
+    except Exception:
+        return plex_link(rk)["url"]
+    paths = []
+    with db() as c:
+        if issue_id:
+            r = c.execute("SELECT detail FROM issues WHERE id=?", (issue_id,)).fetchone()
+            if r: _video_paths(json.loads(r["detail"] or "{}"), paths)
+        if done_id:
+            r = c.execute("SELECT kept, moved FROM done WHERE id=?", (done_id,)).fetchone()
+            if r: paths += [r["kept"]] if r["kept"] else []; _video_paths(json.loads(r["moved"] or "[]"), paths)
+    hit = plex_find_by_files(paths)
+    if not hit: return None
+    log("plex-open: item %s is now %s" % (rk, hit["ratingKey"]))
+    return plex_link(hit["ratingKey"])["url"]
+
+def plex_find_by_files(paths):
+    """The Plex film or episode that now holds one of these files (after Plex merged or re-added it), or None."""
+    paths = [x for x in dict.fromkeys(paths or []) if isinstance(x, str) and os.path.exists(x)]
+    if not paths: return None
+    for sec in plex("/library/sections").get("Directory", []):
+        locs = [l["path"].rstrip("/") + "/" for l in sec.get("Location", [])]
+        if not any(x.startswith(tuple(locs)) for x in paths): continue
+        for m in plex("/library/sections/%s/all" % sec["key"], type=1 if sec.get("type") == "movie" else 4).get("Metadata", []):
+            for md in m.get("Media", []):
+                if any(pt.get("file") in paths for pt in md.get("Part", [])): return m
+    return None
+
 def human(n):
     n = float(n or 0)
     for u in ("B", "KB", "MB", "GB", "TB"):
@@ -617,6 +669,33 @@ def arr(a, path, data=None, method=None):
 
 def arr_by_name(name):
     return next((a for a in S.get("arrs", []) if a["name"] == name), None)
+
+_GRAB_CACHE = {}
+def arr_cannot_grab(a):
+    """Why this Radarr/Sonarr can't fetch anything (no enabled download client / no indexer for searches), or None.
+    Cached 5 minutes. If the check itself fails we say nothing, so a slow arr never blocks a fix."""
+    if not a: return None
+    hit = _GRAB_CACHE.get(a["name"])
+    if hit and time.time() - hit[0] < 300: return hit[1]
+    why = None
+    try:
+        dc = [x for x in arr(a, "/downloadclient") if x.get("enable")]
+        ix = [x for x in arr(a, "/indexer") if x.get("enableAutomaticSearch")]
+        missing = ([] if dc else ["download client"]) + ([] if ix else ["indexer with searches turned on"])
+        if missing: why = "it has no %s" % " and no ".join(missing)
+    except Exception as e:
+        log("grab check %s failed: %r" % (a.get("name"), e)); return None
+    _GRAB_CACHE[a["name"]] = (time.time(), why)
+    return why
+
+def cant_grab_msg(a, why, moved=False):
+    where = "%s \u2192 Settings \u2192 %s" % (a["name"], "Download Clients" if "download client" in why and "indexer" not in why else "Download Clients / Indexers")
+    return ("%s can't fetch a new copy: %s. %sAdd %s in %s, then try again." %
+            (a["name"], why, "" if moved else "Nothing was moved. ", "them" if " and no " in why else "one", where))
+
+def dl_when():
+    """How a found release arrives: 'in your download window' only when LD_DOWNLOAD_WINDOW_END is set."""
+    return "in your download window" if NIGHT_END_HOUR is not None else "as soon as your download client gets it"
 
 def load_arrs():
     movies, series, arr_files = {}, {}, []
@@ -1469,7 +1548,8 @@ def movie_meta(m, lib, sec, std, owners, movies, by_path):
     title, links = "%s (%s)" % (m.get("title"), m.get("year", "?")), [plex_link(m["ratingKey"])]
     if std and not m.get("guid", "").startswith("plex://"):
         return [_meta("unmatched", lib, rk, title, "att", "Plex couldn't match this to a film, so it has no proper info or artwork.",
-                      "Refresh tries the match again. If that doesn't work, use Fix Match on the film's page in Plex.", ["refresh"], links, section=sec)]
+                      "Refresh tries the match again. If that doesn't work, use Fix Match on the film's page in Plex.", ["refresh"], links, section=sec,
+                      paths=[pt["file"] for md in m.get("Media", []) for pt in md.get("Part", []) if pt.get("file")][:5])]
     out = []
     if not m.get("thumb"):
         out.append(_meta("noposter", lib, rk, title, "att", "No poster in Plex.", "A refresh usually fetches one.", ["refresh"], links, section=sec))
@@ -1499,7 +1579,8 @@ def show_meta(sh, eps, lib, sec, std, owners, series, sonarr_paths, sonarr_title
     title, links = sh.get("title") or "?", [plex_link(sh["ratingKey"])]
     if std and not sh.get("guid", "").startswith("plex://"):
         return [_meta("unmatched", lib, rk, title, "att", "Plex couldn't match this to a show, so it has no proper info or artwork.",
-                      "Refresh tries the match again. If that doesn't work, use Fix Match on the show's page in Plex.", ["refresh"], links, section=sec)]
+                      "Refresh tries the match again. If that doesn't work, use Fix Match on the show's page in Plex.", ["refresh"], links, section=sec,
+                      paths=[pt["file"] for e in (eps or [])[:3] for md in e.get("Media", []) for pt in md.get("Part", []) if pt.get("file")][:5])]
     out = []
     if not sh.get("thumb"):
         out.append(_meta("noposter", lib, rk, title, "att", "No poster in Plex.", "A refresh usually fetches one.", ["refresh"], links, section=sec))
@@ -1586,6 +1667,18 @@ def meta_fix(issue_id, how):
 def _meta_fix(done_id, issue_id, title, d, how):
     status, note, left = "warn", "", None
     try:
+        if not _plex_item(d["rk"]):                   # v0.1.13: Plex merged or re-added the item under a new ID
+            hit = plex_find_by_files(d.get("paths"))
+            if not hit:
+                raise RuntimeError("Plex no longer has this item (it may have merged it with another copy). Scan again to bring the list up to date.")
+            new = str(hit.get("grandparentRatingKey") or hit["ratingKey"]) if hit.get("type") == "episode" else str(hit["ratingKey"])
+            log("metafix %s: Plex item %s is now %s" % (issue_id, d["rk"], new))
+            d = dict(d, rk=new)
+            with db() as c:
+                r = c.execute("SELECT links FROM issues WHERE id=?", (issue_id,)).fetchone()
+                links = [plex_link(new)] + [l for l in json.loads((r["links"] if r else None) or "[]") if l.get("label") != "Open in Plex"]
+                c.execute("UPDATE issues SET detail=?, links=? WHERE id=?", (json.dumps(d), json.dumps(links), issue_id))
+                c.execute("UPDATE done SET links=? WHERE id=?", (json.dumps(links), done_id))
         if how == "titles":
             n = 0
             for e in d["eps"]:
@@ -1601,6 +1694,9 @@ def _meta_fix(done_id, issue_id, title, d, how):
                     plex_put("/library/metadata/%s/poster?%s" % (x["rk"], urllib.parse.urlencode({"url": ps[0]["ratingKey"]}))); n += 1
             event("metadata", "%s: picked posters for %d season%s." % (title, n, "" if n == 1 else "s"))
             tries = 3
+        elif d["kind"] == "unmatched" and _meta_left(d)[0]:
+            status, note = "ok", _meta_left(d)[1]     # Plex matched it by itself in the meantime
+            tries = 0
         else:
             plex_put("/library/metadata/%s/refresh" % d["rk"])
             event("metadata", "%s: asked Plex to refresh its info." % title)
@@ -1609,6 +1705,8 @@ def _meta_fix(done_id, issue_id, title, d, how):
             time.sleep(5)
             ok, note, left = _meta_left(d)
             if ok: status = "ok"; break
+    except RuntimeError as e:
+        note = str(e)
     except Exception as e:
         note = "Couldn't finish: %s" % e
     with db() as c:
@@ -1718,6 +1816,8 @@ def health_fix(issue_id):
         if not row: return {"ok": False, "error": "That file isn't in the last scan any more. Scan again first."}
         d = json.loads(row["detail"]); src, ref = d["path"], d.get("ref")
         if not ref: return {"ok": False, "error": "Radarr/Sonarr doesn't manage this one, so there's nothing to fetch a new copy."}
+        a_chk = arr_by_name(ref.get("arr")); why = arr_cannot_grab(a_chk)
+        if why: return {"ok": False, "error": cant_grab_msg(a_chk, why)}
         if d.get("kind") == "lang": return lang_fix(issue_id, row, d)
         if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where it was, so nothing was moved. Scan again."}
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1761,7 +1861,7 @@ def _health_search(done_id, ref):
         else:
             arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": [int(ref["id"])]}, "POST")
         status = "waiting"
-        note = "%s is searching for a new copy. It downloads in the night window and shows up in Plex by itself." % a["name"] if not has else \
+        note = "%s is searching for a new copy. If it finds one, it downloads %s and shows up in Plex by itself." % (a["name"], dl_when()) if not has else \
                "Asked %s to search, but it still thinks it has the old file. Its next disk scan will catch up." % a["name"]
     except Exception as e:
         note = "Moved to the trash, but couldn't ask %s to search: %s" % (ref.get("arr"), e)
@@ -1885,7 +1985,7 @@ def gaps_scan(series):
                 parts.append("Season %d: %s" % (sn, ("all %d episodes" % len(nums)) if full else ("episode " if len(nums) == 1 else "episodes ") + _ranges(nums)))
                 total += len(nums)
             cid = iid("gaps", a["name"], sid)
-            note = "Sonarr has them on its wanted list but never found a copy. Search for these asks it to look again now (whole seasons as season packs); anything it finds downloads in the night window."
+            note = "Sonarr has them on its wanted list but never found a copy. Search for these asks it to look again now (whole seasons as season packs); anything it finds downloads " + dl_when() + "."
             if searched.get(cid): note += " Last searched from here %s." % searched[cid][:10]
             out.append(dict(id=cid, chk="missing", sev="att", title=sr.get("title") or v["series"].get("title") or "Show %d" % sid, library=a["name"],
                             detail={"kind": "gaps", "text": "%d episode%s never downloaded. %s." % (total, "" if total == 1 else "s", " · ".join(parts)),
@@ -1900,6 +2000,8 @@ def gaps_fix(issue_id):
     d = json.loads(row["detail"])
     if d.get("kind") != "gaps": return {"ok": False, "error": "Nothing to search here."}
     a = arr_by_name(d["ref"]["arr"]); sid = int(d["ref"]["series"]); n = 0
+    why = arr_cannot_grab(a)
+    if why: return {"ok": False, "error": cant_grab_msg(a, why, moved=True).replace("a new copy", "the missing episodes")}
     try:
         eps = []
         for x in d.get("seasons") or []:
@@ -1910,7 +2012,7 @@ def gaps_fix(issue_id):
         return {"ok": False, "error": "Couldn't ask %s to search (%s)." % (a["name"], getattr(e, "reason", e))}
     sk = kv_get("gaps_searched") or {}; sk[issue_id] = now_iso(); kv_set("gaps_searched", sk)
     event("missing", "%s: asked %s to search for the %d missing episode%s." % (row["title"], a["name"], d.get("count") or 0, "" if d.get("count") == 1 else "s"))
-    return {"ok": True, "text": "%s is searching for the %d missing episode%s of %s. Anything it finds downloads in the night window; the card goes when they've arrived." % (
+    return {"ok": True, "text": ("%s is searching for the %d missing episode%s of %s. Anything it finds downloads " + dl_when() + "; the card goes when they've arrived.") % (
         a["name"], d.get("count") or 0, "" if d.get("count") == 1 else "s", row["title"])}
 
 # ---------------- audio language (v0.1.6) ----------------
@@ -2089,7 +2191,7 @@ def _lang_search(done_id, ref, moved):
         if ref["kind"] == "movie": arr(a, "/command", {"name": "MoviesSearch", "movieIds": [int(ref["id"])]}, "POST")
         else: arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": [int(i) for i in ref.get("ids") or []]}, "POST")
         status = "waiting"
-        note = "%s is searching for another copy%s. It downloads in the night window and shows up in Plex by itself." % (
+        note = ("%s is searching for another copy%s. If it finds one, it downloads " + dl_when() + " and shows up in Plex by itself.") % (
             a["name"], " (the old release is blocked)" if blocked else "")
     except Exception as e:
         note = "Moved to the trash, but couldn't ask %s to search: %s" % (ref.get("arr"), e)
@@ -3408,6 +3510,8 @@ def smaller_search(issue_id):
     if "smaller" not in d.get("fixes", []) or ref.get("kind") != "movie": return {"ok": False, "error": "That fix doesn't apply here."}
     a = arr_by_name(ref["arr"])
     if not a: return {"ok": False, "error": "Unknown Radarr."}
+    why = arr_cannot_grab(a)
+    if why: return {"ok": False, "error": cant_grab_msg(a, why, moved=True).replace("a new copy", "a smaller copy")}
     try:
         m = arr(a, "/movie/%d" % int(ref["id"]))
         mf = m.get("movieFile") or {}
@@ -3454,7 +3558,7 @@ def smaller_grab(issue_id, key):
         return {"ok": False, "error": "%s couldn't grab it: %s" % (a["name"], e)}
     ref = {"kind": "smaller", "arr": a["name"], "id": cache["movie"], "old_path": cache["path"], "old_size": cache["cur"],
            "new_title": r.get("title"), "new_size": r.get("size"), "manual_tried": False}
-    note = "%s is downloading %s (%s, saves %s). It downloads in the night window; the old copy stays until the new one is in." % (
+    note = ("%s is downloading %s (%s, saves %s). It arrives " + dl_when() + "; the old copy stays until the new one is in.") % (
         a["name"], r.get("title"), human(r.get("size")), human(cache["cur"] - (r.get("size") or 0)))
     with db() as c:
         c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk, ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -3517,7 +3621,7 @@ def smaller_followup():
                 elif age > FOLLOW_DAYS:
                     st, note = "warn", "No smaller copy arrived after %d days. The release may have failed: try Find a smaller copy again and pick another." % FOLLOW_DAYS
                 else:
-                    note = "Waiting for %s to start the download (night window). Checked %s." % (a["name"], datetime.now().strftime("%a %H:%M"))
+                    note = ("Waiting for %s to start the download" + (" (download window)" if NIGHT_END_HOUR is not None else "") + ". Checked %s.") % (a["name"], datetime.now().strftime("%a %H:%M"))
             if note:
                 with db() as c: c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (st, note, now_iso(), r["id"]))
         except Exception as e:
@@ -4291,7 +4395,7 @@ def queue_cards():
                 why, rean = dl_reason(items[0], qop or None)
                 if why: items[0]["why"] = why
                 text = why + (" " if why else "") + ((("Still at 0%% after %s, so probably nobody is sharing it. " % ("a night's download window" if NIGHT_END_HOUR is not None else "a whole day")) if items[0]["left"] >= items[0]["size"] and not why else "") + (items[0]["msg"] or ""))
-                note = "Remove & try another removes it, blocklists that release and searches for a different one (it downloads in the night window)."
+                note = "Remove & try another removes it, blocklists that release and searches for a different one (it downloads " + dl_when() + ")."
                 fixes = ["retry"]
                 if rean and all(x.get("protocol") == "torrent" for x in items) and ((S.get("qbit") or {}).get("url") or (S.get("transmission") or {}).get("url")):
                     fixes = ["reannounce", "retry"]
@@ -4583,7 +4687,7 @@ def queue_fix(issue_id, how, only=None):
     n = len(d["items"])
     verb = {"import": "Imported", "retry": "Removed and searching again for", "remove": "Moved to the trash:"}[how]
     note = "%s %d of %d%s." % (verb, okn, n, (". Not done: " + "; ".join(probs)) if probs else "")
-    if how == "retry" and okn: note += " Anything it finds downloads in the night window."
+    if how == "retry" and okn: note += " Anything it finds downloads " + dl_when() + "."
     st = "ok" if okn == n else "warn"
     with db() as c:
         c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -5395,14 +5499,14 @@ def state():
         done = [dict(r) for r in c.execute("SELECT * FROM done WHERE cleared=0 ORDER BY id DESC LIMIT 100")]
         open_trash = {r["id"] for r in c.execute("SELECT id FROM trash WHERE restored_at IS NULL AND purged_at IS NULL")}
     for x in done:
-        x["moved"] = json.loads(x["moved"] or "[]"); x["links"] = json.loads(x["links"] or "[]")
+        x["moved"] = json.loads(x["moved"] or "[]"); x["links"] = live_plex_links(json.loads(x["links"] or "[]"), "d", x["id"])
         x["trash_ids"] = [t for t in json.loads(x["trash_ids"] or "[]") if t in open_trash]
         try: rf = json.loads(x.get("ref") or "null")
         except Exception: rf = None
         x["tdarr"] = [{"name": os.path.basename(os.path.dirname(it["path"])), "state": it.get("state", "queued"), "pct": it.get("pct"),
                        "size": it["size"], "after": it.get("after")} for it in rf["items"]] if isinstance(rf, dict) and rf.get("kind") == "tdarr" else None
     for r in rows:
-        r["detail"] = json.loads(r["detail"]); r["links"] = json.loads(r["links"]); r["ignored"] = r["id"] in ign
+        r["detail"] = json.loads(r["detail"]); r["links"] = live_plex_links(json.loads(r["links"]), "i", r["id"]); r["ignored"] = r["id"] in ign
         if r["id"] in snz: r["snoozed"] = snz[r["id"]]
     held = kv_get("trash_held") or {}
     for t in trash:
@@ -5488,6 +5592,16 @@ class H(BaseHTTPRequestHandler):
             with open(os.path.join(APP_DIR, "index.html"), "rb") as f:
                 return self.send(200, f.read(), "text/html; charset=utf-8")
         if path == "/api/state": return self.send(200, state())
+        if path == "/api/plex-open":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            rk = (q.get("rk") or [""])[0]
+            if not rk.isdigit(): return self.send(400, {"error": "Bad link."})
+            try: to = plex_open(rk, (q.get("i") or [None])[0], int((q.get("d") or ["0"])[0]) if (q.get("d") or ["0"])[0].isdigit() else None)
+            except Exception as e: log("plex-open failed: %r" % e); to = plex_link(rk)["url"]
+            if to: return self._redirect(to)
+            return self.send(404, b"<!doctype html><meta charset=utf-8><title>Library Doctor</title><body style='font:16px system-ui;padding:24px'>"
+                             b"<p>Plex doesn't have this item any more, and none of its files are in a Plex library now.</p>"
+                             b"<p>Run <b>Scan now</b> in Library Doctor to bring the list up to date.</p>", "text/html; charset=utf-8")
         if path.startswith("/api/history"):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self.send(200, history(int((q.get("days") or ["30"])[0]) if (q.get("days") or ["30"])[0].isdigit() else 30))

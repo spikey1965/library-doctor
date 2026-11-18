@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.14 (beta)
+
+- **Replace checks Radarr/Sonarr can download first.** If the app has no download client, or no indexer with searches on, Library Doctor now says so and moves nothing, instead of putting the file in the trash and waiting for a copy that can never come. Search for missing episodes and Find a smaller copy check the same.
+- **No more "night window" unless you have one:** messages only mention a download window when `LD_DOWNLOAD_WINDOW_END` is set; otherwise they say a copy arrives as soon as your download client gets it.
+- **Open in Plex keeps working after Plex renumbers an item.** Plex gives a film or episode a new ID when it merges two entries or adds a file again (after a restore, a clean-up or a replace), which broke the button until the next scan. It now finds the item by its file and opens the right one.
+- **"Plex couldn't match this" cards follow the item too:** Refresh no longer fails with "HTTP Error 404" when Plex has merged the item in the meantime, and if Plex has already matched it, the card closes as fixed.
+- **Show button on password boxes:** when you create or change the Library Doctor password (and on the login page, Backup passphrase and app keys), press **Show** to see what you typed. On the create/change screens it shows both boxes at once, so you can check they match.
+
 ## 0.1.13 (beta)
 
 - **App logos in Settings:** each app row, card, "+ Add" button and the Folder check table now shows the app's logo next to its name.
