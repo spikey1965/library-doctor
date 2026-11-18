@@ -134,4 +134,6 @@ docker compose pull && docker compose up -d
 
 Library Doctor talks to Plex, Radarr, Sonarr, Bazarr, Tautulli, Tdarr, ClamAV, Gotify, Discord, Telegram and ntfy, and uses ffmpeg. It isn't connected to any of those projects.
 
+The app logos in Settings come from [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) (Apache-2.0). Each logo is a trademark of its owner.
+
 Made by [My Media Build](https://mymediabuild.uk). MIT licence.

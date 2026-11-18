@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.13 (beta)
+
+- **App logos in Settings:** each app row, card, "+ Add" button and the Folder check table now shows the app's logo next to its name.
+- **Settings tests your apps when it opens,** so every status dot means something straight away. Notifications are never tested automatically, so nobody gets test messages.
+- **Unsaved changes show on the Settings tab:** an orange dot while there's something not saved yet, so you can see it from the other tabs.
+- A row whose test passed now shows the app's own reply (for example "Connected to Tautulli v2.19.1").
+- **Fixed:** an app that connects but whose folders don't line up stayed green after Test all. It now stays orange ("Connected, folders don't line up").
+
 ## 0.1.12 (beta)
 
 - **A new Settings page that uses the whole screen.** A menu on the left (a row of tabs on a phone) jumps to each part: Folder check, Plex & arrs, Optional apps, Notifications, General, Backup and Login. The menu shows how many apps each part has, and an orange count when something needs a look.

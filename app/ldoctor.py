@@ -13,6 +13,7 @@ Checks:
   * quality & space - (v18) space hogs (GB an hour far above the usual for that library + resolution), .ts/.avi etc.
                       ("Convert to MKV" = lossless ffmpeg remux, old file to the trash), episodes far below their season.
   * unwatched       - (v18) Tautulli: not played in a year (or since history began), biggest first; never deletes.
+  * Sportarr        - (v18) duplicates prefer the file Sportarr tracks; Sportarr files gone from disk; sports files it doesn't know.
   * virus scan      - (stage 3) programs/scripts/archives in the libraries, "videos" that are really programs or archives,
                       and ClamAV (clamd on 127.0.0.1:3310, /media -> /scandir) on every file changed since the last scan.
                       "Full scan now" runs clamd MULTISCAN over the whole library in the background.
@@ -31,7 +32,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.12"
+APP_VERSION = "0.1.13"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -58,10 +59,12 @@ def load_secrets():
     return {}                                                 # first run: setup mode until Plex + one arr are saved
 
 def normalize(cfg):
-    cfg.pop("sportarr", None)                                 # v0.1.11: Sportarr support removed
+    sp = cfg.get("sportarr")
+    if isinstance(sp, dict) and sp.get("container_root") and not sp.get("paths"):
+        sp["paths"] = [{"from": sp.pop("container_root"), "to": sp.pop("media_root", None) or MEDIA_ROOT}]
     # optional fields the rest of the code relies on: the browser address falls back to the app's own address
     if isinstance(cfg.get("plex"), dict): cfg["plex"]["public"] = cfg["plex"].get("public") or "https://app.plex.tv"
-    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("prowlarr", "Prowlarr"), ("gotify", "Gotify")):
+    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("prowlarr", "Prowlarr"), ("gotify", "Gotify")):
         e = cfg.get(k)
         if isinstance(e, dict): e["public"] = e.get("public") or e.get("url", ""); e.setdefault("name", name); e.setdefault("key", e.get("key", ""))
     for k in ("arrs", "bazarr"):
@@ -523,7 +526,7 @@ def recommend(vers, tracked=()):
                 if any(best["height"] > o["height"] for o in other): why.append("higher resolution")
                 if any(best["duration"] - o["duration"] > 60000 for o in other): why.append("longest (%s)" % mins(best["duration"]))
                 if good_box(best) and any(not good_box(o) for o in other): why.append("better file type (%s)" % os.path.splitext(best["path"])[1][1:].upper())
-                if best["tracked"]: why.append("the file Radarr/Sonarr tracks")
+                if best["tracked"]: why.append("the file Radarr/Sonarr/Sportarr tracks")
                 if not why: why.append("best quality of the copies")
             elif fallback:
                 why.append("the biggest copy, but every copy looks broken: check it plays")
@@ -543,7 +546,7 @@ def recommend(vers, tracked=()):
             elif good_box(best) and not good_box(v): r = "Same quality, but a .%s file (the %s is kept%s)" % (
                 os.path.splitext(v["path"])[1][1:].lower(), os.path.splitext(best["path"])[1][1:].upper(),
                 "; Sonarr/Radarr will switch to it on the rescan" if v["tracked"] else "")
-            elif best["tracked"] and not v["tracked"]: r = "Same quality; not the file Radarr/Sonarr tracks"
+            elif best["tracked"] and not v["tracked"]: r = "Same quality; not the file Radarr/Sonarr/Sportarr tracks"
             else: r = "Same quality as the one kept"
             if (v.get("links") or 1) > 1: r += ". It's hardlinked (probably still seeding), so removing it frees no space until the torrent is removed"
             v["action"], v["reason"] = "remove", r
@@ -682,6 +685,9 @@ def scan():
         STATE["step"] = "Reading Radarr and Sonarr"
         movies, series, arr_files = load_arrs()
         trashed = in_trash()
+        try: sport, sport_roots = sportarr_files()
+        except Exception as e:
+            log("sportarr failed: %r" % e); sport, sport_roots = {}, []
         ep_files = {}   # (arr name, series id) -> set of episode file paths Sonarr tracks (fetched only for duplicates)
         def sonarr_tracked(a, sid):
             k = (a["name"], sid)
@@ -711,7 +717,7 @@ def scan():
                         "%s S%02dE%02d" % (m.get("grandparentTitle"), int(m.get("parentIndex", 0) or 0), int(m.get("index", 0) or 0))
                 g = guids(m)
                 medias = m.get("Media", [])
-                links, refs, tracked = [plex_link(m["ratingKey"])], [], set()
+                links, refs, tracked = [plex_link(m["ratingKey"])], [], set(sport)
                 if kind == "movie":
                     for a, it in lib_movies.get(g.get("tmdb"), []):
                         links.append(arr_link(a, it, "movie")); refs.append({"arr": a["name"], "kind": "movie", "id": it["id"]})
@@ -849,6 +855,10 @@ def scan():
             issues += unwatched_scan(sections, sizes)
         except Exception as e:
             log("unwatched check failed: %r" % e)
+        try:
+            issues += sports_scan(sections, sport, sport_roots, trashed)
+        except Exception as e:
+            log("sportarr check failed: %r" % e)
         STATE.update(step="Checking Radarr files", progress=0.95)
         for a, m, path, size in arr_files:
             if not os.path.exists(path) and path not in trashed:
@@ -1382,7 +1392,7 @@ def purge_recycle(ids=None):
 
 # ---------------- metadata gaps (stage 2) ----------------
 GENERIC = re.compile(r"(?:episode|episodio|folge|\u00e9pisode)\s*#?\d+(?:\.\d+)?|tba|tbd|", re.I)
-STD_AGENTS = ("tv.plex.agents.movie", "tv.plex.agents.series")   # custom agents use their own ids
+STD_AGENTS = ("tv.plex.agents.movie", "tv.plex.agents.series")   # custom agents (Sportarr) use their own ids
 
 def is_generic(t): return bool(GENERIC.fullmatch((t or "").strip()))
 
@@ -2967,7 +2977,7 @@ def _probe(p):
         return float((j.get("format") or {}).get("duration") or 0), int(((j.get("streams") or [{}])[0]).get("height") or 0)
     except Exception: return 0.0, 0
 
-# ---------------- quality & space, unwatched (Tautulli) (v18) ----------------
+# ---------------- quality & space, unwatched (Tautulli), Sportarr (v18) ----------------
 TIER = {"sd": 0, "480": 0, "576": 1, "720": 2, "1080": 3, "2k": 3, "4k": 4}
 RES_LABEL = {"sd": "SD", "480": "480p", "576": "576p", "720": "720p", "1080": "1080p", "2k": "2K", "4k": "4K"}
 TIER_LABEL = {0: "SD", 1: "576p", 2: "720p", 3: "1080p", 4: "4K"}
@@ -3329,6 +3339,42 @@ def unwatched_scan(sections, sizes):
                                     human(total), "in the last year" if full_year else "since %s (when Tautulli started keeping history)" % since_txt, UNWATCHED_MIN_AGE),
                                 "note": "Nothing is ever deleted from here. Keep hides one for %s (or for good, from the Kept list). To free space, delete in Radarr/Sonarr so they don't download it again." % ("about 6 months" if KEEP_DAYS == 182 else "%d days" % KEEP_DAYS)},
                         links=[{"label": "Open Tautulli", "url": t.get("public", "")}] if t.get("public") else []))
+    return out
+
+def sportarr_files():
+    """{path as Library Doctor sees it: event} for every Sportarr event with a file, + Sportarr's root folders."""
+    sp = S.get("sportarr")
+    if not sp: return {}, []
+    fix = lambda p: to_local(p, sp)
+    hdr = {"X-Api-Key": sp["key"]}
+    files = {fix(e["filePath"]): e for e in http(sp["url"].rstrip("/") + "/api/events", hdr, timeout=90) if e.get("hasFile") and e.get("filePath")}
+    roots = [fix(r["path"].rstrip("/")) for r in http(sp["url"].rstrip("/") + "/api/rootfolder", hdr, timeout=30)]
+    return files, roots
+
+def sports_scan(sections, sport, roots, trashed):
+    sp = S.get("sportarr") or {}
+    out, link = [], ([{"label": "Open Sportarr", "url": sp["public"]}] if sp.get("public") else [])
+    for f, e in sport.items():
+        if not os.path.exists(f) and f not in trashed:
+            out.append(dict(id=iid("sportmissing", f), chk="missing", sev="bad", title="%s: %s" % (e.get("leagueName") or "Sport", e.get("title")), library="Sportarr",
+                            detail={"text": "Sportarr thinks it has this file, but it isn't on the disk.", "path": f,
+                                    "note": "Sportarr will look for it again if the event is monitored. A Plex scan drops it from Plex.", "size": human(e.get("fileSize"))},
+                            links=link))
+    for sec in sections:
+        locs = [l["path"].rstrip("/") for l in sec.get("Location", [])]
+        if not any(l == r or l.startswith(r + "/") or r.startswith(l + "/") for l in locs for r in roots): continue
+        for m in plex_paged("/library/sections/%s/all" % sec["key"], type=4 if sec["type"] == "show" else 1):
+            for md in m.get("Media", []):
+                for p in md.get("Part", []):
+                    f = p.get("file")
+                    if not f or f in sport or f in trashed or not os.path.exists(f): continue
+                    if not any(f.startswith(r + "/") for r in roots): continue
+                    title = "%s: %s" % (m.get("grandparentTitle") or sec["title"], m.get("title") or os.path.basename(f))
+                    out.append(dict(id=iid("meta", "notsportarr", sec["title"], f), chk="meta", sev="att", title=title, library=sec["title"],
+                                    detail={"kind": "notsportarr", "rk": m["ratingKey"], "path": f, "fixes": [], "section": sec["key"],
+                                            "text": "Sportarr doesn't know this file, so it shows as missing there and won't be upgraded or replaced.",
+                                            "note": "Import it in Sportarr (Wanted → Manual Import, pick this file), or Ignore if you keep it by hand."},
+                                    links=[plex_link(m["ratingKey"])] + link))
     return out
 
 # ---------------- smaller copy for space hogs (v19) ----------------
@@ -4724,7 +4770,7 @@ def session_end(tok, everyone=False):
 
 # ---------------- settings page ----------------
 SECRET_FIELDS = ("token", "key", "password")
-SINGLE = ("plex", "tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
+SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
 LISTS = ("arrs", "bazarr")
 
 def settings_public():
@@ -4794,6 +4840,9 @@ def settings_test(kind, e):
         if kind == "prowlarr":
             r = http(u + "/api/v1/system/status", {"X-Api-Key": e.get("key", "")}, timeout=15)
             return {"ok": True, "msg": "Connected to Prowlarr %s." % r.get("version", "")}
+        if kind == "sportarr":
+            http(u + "/api/rootfolder", {"X-Api-Key": e.get("key", "")}, timeout=15)
+            return {"ok": True, "msg": "Connected to Sportarr."}
         if kind == "qbit":
             op = _qbit(e)
             v = op.open(u.rstrip("/") + "/api/v2/app/version", timeout=15).read().decode().strip()
@@ -4857,6 +4906,9 @@ def _samples(kind, e):
     elif kind == "tdarr":
         req = urllib.request.Request(u + "/api/v2/cruddb", data=json.dumps({"data": {"collection": "LibrarySettingsJSONDB", "mode": "getAll"}}).encode(), headers={"Content-Type": "application/json", "x-api-key": e.get("key", "")})
         with urllib.request.urlopen(req, timeout=30) as r: out = [l["folder"] for l in json.loads(r.read().decode()) if l.get("folder")]
+    elif kind == "sportarr":
+        h = {"X-Api-Key": e["key"]}
+        out = [x["path"] for x in http(u + "/api/rootfolder", h, timeout=20) if x.get("path")]
     return out
 
 # ---------------- folder check (v0.1.7) ----------------
@@ -4878,7 +4930,7 @@ def _fc_apps():
         if a.get("url"): out.append(("arrs", i, a, a.get("name") or a.get("kind", "").title(), True))
     for i, b in enumerate(S.get("bazarr") or []):
         if b.get("url"): out.append(("bazarr", i, b, b.get("name") or "Bazarr", False))
-    for k, n in (("tdarr", "Tdarr"),):
+    for k, n in (("tdarr", "Tdarr"), ("sportarr", "Sportarr")):
         if (S.get(k) or {}).get("url"): out.append((k, None, S[k], n, False))
     return out
 
@@ -5076,7 +5128,7 @@ TDARR_SAVE_GUESS = 0.30          # Tdarr's HEVC conversions here have saved 28-3
 AREAS = [("integrity", "File integrity", 0.30, 25.0), ("quality", "Quality", 0.20, 4.0), ("sync", "App sync", 0.20, None),
          ("metadata", "Metadata", 0.15, 6.0), ("dupes", "Duplicates", 0.15, 10.0)]
 SEV_W = {"bad": 1.0, "att": 0.6}
-SYNC_KINDS = ("notarr", "gaps")
+SYNC_KINDS = ("notarr", "notsportarr", "gaps")
 
 def area_of(chk, kind):
     if chk == "unwatched": return None
