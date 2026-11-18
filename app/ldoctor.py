@@ -32,7 +32,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -125,6 +125,35 @@ def map_in(obj, cfg, extra=()):
 def map_out(obj, cfg):
     pairs = _pairs(cfg, out=True)
     return _walk(obj, pairs, PATH_KEYS_OUT) if pairs else obj
+
+def acl_protected(path):
+    """v0.2.1: is this file (or a folder above it, up to the media root) governed by a NAS permission list (ACL)?
+    Synology marks folders with system.syno_acl_self, TrueNAS with system.nfs4_acl, plain Linux with system.posix_acl_*.
+    Changing a mode bit (chmod) on such a file replaces its ACL, so Library Doctor leaves the permissions alone there."""
+    p = path
+    for _ in range(40):
+        try:
+            if any("acl" in x.lower() for x in os.listxattr(p)): return True
+        except OSError:
+            pass
+        if p in ("/", "") or os.path.normpath(p) == os.path.dirname(MEDIA_ROOT.rstrip("/")): break
+        p = os.path.dirname(p)
+    return False
+
+def config_write_hint(err):
+    """A plain-English fix when /config can't be written (v0.2.1: Synology and other NAS permission lists)."""
+    uid = os.getuid()
+    try: st = os.stat(CONFIG_DIR); owner = st.st_uid
+    except OSError: owner = None
+    if acl_protected(CONFIG_DIR) or acl_protected(MEDIA_ROOT):
+        return ("Can't write to %s (%s). The folder has a NAS permission list (ACL) that doesn't let user %d write, even if the folder belongs to it. "
+                "On Synology: Control Panel > Shared Folder > docker (the share that holds this folder) > Edit > Permissions, tick Read/Write for your own user, "
+                "and do the same for your media share. On TrueNAS: give user %d Modify in the dataset's ACL. Then start Library Doctor again." % (CONFIG_DIR, err, uid, uid))
+    if owner == uid:
+        return ("Can't write to %s (%s). The folder already belongs to user %d, so something else blocks writing, usually a NAS permission list (ACL): "
+                "give user %d write access to the folder (on Synology: Control Panel > Shared Folder > Edit > Permissions > Read/Write for your user), then start it again." % (CONFIG_DIR, err, uid, uid))
+    return ("Can't write to %s (%s). Library Doctor keeps its settings and database there. Mount a folder at %s that user %d can write to "
+            "(set PUID/PGID in compose to the folder's owner), then start it again." % (CONFIG_DIR, err, CONFIG_DIR, uid))
 
 def move_file(src, dst):
     """os.rename with a plain-English error when src and dst are on different disks/datasets (clean-up only ever renames)."""
@@ -1405,6 +1434,11 @@ def restore(trash_id):
         if not os.path.isfile(t["dst"]): return {"ok": False, "error": "The file is no longer in the trash."}
         os.makedirs(os.path.dirname(t["src"]), exist_ok=True)
         move_file(t["dst"], t["src"])
+        tm = kv_get("trash_modes") or {}
+        if str(trash_id) in tm:                      # v0.2.1: a quarantined program file gets its old permissions back
+            try: os.chmod(t["src"], int(tm.pop(str(trash_id))))
+            except (OSError, ValueError): pass
+            kv_set("trash_modes", tm)
         with db() as c:
             c.execute("UPDATE trash SET restored_at=? WHERE id=?", (now_iso(), trash_id))
         for sec in plex("/library/sections").get("Directory", []):
@@ -2836,13 +2870,18 @@ def virus_fix(issue_id):
         if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where it was. Scan again."}
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
-        os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
-        try: os.chmod(dst, 0o640)                    # never executable in the trash
-        except OSError: pass
+        os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); old_mode = os.stat(src).st_mode & 0o7777; move_file(src, dst)
+        made_safe = False
+        if not acl_protected(dst):                   # never executable in the trash (but a chmod would wipe a NAS permission list)
+            try: os.chmod(dst, 0o640); made_safe = True
+            except OSError: pass
         reason = {"infected": "Virus (ClamAV)", "program": "Program file", "archive": "Leftover archive", "fakevideo": "Fake video"}.get(d["kind"], "Virus scan")
         with db() as c:
             tid = c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
                             (issue_id, row["title"], src, dst, size, reason, now_iso())).lastrowid
+        if made_safe:                                # Put back gives the file its old permissions again
+            tm = kv_get("trash_modes") or {}; tm[str(tid)] = old_mode; kv_set("trash_modes", tm)
+        with db() as c:
             c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                       (issue_id, row["title"], row["library"], "", json.dumps([src]), json.dumps([tid]), row["links"], now_iso(), "ok",
                        "Moved to the trash." + (" %s was told to rescan." % ", ".join(arr_rescan(d.get("refs")))) if d.get("refs") else "Moved to the trash.", "virus"))
@@ -6011,8 +6050,7 @@ if __name__ == "__main__":
     try:
         init_db()
     except (OSError, sqlite3.OperationalError) as e:
-        log("Can't write to %s (%s). Library Doctor keeps its settings and database there. Mount a folder at %s that user %d can write to "
-            "(set PUID/PGID in compose to the folder's owner), then start it again." % (CONFIG_DIR, e, CONFIG_DIR, os.getuid()))
+        log(config_write_hint(e))
         raise SystemExit(1)
     try:   # v0.1.15: a check that was running when Library Doctor stopped never finishes; free its card again
         with db() as c:

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 (beta)
+
+- **Synology tested** (DSM 7.2.2, Container Manager): the README has step-by-step Synology instructions, including the two things that stop most installs (create the `config` folder first, and give your own user Read/Write on the shares).
+- **Clearer message when Library Doctor can't write its settings folder:** if the folder already belongs to the right user, or a NAS permission list (ACL) is in the way, it now says exactly what to change on Synology or TrueNAS, instead of telling you to change PUID/PGID.
+- **Put back restores a quarantined program file's permissions**, and on folders with a NAS permission list (Synology, TrueNAS) the Virus Scan no longer changes a file's permissions at all (that would wipe the permission list).
+- **Settings has two more named sections:** **Indexers** (Prowlarr, with Jackett shown as coming soon) and **Download clients** (SABnzbd, NZBGet, qBittorrent, Transmission). **Optional apps** now holds Bazarr, Tautulli and Tdarr.
+
 ## 0.2.0 (beta)
 
 - **Settings has clearer sections:** **Media server** (Plex, Jellyfin and Emby side by side: pick yours; each keeps its own address while you switch), **Radarr, Sonarr & Sportarr** (with Lidarr shown as coming soon: music isn't checked yet), then **Optional apps**.

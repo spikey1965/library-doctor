@@ -63,6 +63,18 @@ Library Doctor is in **Community Applications**: open **Apps**, search **Library
 
 If it doesn't show up yet (new apps appear after the next Community Applications update), use **Docker → Add Container → Template repositories**, add `https://github.com/spikey1965/unraid-templates`, and pick **library-doctor**.
 
+### Synology (DSM 7.2, Container Manager)
+
+Synology works, but two of its habits trip people up, so do these in order:
+
+1. **Package Center:** install **Container Manager** (it creates a shared folder called `docker`).
+2. **Give your user Read/Write on the shares.** Control Panel → Shared Folder → **docker** → Edit → **Permissions** → tick **Read/Write** for your own user. Do the same for the share with your films and shows (e.g. `media`). Being an administrator isn't enough: inside a container your user isn't in the administrators group, so without this Library Doctor can't write its own settings.
+3. **File Station:** inside `docker`, make a folder `library-doctor`, and inside that a folder **`config`**. Synology's Docker doesn't create missing folders for you (otherwise it stops with *Bind mount failed: … does not exist*).
+4. **Find your IDs:** your user is usually **1026** and the users group **100**. To be sure, enable SSH (Control Panel → Terminal & SNMP) and run `id`.
+5. **Container Manager → Project → Create:** name `library-doctor`, path `/volume1/docker/library-doctor`, source **Create docker-compose.yml**, paste the compose file above with `PUID=1026`, `PGID=100` and your media share as `/volume1/media:/media`. Build, then open `http://your-nas:8790` and set a password.
+
+Keep Library Doctor's port on your home network (don't forward it on your router).
+
 ### Mount your media as one folder
 
 Library Doctor needs to see your films and shows inside **one** mount (for example `/mnt/media` with `movies/` and `tv/` inside it), mounted read-write. Clean-up moves files with a rename, which only works within one disk or dataset. If your films and shows are on different disks, mount their common parent folder.
@@ -86,7 +98,7 @@ This is a beta, so a few things are worth knowing before you start:
 
 - **One media mount.** Clean-up, Replace and Convert to MKV move files into `.library-doctor-trash` with a rename, which only works within one disk or dataset. If your films and shows are on different disks, scans still work but those fixes can't move files; Library Doctor shows a warning on its main screen when it spots this.
 - **Jellyfin and Emby are new (0.2).** Every check works on all three servers, but a few fixes only exist in Plex and are hidden on Jellyfin/Emby: Split (films Plex put together), Pick posters, Use Sonarr's titles, Fix Plex's listing, Plex tidy-up and the Plex database backup reminder. Jellyfin and Emby take a minute or two to notice moved files, so the check after a clean-up waits longer there. Emby needs its libraries' metadata downloaders on (the default when you add a library in Emby), or every item shows as not matched.
-- **Tested on TrueNAS so far.** Unraid, Synology, Raspberry Pi (ARM) and Docker Desktop haven't been tried by anyone yet. If you run one of those, an issue saying how it went (good or bad) really helps.
+- **Tested on TrueNAS, a Debian server and Synology DSM 7.2** (Container Manager, in a test setup). Unraid, Raspberry Pi (ARM) and Docker Desktop haven't been tried by anyone yet. If you run one of those, or a real Synology, an issue saying how it went (good or bad) really helps.
 - **Hardlinks.** A file that's also hardlinked elsewhere (typically a torrent that's still seeding) frees no space when it's moved. Library Doctor marks these as Hardlinked, never offers two links to the same file as duplicates, and doesn't count them in the space totals. Replacements made by Radarr itself (Find a smaller copy) can't be checked this way yet.
 - **Sleeping disks.** The scan never reads your video files; it only checks they exist and their size (and reads small subtitle files). On a NAS whose disks spin down, that can still wake them, so pick fewer days under Settings → Automatic scan (once a week is fine).
 - **Radarr/Sonarr v3 API.** It talks to the current Radarr and Sonarr (including Sonarr 5). Very old versions may not work.
