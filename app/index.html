@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z' fill='%232bc6b4'/%3E%3Cpath d='M15 34h9l4-9 6 17 4-8h11' fill='none' stroke='%230d1830' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='49' cy='34' r='3.4' fill='%23ff8b3d'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cmask id='ldp' maskUnits='userSpaceOnUse' x='0' y='0' width='64' height='64'%3E%3Crect width='64' height='64' fill='%23fff'/%3E%3Cpath d='M-2 38h14.8l8.1-9.5 6.9 22.7 8.1-18.6 4.7 5.4H66' fill='none' stroke='%23000' stroke-width='4.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/mask%3E%3Cg mask='url%28%23ldp%29'%3E%3Crect x='4' y='11.4' width='12.3' height='46' rx='4.6' fill='%232bc6b4'/%3E%3Crect x='18.6' y='18.8' width='12.3' height='38.6' rx='4.6' fill='%232bc6b4'/%3E%3Crect x='33.2' y='6.5' width='12.3' height='50.9' rx='4.6' fill='%232bc6b4'/%3E%3Crect x='47.7' y='23.6' width='12.3' height='33.8' rx='4.6' fill='%23ff8b3d'/%3E%3C/g%3E%3C/svg%3E">
 <title>Library Doctor</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap">
 <script>try{var t=localStorage.getItem("ld_theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
@@ -292,12 +292,62 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
 .rtab td { padding:7px 8px 7px 0; border-top:1px solid var(--line); vertical-align:top; } .rtab td.n { text-align:right; font-variant-numeric:tabular-nums; }
 .pill2 { font-size:11px; font-weight:700; padding:1px 7px; border-radius:20px; background:var(--card); color:var(--mut); white-space:nowrap; } .pill2.open { color:var(--orange); }
 @media (max-width:620px) { .lrow { grid-template-columns:1fr auto; } .lrow .n { white-space:nowrap; } .lrow .bar { grid-column:1 / 3; grid-row:2; } .arow { grid-template-columns:100px 1fr 40px; } .scoretop b { font-size:36px; } .rtab .hide-s { display:none; } }
+/* v0.1.11 visual polish: clearer panel edges, row-style check tiles, a compact scan list, hover states. Colours all come from the variables above, so light and dark both follow. */
+html { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; text-rendering:optimizeLegibility; }
+.panel, .app, .binhead, .deskbin { border:1px solid var(--line); box-shadow:0 1px 2px rgb(0 0 0 / .05), 0 8px 24px -16px rgb(0 0 0 / .25); }
+.panel { padding:20px; border-radius:18px; }
+.nav { padding:16px 0; margin-bottom:20px; }
+.tabs { gap:4px; flex-wrap:wrap; } .tab { white-space:nowrap; }
+.tab { padding:6px 12px; border-radius:999px; font-weight:600; transition:background-color .15s, color .15s; }
+.tab:hover { color:var(--fg); background:var(--panel); }
+.tab.on { box-shadow:none; background:var(--card); color:var(--fg); }
+.tab.on svg { color:var(--teal); }
+.tab:focus-visible, .themet:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+.ro { background:var(--teal-bg); border-color:transparent; padding:4px 11px; }
+.tabs .count { color:var(--bg); padding:1px 7px; line-height:1.5; } /* the old ".tabs span" rule made the Trash count grey and squashed */
+/* the score is already in the ring: keep it in the heading for screen readers only */
+.hero h1 #score { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.hero { gap:22px; }
+.hero h1 { letter-spacing:-.01em; }
+.hero .ring { width:124px; height:124px; }
+.hero .ring circle { stroke-width:10; } .hero .ring circle:first-child { stroke:var(--orange-bg); }
+.hero .ring b { font-size:27px; letter-spacing:-.02em; }
+.meta { margin-top:10px; }
+.rings2 { gap:12px; margin-top:20px; }
+.rcard, .check { border-color:var(--line); transition:border-color .15s, background-color .15s, transform .15s; }
+.rcard:hover, .check:not(:disabled):hover { border-color:var(--line2); transform:translateY(-1px); }
+.checks { grid-template-columns:repeat(auto-fill,minmax(186px,1fr)); gap:10px; margin-top:12px; }
+.check { display:grid; grid-template-columns:auto minmax(0,1fr); column-gap:12px; row-gap:1px; align-items:center; padding:11px 13px; }
+.check .ico { grid-row:1 / 3; width:36px; height:36px; border-radius:11px; }
+.check .l { font-size:14px; line-height:1.25; align-self:end; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.check .s { align-self:start; font-weight:600; }
+.check.att .s { color:var(--orange); } .check.bad .s { color:var(--red); }
+/* all-clear tiles step back so the ones with work stand out */
+.check:not(.att):not(.bad) .ico { background:var(--teal-bg); color:var(--teal); }
+.check[aria-pressed="true"] { background:var(--panel); }
+.h { margin-bottom:14px; } .h h2 { letter-spacing:-.01em; }
+.item { border:1px solid var(--line); border-left:3px solid var(--orange); border-radius:14px; padding:14px 16px; }
+.item h3 { font-size:16px; align-items:center; }
+.adv { background:var(--panel); }
+button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border-color .15s, filter .15s; }
+.b-teal:not(:disabled):hover, .b-orange:not(:disabled):hover { filter:brightness(1.08); }
+.b-line:not(:disabled):hover { background:var(--panel); border-color:var(--mut); }
+/* scans: one line each (date, what it found), newest marked */
+.scans { gap:0; }
+.sc, .sc:first-child { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:10px; align-items:center; background:none; color:inherit; border-radius:0; padding:9px 2px; border-top:1px solid var(--line); }
+.sc:first-child { border-top:0; padding-top:2px; }
+.sc i { width:9px; height:9px; border-radius:50%; background:var(--line2); } .sc:first-child i { background:var(--teal); box-shadow:0 0 0 4px var(--teal-bg); } .sc.bad i { background:var(--red); }
+.sc b { font:600 13px var(--font); font-variant-numeric:tabular-nums; } .sc small, .sc:first-child small { display:block; color:var(--mut); opacity:1; font-size:12px; overflow-wrap:anywhere; }
+.sc em { font:700 12px var(--font); font-variant-numeric:tabular-nums; background:var(--card); border-radius:999px; padding:2px 9px; white-space:nowrap; } .sc:first-child em { background:var(--teal-bg); color:var(--teal); }
+.dsk b { font-size:22px; } .dbar { height:8px; }
+@media (max-width:560px) { .panel { padding:16px; } .checks { grid-template-columns:repeat(2,minmax(0,1fr)); } .check .l { white-space:normal; } .hero .ring { width:104px; height:104px; } }
+@media (prefers-reduced-motion: reduce) { .rcard, .check, .tab, button, a.btn { transition:none; } .rcard:hover, .check:hover { transform:none; } }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="nav">
-    <div class="logo"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 4 9 13v16c0 15 9.8 26.5 23 31 13.2-4.5 23-16 23-31V13z" fill="#2bc6b4"/><path d="M15 34h9l4-9 6 17 4-8h11" fill="none" stroke="#0d1830" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="49" cy="34" r="3.4" fill="#ff8b3d"/></svg>Library Doctor</div>
+    <div class="logo"><svg viewBox="0 0 64 64" aria-hidden="true"><mask id="ldp" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-2 38h14.8l8.1-9.5 6.9 22.7 8.1-18.6 4.7 5.4H66" fill="none" stroke="#000" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/></mask><g mask="url(#ldp)"><rect x="4" y="11.4" width="12.3" height="46" rx="4.6" fill="#2bc6b4"/><rect x="18.6" y="18.8" width="12.3" height="38.6" rx="4.6" fill="#2bc6b4"/><rect x="33.2" y="6.5" width="12.3" height="50.9" rx="4.6" fill="#2bc6b4"/><rect x="47.7" y="23.6" width="12.3" height="33.8" rx="4.6" fill="#ff8b3d"/></g></svg>Library Doctor</div>
     <div class="tabs" role="tablist"><button class="tab on" id="tabScan" role="tab" aria-selected="true">Scan Library</button><button class="tab" id="tabAna" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Analysis</button><button class="tab" id="tabTrash" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Trash <span class="count" id="trashCount" hidden></span></button><button class="tab" id="tabSet" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M5.5 18.5l1.8-1.8M16.7 7.3l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Settings</button></div>
     <button class="themet" id="themeT" type="button" aria-label="Switch light or dark mode" title="Light / dark mode">☾</button><span class="ro" title="Nothing is deleted straight away: clean-up moves copies to the trash, which you can restore for 7 days.">Nothing deleted without asking</span>
     <button class="b-line sm" id="logout" hidden style="margin-left:10px">Log out</button>
@@ -397,7 +447,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     health: '<path d="M3 12h4l2-5 4 10 2-5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
     subs: '<rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 13h4m2 0h4M7 16h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     virus: '<path d="M12 3 5 6v5.5c0 4.4 3 8.2 7 9.5 4-1.3 7-5.1 7-9.5V6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 8v5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="16.3" r="1.3" fill="currentColor"/>',
-    coming: '<rect x="3" y="9" width="18" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="m3.5 9 1-4.5 16 3.5-1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m10 12.5 4 2.5-4 2.5z" fill="currentColor"/>',
     quality: '<path d="M4 18h16M6 18V9m4 9V5m4 13v-7m4 7v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     unwatched: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/><path d="M4 4l16 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     apps: '<rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 20h8M12 16v4M7 10h2l1.5-2.5 2 5L14 10h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
@@ -410,7 +459,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     { id: "dupes", label: "Duplicates", sev: "att", unit: "to review", live: true },
     { id: "meta", label: "Metadata Gaps", sev: "att", unit: "to fix", live: true }, { id: "health", label: "File Health", sev: "bad", unit: "to replace", live: true },
     { id: "subs", label: "Subtitles", sev: "att", unit: "to fix", live: true }, { id: "virus", label: "Virus Scan", sev: "bad", unit: "found", live: true },
-    { id: "coming", label: "Coming Soon", sev: "att", unit: "to fix", live: true },
     { id: "quality", label: "Quality & Space", sev: "att", unit: "to look at", live: true },
     { id: "unwatched", label: "Unwatched", sev: "att", unit: "unwatched", live: true },
     { id: "queue", label: "Downloads", sev: "att", unit: "stuck", live: true },
@@ -422,7 +470,7 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     addedAway = false; flash = { text: "Welcome back. Scanning again so anything you just added drops off the list." };
     try { await api("/api/scan", {}); } catch (e) {} load();
   });
-  let pick = null, small = null, howto = null;   // howto = id of the App Health card whose "How to update" panel is open   // small = open smaller-copy picker: {id, busy, err, results, cur, msg, ask}   // open trailer picker: {id, q, results, busy, err}
+  let small = null, howto = null;   // howto = id of the App Health card whose "How to update" panel is open   // small = open smaller-copy picker: {id, busy, err, results, cur, msg, ask}   // open trailer picker: {id, q, results, busy, err}
   let S = null, filter = null, poll = null, confirmId = null, confirmAll = false, purgeAsk = false, flash = null, review = null;
   const overrides = {};
   const human = n => { n = +n || 0; for (const u of ["B", "KB", "MB", "GB", "TB"]) { if (n < 1024 || u === "TB") return u === "B" ? n + " B" : n.toFixed(1) + " " + u; n /= 1024; } };
@@ -595,7 +643,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
       if (f.includes("monitor")) parts.push("Monitor in " + arr.replace(/^Open in /, ""));
       what = parts.join(" · ") || "Nothing automatic: shown for information"; kind = f.includes("tdarr") || f.includes("remux") ? "convert" : f.includes("search") || f.includes("smaller") ? "download" : "look";
       if (f.includes("smaller")) bytes = d.extra || 0; }
-    else if (i.chk === "coming") { what = f.includes("trailer") ? "Pick the real trailer from YouTube" : f.includes("remove") ? "Remove the placeholder (to the trash)" : f.includes("ytdlp") ? "Update yt-dlp" : f.includes("refresh") ? "Refresh in Plex" : "Nothing automatic"; kind = f.includes("remove") ? "trash" : "other"; if (kind === "trash") files = 1; }
     else if (i.chk === "queue" && f.includes("clearinc")) { what = `Move ${d.count} leftover${d.count === 1 ? "" : "s"} from the incomplete folder to the trash`; kind = "trash"; files = d.count; bytes = d.size || 0; }
     else if (i.chk === "queue") { what = f.includes("import") ? `Import ${d.count || 1} download${(d.count || 1) === 1 ? "" : "s"}` : f.includes("retry") ? "Remove it, blocklist that release and search for another" : f.includes("remove") ? "Remove the leftover from qBittorrent and move its files to the trash" : "Nothing automatic (private torrent)"; kind = f.includes("retry") ? "download" : f.includes("remove") ? "trash" : "other"; if (f.includes("remove")) { files = 1; bytes = d.size || 0; } }
     else if (i.chk === "missing" && d.kind === "gaps") { what = `Ask ${(d.ref && d.ref.arr) || "Sonarr"} to search for ${d.count} missing episode${d.count === 1 ? "" : "s"}`; kind = "download"; }
@@ -639,7 +686,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
       else if (f.includes("search")) { risk = R("low", "A new download only replaces the file if Radarr/Sonarr rate it better; the old one goes to their recycle bin."); save = "None: a better copy is usually bigger, so it may use more space."; }
       else if (f.includes("monitor")) { risk = R("none", "Radarr/Sonarr will upgrade it by themselves when a better copy appears."); save = "None: upgrades are usually bigger."; }
       else { save = d.extra ? `Up to ${human(d.extra)} if you replace it` : "None."; } }
-    else if (i.chk === "coming") { risk = f.includes("remove") ? R("low", "Only the placeholder goes; your real films are untouched.") : R("none", "Only the trailer or Plex listing changes."); save = f.includes("remove") && p.bytes ? human(p.bytes) + later : "A few MB at most."; }
     else if (i.chk === "queue") {
       if (f.includes("clearinc")) { risk = R("low", `Only items no download client knows about and nothing has touched for days; each is checked again just before it moves.`); save = human(d.size || 0) + later; }
       else if (f.includes("import")) { risk = R("low", "Radarr/Sonarr only import files they have no objection to; the old copy goes to their recycle bin."); save = "About none: the download replaces the old copy."; }
@@ -726,13 +772,13 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     $("checks").innerHTML = CHECKS.map(c => {
       if (!c.live) return `<button class="check" disabled><span class="ico">${svg(c.id)}</span><span class="l">${esc(c.label)}</span><span class="s">Coming in stage ${c.stage}</span></button>`;
       const n = c.id === "unwatched" ? open.filter(i => i.chk === c.id).reduce((a, i) => a + (i.detail.count || 0), 0) : open.filter(i => i.chk === c.id).length;
-      return `<button class="check ${n ? c.sev : ""}" data-c="${c.id}" aria-pressed="${filter === c.id}"><span class="ico">${svg(n ? c.id : "ok")}</span><span class="l">${esc(c.label)}</span><span class="s">${n ? n + " " + c.unit : "All clear"}</span></button>`;
+      return `<button class="check ${n ? c.sev : ""}" data-c="${c.id}" aria-pressed="${filter === c.id}"><span class="ico">${svg(n ? c.id : "ok")}</span><span class="l">${esc(c.label)}</span><span class="s">${n ? n + " " + (n === 1 && c.unit === "warnings" ? "warning" : c.unit) : "All clear"}</span></button>`;
     }).join("");
     $("checks").querySelectorAll("[data-c]").forEach(b => b.onclick = () => { filter = b.dataset.c; render(); });
     const libs = [...new Set(S.issues.map(i => i.library))].sort(), cur = $("lib").value;
     $("lib").innerHTML = '<option value="">All libraries</option>' + libs.map(l => `<option ${l === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
     list();
-    $("scans").innerHTML = S.scans.slice(0, 6).map(s => `<div class="sc"><b>${s.ok ? "Scan completed" : "Scan failed"}</b>${s.ok ? `${s.issues} to look at · ${s.items.toLocaleString("en-GB")} items` : esc(s.note)}<br><small>${fmt(s.finished)}</small></div>`).join("") || '<p class="empty">No scans yet.</p>';
+    $("scans").innerHTML = S.scans.slice(0, 6).map(s => `<div class="sc${s.ok ? "" : " bad"}"><i aria-hidden="true"></i><span><b>${fmt(s.finished)}</b><small>${s.ok ? `${s.items.toLocaleString("en-GB")} items checked` : "Scan failed: " + esc(s.note)}</small></span>${s.ok ? `<em title="Things to look at after this scan">${s.issues} to look at</em>` : ""}</div>`).join("") || '<p class="empty">No scans yet.</p>';
     const DN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], sd = S.scan_days || [0, 1, 2, 3, 4, 5, 6];
     histDraw(); themeBtn();
     diskDraw();
@@ -785,10 +831,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     } else if (i.chk === "queue" && !i.ignored) {
       const QQ = { import: d.count === 1 ? "Import" : `Import all ${d.count}`, retry: "Remove & try another", remove: "Move to trash", reannounce: "Re-announce", clearinc: d.count === 1 ? "Move to trash" : `Move all ${d.count} to trash` };
       act = (d.fixes || []).map(h => `<button class="${h === "remove" || h === "clearinc" ? "b-orange" : h === "retry" && (d.fixes || []).includes("reannounce") ? "b-line" : "b-teal"}" data-queuefix="${esc(i.id)}|${h}">${QQ[h]}</button>`).join("");
-    } else if (i.chk === "coming" && !i.ignored) {
-      const CF = { refresh: "Refresh in Plex", remove: "Remove placeholder", ytdlp: "Update yt-dlp" };
-      act = (d.fixes || []).map(h => h === "trailer" ? (pick && pick.id === i.id ? "" : `<button class="b-teal" data-tpick="${esc(i.id)}">Pick trailer</button>`)
-            : `<button class="${h === "remove" ? "b-orange" : "b-teal"}" data-cfix="${esc(i.id)}|${h}">${CF[h]}</button>`).join("");
     } else if (i.chk === "missing" && d.kind === "gaps" && !i.ignored) {
       act = `<button class="b-teal" data-gaps="${esc(i.id)}">Search for ${d.count === 1 ? "it" : "these " + d.count}</button>`;
     } else if (i.chk === "apps" && d.kind === "indexer" && !i.ignored) {
@@ -830,22 +872,12 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     } else if (inReview) act = `<button class="b-line" id="rvSkip">Next</button>`;
     const block = act.startsWith("<div") ? act : "", inline = act.startsWith("<div") ? "" : act;
     return `<div class="item ${i.ignored ? "ign" : i.sev === "bad" ? "bad" : ""}"><h3>${esc(i.title)} <span class="pill lib">${esc(i.library)}</span>${conf}${i.ignored ? (i.snoozed ? `<span class="pill lib" title="Searched, nothing better yet. Searched again by itself on this date.">Snoozed till ${esc(new Date(i.snoozed).toLocaleDateString(undefined, { day: "numeric", month: "short" }))}</span>` : '<span class="pill lib">Ignored</span>') : ""}</h3>
-      <p class="det">${esc(d.text)}${d.note ? " " + esc(d.note) : ""}${(d.links || 1) > 1 ? " <b>Hardlinked:</b> this file has another link (usually a torrent still seeding), so moving it frees no space until that is removed too." : ""}${path}</p>${pick && pick.id === i.id ? pickHtml() : ""}${small && small.id === i.id ? smallHtml() : ""}${i.chk === "quality" && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td>${esc(e.res)}</td></tr>`).join("")}</table></div></details>` : ""}${i.chk === "unwatched" ? uwHtml(i) : ""}${d.kind === "tdarrmissed" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.name)}">${esc(x.name.split("/").length === 2 ? x.name.split("/")[0] : x.name.split("/").pop())}</td><td class="n">${esc(x.codec.toUpperCase())}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div>${d.count > d.items.length ? `<p class="det">…and ${d.count - d.items.length} smaller.</p>` : ""}</details>` : ""}${d.kind === "incomplete" && d.items ? `<details class="eps" open><summary>Show the ${d.count === 1 ? "leftover" : d.count + " leftovers"}</summary><div class="uww">${d.items.map(x => `<div class="inc"><div title="${esc(x.path)}">${esc(x.title)}<small>${esc(x.why || "untouched for " + x.days + " day" + (x.days === 1 ? "" : "s"))} · ${human(x.size)}${x.files ? " · " + x.files + " file" + (x.files === 1 ? "" : "s") : ""}</small></div>${i.ignored ? "" : `<button class="b-line sm" data-incone="${esc(i.id)}" data-incpath="${esc(x.path)}">Trash</button>`}</div>`).join("")}</div></details>` : ""}${i.chk === "queue" && d.kind !== "incomplete" && d.items && d.items.length ? `<details class="eps"><summary>Show the ${d.count === 1 ? "download" : d.count + " downloads"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.title)}">${esc(x.ep ? x.ep + " · " : "")}${esc(x.title)}</td><td>${esc((x.protocol || "") + (x.client ? " · " + x.client : ""))}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "lang" && d.files && d.files.length > 1 ? `<details class="eps"><summary>Show the ${d.files.length} episodes</summary><div class="uww"><table class="uw">${d.files.map(x => `<tr><td>${esc(x.se || "")}</td><td title="${esc(x.path)}">${esc(base(x.path))}</td><td class="n">${esc(x.audio || "")}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "tdarrfail" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.path)}">${esc(x.name.split("/").pop())}</td><td>${esc(x.why)}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${eps}${seas}${wanted}${dbl ? `<p class="det">The fix moves the file out for a moment so Plex drops both entries, then puts it straight back so Plex adds it once. The file never leaves the disk. It takes 1–3 minutes; the result shows under Done.</p>` : vers}${loLine}${block}
+      <p class="det">${esc(d.text)}${d.note ? " " + esc(d.note) : ""}${(d.links || 1) > 1 ? " <b>Hardlinked:</b> this file has another link (usually a torrent still seeding), so moving it frees no space until that is removed too." : ""}${path}</p>${small && small.id === i.id ? smallHtml() : ""}${i.chk === "quality" && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td>${esc(e.res)}</td></tr>`).join("")}</table></div></details>` : ""}${i.chk === "unwatched" ? uwHtml(i) : ""}${d.kind === "tdarrmissed" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.name)}">${esc(x.name.split("/").length === 2 ? x.name.split("/")[0] : x.name.split("/").pop())}</td><td class="n">${esc(x.codec.toUpperCase())}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div>${d.count > d.items.length ? `<p class="det">…and ${d.count - d.items.length} smaller.</p>` : ""}</details>` : ""}${d.kind === "incomplete" && d.items ? `<details class="eps" open><summary>Show the ${d.count === 1 ? "leftover" : d.count + " leftovers"}</summary><div class="uww">${d.items.map(x => `<div class="inc"><div title="${esc(x.path)}">${esc(x.title)}<small>${esc(x.why || "untouched for " + x.days + " day" + (x.days === 1 ? "" : "s"))} · ${human(x.size)}${x.files ? " · " + x.files + " file" + (x.files === 1 ? "" : "s") : ""}</small></div>${i.ignored ? "" : `<button class="b-line sm" data-incone="${esc(i.id)}" data-incpath="${esc(x.path)}">Trash</button>`}</div>`).join("")}</div></details>` : ""}${i.chk === "queue" && d.kind !== "incomplete" && d.items && d.items.length ? `<details class="eps"><summary>Show the ${d.count === 1 ? "download" : d.count + " downloads"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.title)}">${esc(x.ep ? x.ep + " · " : "")}${esc(x.title)}</td><td>${esc((x.protocol || "") + (x.client ? " · " + x.client : ""))}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "lang" && d.files && d.files.length > 1 ? `<details class="eps"><summary>Show the ${d.files.length} episodes</summary><div class="uww"><table class="uw">${d.files.map(x => `<tr><td>${esc(x.se || "")}</td><td title="${esc(x.path)}">${esc(base(x.path))}</td><td class="n">${esc(x.audio || "")}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "tdarrfail" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.path)}">${esc(x.name.split("/").pop())}</td><td>${esc(x.why)}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${eps}${seas}${wanted}${dbl ? `<p class="det">The fix moves the file out for a moment so Plex drops both entries, then puts it straight back so Plex adds it once. The file never leaves the disk. It takes 1–3 minutes; the result shows under Done.</p>` : vers}${loLine}${block}
       ${advHtml(i)}<div class="acts">${i.chk === "quality" ? links + inline : inline}${reset}${plexBtn}${i.chk === "quality" ? "" : links}${inReview ? "" : `<button class="b-line" data-${i.ignored ? "un" : ""}ign="${esc(i.id)}" data-t="${esc(i.title)}"${i.chk === "dupes" && !i.ignored ? ' title="You want these copies (e.g. a 4K and a 1080p for phones). Hides this card for good; Show ignored brings it back."' : ""}>${i.ignored ? "Stop ignoring" : i.chk === "dupes" ? ((d.versions || []).length > 2 ? "Keep them all" : "Keep both") : "Ignore"}</button>`}</div></div>`;
   }
   const monTip = d => d.unmon && d.unmon.movie ? "Radarr isn't monitoring this film, so it never upgrades it by itself. Monitor turns that on."
     : `${d.unmon && d.unmon.eps ? d.unmon.eps.length + " of these episodes aren't" : "These episodes are"} monitored${d.unmon && d.unmon.series ? " (nor is the series)" : ""}, so Sonarr never upgrades them by itself. Monitor turns it on for just these episodes, not whole seasons.`;
   const mmss = n => n ? Math.floor(n / 60) + ":" + String(n % 60).padStart(2, "0") : "?";
-  function pickHtml() {
-    const r = pick.results || [];
-    return `<div class="tpick"><form id="tpForm"><input id="tpQ" value="${esc(pick.q || "")}" aria-label="Search YouTube"><button class="b-line" type="submit" ${pick.busy ? "disabled" : ""}>${pick.busy === "search" ? "Searching…" : "Search"}</button><button class="b-line" type="button" id="tpClose">Close</button></form>` +
-      (pick.err ? `<div class="msg err">${esc(pick.err)}</div>` : "") +
-      (pick.busy === "search" && !r.length ? '<p class="det">Asking YouTube…</p>' : "") +
-      (r.length ? `<div class="tres">${r.map(v => `<div><img src="https://i.ytimg.com/vi/${esc(v.id)}/mqdefault.jpg" alt="" loading="lazy"><div class="tt">${esc(v.title)}</div>
-        <div class="tm">${esc(v.channel || "")} · ${mmss(v.secs)}${v.secs > 210 ? ' <span class="long">longer than Agregarr allows, still fine</span>' : ""}</div>
-        <div class="acts"><button class="b-teal sm" data-tuse="${esc(v.id)}" ${pick.busy ? "disabled" : ""}>Use this</button><a class="btn b-line sm" href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener">Watch</a></div></div>`).join("")}</div>
-        <p class="det" style="margin-top:8px">Pick the official one (studio or distributor channel). It downloads in 1080p and replaces the clip in the same file, so Agregarr and Plex carry on as before.</p>` : "") + "</div>";
-  }
   function smallHtml() {
     const r = small.results || [], ago = n => n == null ? "" : n < 1 ? "today" : n + " day" + (n === 1 ? "" : "s") + " old";
     let h = `<div class="tpick">`;
@@ -859,14 +891,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
           <div class="acts"><button class="b-orange" data-sgo="${esc(v.key)}" ${small.busy ? "disabled" : ""}>${small.busy === "grab" ? "Asking…" : "Download"}</button><button class="b-line" data-sno="1">Cancel</button></div></div>`
           : `<button class="b-teal sm" data-sask="${esc(v.key)}">Download this</button>`}</div>`).join("") + `</div>`;
     return h + `<div class="acts" style="margin-top:8px"><button class="b-line sm" id="smClose">Close</button></div></div>`;
-  }
-  function comingPanel() {
-    const c = S.coming || {}, y = c.ytdlp || {}, ph = S.issues.filter(i => i.chk === "coming" && i.detail.kind === "generic" && !i.ignored).length;
-    const old = y.ok && (y.days > y.old_days || (y.newer && y.days > 30));
-    return `<div class="vstat">
-      <div class="${!y.ok || old ? "bad" : ""}"><small>yt-dlp (Agregarr uses it)</small><b>${y.ok ? esc(y.version) : "Not working"}</b><span>${y.ok ? (y.days != null ? y.days + " days old" : "") + (y.latest ? (y.newer ? " · " + esc(y.latest) + " is out" : " · the latest") : "") : esc(y.error || "")}</span></div>
-      <div class="${ph ? "bad" : ""}"><small>Placeholders</small><b>${ph ? ph + " with the generic clip" : "All real trailers"}</b><span>${c.busy ? "A trailer is downloading now…" : "Checked every scan"}</span></div>
-    </div><div class="acts"><button class="b-line" id="ytUp" ${c.updating || (y.ok === false && !y.writable) ? "disabled" : ""}>${c.updating ? "Updating yt-dlp…" : "Update yt-dlp now"}</button></div>`;
   }
   function uwHtml(i) {
     const d = i.detail, more = d.count - d.items.length;
@@ -936,7 +960,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
         <div class="${fu && fu.infected ? "bad" : ""}"><small>Full ClamAV scan</small><b>${v.full_running ? "Running…" : fu ? (fu.ok ? (fu.infected ? fu.infected + " infected" : "Clean") : "Failed") : "Not run from here"}</b><span>${v.full_running ? "Started " + fmt(v.full_started) + ". Takes about 30 minutes." : fu ? (fu.ok ? fmt(fu.at) + " · " + Math.round(fu.secs / 60) + " min" : esc(fu.error || "")) : "Your weekly job also runs Wednesdays at 03:00."}</span></div>
       </div><div class="acts"><button class="b-line" id="vFull" ${v.full_running || !c.ok ? "disabled" : ""}>${v.full_running ? "Full scan running…" : "Full scan now (about 30 min)"}</button></div>`;
     }
-    if (filter === "coming") top += comingPanel();
     if (filter === "quality") {
       const hogs = rows.filter(i => !i.ignored && i.detail.kind === "hog"), ex = hogs.reduce((a, i) => a + (i.detail.extra || 0), 0);
       if (hogs.length) top += `<div class="msg">${hogs.length} space hog${hogs.length === 1 ? "" : "s"} use about <b>${human(ex)}</b> more than files like them usually do.</div>`;
@@ -956,7 +979,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
                     virus: "Nothing found: no programs, archives or fake videos in your libraries, and ClamAV found nothing in the new files.",
                     subs: "No advert-only, mis-named or stray subtitle files, and Bazarr isn't missing anything.",
                     meta: "Everything is matched, has a poster, and its titles and year agree with Radarr and Sonarr.",
-                    coming: "Every Coming Soon placeholder plays its real trailer, sits in the right library, and yt-dlp is up to date.",
                     quality: "No files far bigger than usual, no old formats that make Plex convert, and no seasons with odd low-quality episodes.",
                     unwatched: "Everything has been watched recently, or you've marked it Keep." };
     if (!rows.length) { $("list").innerHTML = top + `<p class="empty"><b>All clear.</b> ${EMPTY[filter]}</p>` + doneHtml(); return wire(); }
@@ -1015,22 +1037,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
       flash = { err: !r.ok, text: r.ok ? "Moved to the trash. It shows under Done below." : r.errors.join(" ") }; load(); });
     on("vFull", async () => { const r = await api("/api/virusfull", {});
       flash = { err: !r.ok, text: r.ok ? "Full ClamAV scan started. It takes about 30 minutes; you can close this page." : r.error }; load(); });
-    const tSearch = async q => { pick.busy = "search"; pick.err = null; pick.results = []; list();
-      const r = await api("/api/trailer/search", { id: pick.id, q }); if (!pick) return;
-      pick.busy = null; pick.q = r.q || q; if (r.ok) pick.results = r.results; else pick.err = r.error; list(); };
-    L.querySelectorAll("[data-tpick]").forEach(b => b.onclick = () => { const it = S.issues.find(x => x.id === b.dataset.tpick);
-      pick = { id: b.dataset.tpick, q: it ? it.detail.query : "", results: [] }; tSearch(pick.q); });
-    const tq = $("tpQ"); if (tq) tq.oninput = () => { pick.q = tq.value; };
-    const tf = $("tpForm"); if (tf) tf.onsubmit = e => { e.preventDefault(); tSearch($("tpQ").value); };
-    on("tpClose", () => { pick = null; list(); });
-    L.querySelectorAll("[data-tuse]").forEach(b => b.onclick = async () => { pick.busy = "use"; list();
-      const r = await api("/api/trailer/use", { id: pick.id, vid: b.dataset.tuse });
-      if (r.ok) { pick = null; flash = { text: "Downloading the trailer. It takes about a minute; the result shows under Done below." }; }
-      else { pick.busy = null; pick.err = r.error; }
-      load(); });
-    L.querySelectorAll("[data-cfix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.cfix.split("|"); b.disabled = true; b.textContent = "Working…";
-      const r = await api("/api/comingfix", { ids: [id], how });
-      flash = { err: !r.ok, text: r.ok ? "Done. It shows under Done below." : r.errors.join(" ") }; load(); });
     L.querySelectorAll("[data-small]").forEach(b => b.onclick = async () => { const id = b.dataset.small;
       small = { id, busy: "search", results: [] }; list();
       const r = await api("/api/smaller/search", { id }); if (!small || small.id !== id) return;
@@ -1064,9 +1070,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     L.querySelectorAll("[data-uwkeep]").forEach(b => b.onclick = () => uw(b, "/api/ignore", { id: b.dataset.uwkeep, days: (S && S.keep_days) || 182 }, b.dataset.t + " comes back on the list in " + keepTxt() + " if it's still unwatched."));
     L.querySelectorAll("[data-uwgood]").forEach(b => b.onclick = () => uw(b, "/api/ignore", { id: b.dataset.uwgood }, b.dataset.t + " is kept for good."));
     L.querySelectorAll("[data-uwshow]").forEach(b => b.onclick = () => uw(b, "/api/unignore", { id: b.dataset.uwshow }, b.dataset.t + " is back on the list."));
-    on("ytUp", async () => { const b = $("ytUp"); b.disabled = true; b.textContent = "Updating yt-dlp…";
-      const r = await api("/api/ytdlp/update", {});
-      flash = { err: !r.ok, text: r.ok ? (r.old === r.new ? "yt-dlp " + r.new + " was already the latest (downloaded and checked again)." : "Updated yt-dlp " + (r.old || "?") + " → " + r.new + ". Agregarr uses it from its next download.") : r.error }; load(); });
     on("titlesAll", () => backupGate(() => metaGo($("titlesAll").dataset.ids.split(","), "titles", $("titlesAll"))));
     on("postersAll", () => backupGate(() => metaGo($("postersAll").dataset.ids.split(","), "posters", $("postersAll"))));
     L.querySelectorAll("[data-added]").forEach(a => a.addEventListener("click", () => { addedAway = true; }));
@@ -1106,7 +1109,7 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
   }
   const fmtN = n => (n == null ? "–" : Number(n).toLocaleString());
   const when = t => t ? String(t).replace("T", " ").slice(0, 16) : "";
-  const CHKN = { missing: "Missing file", dupes: "Duplicate", meta: "Metadata", health: "File health", subs: "Subtitles", virus: "Virus / fake", coming: "Coming Soon", quality: "Quality", queue: "Download", apps: "App" };
+  const CHKN = { missing: "Missing file", dupes: "Duplicate", meta: "Metadata", health: "File health", subs: "Subtitles", virus: "Virus / fake", quality: "Quality", queue: "Download", apps: "App" };
   function spark(id, pts, fmt, opts) {   // one series, 2px line, crosshair + tooltip on hover
     if (pts.length < 2) return `<div class="spark"><h3>${esc(opts.title)}</h3><p>${esc(opts.empty)}</p></div>`;
     const W = 600, H = 120, P = 6, ys = pts.map(p => p.y), lo = opts.min != null ? Math.min(opts.min, ...ys) : Math.min(...ys), hi = Math.max(...ys, lo + (opts.span || 1));
@@ -1280,7 +1283,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     nzbget: { t: "NZBGet", secret: ["password", "Control password"], url: "http://192.168.1.10:6789", extra: [["username", "Control username", "nzbget"]], help: "For Downloads: shows NZBGet's own status and why a usenet download failed. Username and password: NZBGet → Settings → Security (ControlUsername / ControlPassword)." },
     sabnzbd: { t: "SABnzbd", secret: ["key", "API key"], url: "http://192.168.1.10:8080", help: "For Downloads: shows SABnzbd's own status and why a usenet download failed. API key: SABnzbd → Config → General." },
     prowlarr: { t: "Prowlarr", secret: ["key", "API key"], url: "http://192.168.1.10:9696", help: "For App Health: shows Prowlarr's own warnings (failing indexers, proxies). API key: Prowlarr → Settings → General." },
-    sportarr: { t: "Sportarr", files: true, secret: ["key", "API key"], url: "http://192.168.1.10:1867", help: "For sports libraries managed by Sportarr." },
     gotify: { t: "Gotify", secret: ["token", "App token"], url: "http://192.168.1.10:8070", help: "A phone message after the nightly scan, only when there's news. Make an app in Gotify and paste its token." },
     discord: { t: "Discord", notify: true, fixedUrl: "https://discord.com", secret: ["token", "Webhook URL"], url: "", help: "Discord: Channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL." },
     telegram: { t: "Telegram", notify: true, fixedUrl: "https://api.telegram.org", secret: ["token", "Bot token"], url: "", extra: [["chat", "Chat ID", "123456789"]], help: "Make a bot with @BotFather and paste its token. For the chat ID, send your bot a message, then open api.telegram.org/bot&lt;token&gt;/getUpdates and copy chat → id." },
@@ -1314,7 +1316,6 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     bazarr: { adds: "Turns on the Subtitles check: missing and advert-only subtitles, wrong names, and Bazarr's own summary.", image: "lscr.io/linuxserver/bazarr:latest", port: 6767, cfg: "bazarr", media: true, guide: "how-to-set-up-bazarr-with-docker-compose/" },
     tautulli: { adds: "Turns on the Unwatched check: films and shows nobody has watched for a long time, with their size.", image: "ghcr.io/tautulli/tautulli:latest", port: 8181, cfg: "tautulli", lsio: false },
     tdarr: { adds: "Adds Convert with Tdarr for old or oversized files, and shows the files Tdarr failed on or never saw.", image: "ghcr.io/haveagitgat/tdarr:latest", port: 8265, cfg: "tdarr", media: true, tdarr: true, guide: "how-to-set-up-tdarr-with-docker-compose/" },
-    sportarr: { adds: "Lets the scans understand sports libraries that Sportarr manages.", image: "sportarr/sportarr:latest", port: 1867, cfg: "sportarr", media: true, lsio: false, guide: "how-to-set-up-sportarr-docker-compose/" },
     prowlarr: { adds: "Adds Prowlarr's own warnings (failing indexers, proxies) to App Health.", image: "lscr.io/linuxserver/prowlarr:latest", port: 9696, cfg: "prowlarr", guide: "prowlarr-the-indexer-hub-for-your-arr-stack/" },
     qbit: { adds: "Downloads: why a torrent is stuck, a Re-announce button, old finished downloads nothing uses, and leftovers in its incomplete folder.", image: "lscr.io/linuxserver/qbittorrent:latest", port: 8080, cfg: "qbittorrent", media: true, env: ["WEBUI_PORT=8080"], extraPorts: ["6881:6881", "6881:6881/udp"], name: "qBittorrent", guide: "how-to-set-up-qbittorrent-with-docker-compose/" },
     transmission: { adds: "Downloads: why a torrent is stuck, a Re-announce button, and leftovers in its incomplete folder.", image: "lscr.io/linuxserver/transmission:latest", port: 9091, cfg: "transmission", media: true, extraPorts: ["51413:51413", "51413:51413/udp"], guide: "how-to-set-up-transmission-with-docker-compose/" },
@@ -1407,8 +1408,8 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     h += `<h2>Radarr and Sonarr</h2>` + SC.arrs.map((e, i) => entryHtml("arrs", e, i)).join("") + `<div class="acts"><button class="b-line" data-add="arrs:radarr">+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">+ Add Sonarr</button></div>`;
     h += `<h2>Optional <small>each one switches on its own checks</small></h2>`;
     h += SC.bazarr.map((e, i) => entryHtml("bazarr", e, i)).join("");
-    for (const k of ["tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"]) if (SC[k]) h += entryHtml(k, SC[k], null);
-    const missing = ["bazarr", "tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
+    for (const k of ["tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"]) if (SC[k]) h += entryHtml(k, SC[k], null);
+    const missing = ["bazarr", "tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget"].filter(k => k === "bazarr" ? !SC.bazarr.length : !SC[k]);
     if (missing.length) h += `<div class="acts">${missing.map(k => `<button class="b-line" data-add="${k}">+ ${APPS[k].t}</button>`).join("")}${SC.bazarr.length ? `<button class="b-line" data-add="bazarr">+ Another Bazarr</button>` : ""}</div>`;
     else if (SC.bazarr.length) h += `<div class="acts"><button class="b-line" data-add="bazarr">+ Another Bazarr</button></div>`;
     h += getHtml(missing);
@@ -1485,7 +1486,7 @@ details.get { margin:14px 0 4px; } details.get > summary { cursor:pointer; color
     el.querySelectorAll("[data-day]").forEach(n => n.onchange = () => { const d = +n.dataset.day, a = SC.schedule.days; if (n.checked) { if (!a.includes(d)) a.push(d); } else SC.schedule.days = a.filter(x => x !== d); SC.schedule.days.sort(); });
     on("setUndo", () => { SC = null; SCmsg = null; Object.keys(TR).forEach(x => delete TR[x]); settingsOpen(); });
     on("setSave", async () => { SCbusy = true; SCmsg = null; settingsDraw();
-      const body = {}; for (const k of ["plex", "tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify", "discord", "telegram", "ntfy", "webhook", "pushover", "email", "arrs", "bazarr", "schedule"]) if (SC[k]) body[k] = SC[k];
+      const body = {}; for (const k of ["plex", "tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify", "discord", "telegram", "ntfy", "webhook", "pushover", "email", "arrs", "bazarr", "schedule"]) if (SC[k]) body[k] = SC[k];
       if (SC.trash_days) body.trash_days = SC.trash_days; if (SC.digest) body.digest = SC.digest;
       if (SC.language != null) body.language = SC.language;
       const r = await api("/api/settings/save", { settings: body }); SCbusy = false;

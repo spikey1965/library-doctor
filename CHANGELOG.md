@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.11 (beta)
+
+- **A cleaner main screen**: the check tiles are now rows, with the icon on the left and the count coloured by how serious it is, and tiles that are all clear are dimmed so the ones with work stand out. The Scans list is a compact timeline (date, items checked, how many to look at). Panels have clearer edges, the tabs are pills with hover and keyboard-focus outlines, and the score is shown once (in the ring). Movement is turned off if your device asks for reduced motion.
+- **Fixed:** the count on the Trash tab was grey and squashed; "1 warnings" on App Health now says "1 warning".
+- **New logo:** a shelf of books with a pulse running through it, the orange one being the book that needs fixing. In the app, the login page, the browser tab and the Unraid icon.
+- README: new screenshots (light and dark) and the tagline "A nightly health check for Plex, Radarr and Sonarr".
+- **Removed: Coming Soon check.** The Agregarr trailer picker (which downloaded trailers from YouTube with yt-dlp), the yt-dlp updater and the rest of the Coming Soon check are gone, along with the `/agregarr-bin` mount and the `deno` package in the image. Agregarr's placeholder files are still recognised and never reported as problems.
+- **Removed: Sportarr support.** The Sportarr card in Settings and its checks are gone. An old Sportarr entry in your settings is ignored.
+
 ## 0.1.10 (beta)
 
 - **The library score in your messages:** the nightly summary (when it has news) and the weekly digest now say the score, how it changed since yesterday or this week, the lowest areas and how many problems keep coming back.

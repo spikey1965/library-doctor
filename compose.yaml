@@ -24,8 +24,6 @@ services:
       # CHANGE: your media folder. Mount it read-write: clean-up moves files into a .library-doctor-trash folder
       # inside it (same disk, so it's instant and nothing is copied).
       - /path/to/media:/media
-      # Optional: Agregarr's config/bin folder, for "Update yt-dlp" and picking Coming Soon trailers
-      # - /path/to/agregarr/config/bin:/agregarr-bin
     read_only: true
     tmpfs:
       - /tmp

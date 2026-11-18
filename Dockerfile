@@ -1,9 +1,8 @@
 # Library Doctor: one small container. Python standard library only, plus
-#   ffmpeg/ffprobe  - file health checks, Convert to MKV, joining trailer video+audio
-#   deno            - the JavaScript runtime yt-dlp needs for YouTube (only used with Agregarr's Coming Soon trailers)
+#   ffmpeg/ffprobe  - file health checks and Convert to MKV
 FROM python:3.12-alpine
 
-RUN apk add --no-cache ffmpeg deno tzdata su-exec openssl
+RUN apk add --no-cache ffmpeg tzdata su-exec openssl
 
 COPY app/ /app/
 # readable by whatever user the container runs as (compose "user:"), writable by nobody

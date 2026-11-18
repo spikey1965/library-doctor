@@ -10,13 +10,9 @@ Checks:
                       expect. "Replace" moves the file (+ its .edl/.ffmeta) to the trash and asks the arr to search again.
   * subtitles       - (stage 3) advert-only subtitle files (Bazarr thinks they're real), subtitles whose name no longer
                       matches the video (Plex can't link them), stray subtitles with no video, + a Bazarr "missing" summary.
-  * coming soon     - (v17) Agregarr Coming Soon placeholders: generic clip instead of the real trailer ("Pick trailer"
-                      downloads the YouTube trailer you choose over it), wrong library, stale Plex entries, leftovers after
-                      the real film arrives, and the age of the yt-dlp Agregarr uses ("Update yt-dlp").
   * quality & space - (v18) space hogs (GB an hour far above the usual for that library + resolution), .ts/.avi etc.
                       ("Convert to MKV" = lossless ffmpeg remux, old file to the trash), episodes far below their season.
   * unwatched       - (v18) Tautulli: not played in a year (or since history began), biggest first; never deletes.
-  * Sportarr        - (v18) duplicates prefer the file Sportarr tracks; Sportarr files gone from disk; sports files it doesn't know.
   * virus scan      - (stage 3) programs/scripts/archives in the libraries, "videos" that are really programs or archives,
                       and ClamAV (clamd on 127.0.0.1:3310, /media -> /scandir) on every file changed since the last scan.
                       "Full scan now" runs clamd MULTISCAN over the whole library in the background.
@@ -35,7 +31,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.10"
+APP_VERSION = "0.1.11"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -62,12 +58,10 @@ def load_secrets():
     return {}                                                 # first run: setup mode until Plex + one arr are saved
 
 def normalize(cfg):
-    sp = cfg.get("sportarr")
-    if isinstance(sp, dict) and sp.get("container_root") and not sp.get("paths"):
-        sp["paths"] = [{"from": sp.pop("container_root"), "to": sp.pop("media_root", None) or MEDIA_ROOT}]
+    cfg.pop("sportarr", None)                                 # v0.1.11: Sportarr support removed
     # optional fields the rest of the code relies on: the browser address falls back to the app's own address
     if isinstance(cfg.get("plex"), dict): cfg["plex"]["public"] = cfg["plex"].get("public") or "https://app.plex.tv"
-    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("prowlarr", "Prowlarr"), ("gotify", "Gotify")):
+    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("prowlarr", "Prowlarr"), ("gotify", "Gotify")):
         e = cfg.get(k)
         if isinstance(e, dict): e["public"] = e.get("public") or e.get("url", ""); e.setdefault("name", name); e.setdefault("key", e.get("key", ""))
     for k in ("arrs", "bazarr"):
@@ -300,7 +294,7 @@ def strip_placeholders(row):
     return row
 
 def plex_paged(path, **params):
-    raw = params.pop("_raw", False)              # True: keep Agregarr placeholders (only the Coming Soon check wants them)
+    raw = params.pop("_raw", False)              # True: keep Agregarr placeholders
     start = 0
     while True:
         p = S["plex"]
@@ -529,7 +523,7 @@ def recommend(vers, tracked=()):
                 if any(best["height"] > o["height"] for o in other): why.append("higher resolution")
                 if any(best["duration"] - o["duration"] > 60000 for o in other): why.append("longest (%s)" % mins(best["duration"]))
                 if good_box(best) and any(not good_box(o) for o in other): why.append("better file type (%s)" % os.path.splitext(best["path"])[1][1:].upper())
-                if best["tracked"]: why.append("the file Radarr/Sonarr/Sportarr tracks")
+                if best["tracked"]: why.append("the file Radarr/Sonarr tracks")
                 if not why: why.append("best quality of the copies")
             elif fallback:
                 why.append("the biggest copy, but every copy looks broken: check it plays")
@@ -549,7 +543,7 @@ def recommend(vers, tracked=()):
             elif good_box(best) and not good_box(v): r = "Same quality, but a .%s file (the %s is kept%s)" % (
                 os.path.splitext(v["path"])[1][1:].lower(), os.path.splitext(best["path"])[1][1:].upper(),
                 "; Sonarr/Radarr will switch to it on the rescan" if v["tracked"] else "")
-            elif best["tracked"] and not v["tracked"]: r = "Same quality; not the file Radarr/Sonarr/Sportarr tracks"
+            elif best["tracked"] and not v["tracked"]: r = "Same quality; not the file Radarr/Sonarr tracks"
             else: r = "Same quality as the one kept"
             if (v.get("links") or 1) > 1: r += ". It's hardlinked (probably still seeding), so removing it frees no space until the torrent is removed"
             v["action"], v["reason"] = "remove", r
@@ -688,9 +682,6 @@ def scan():
         STATE["step"] = "Reading Radarr and Sonarr"
         movies, series, arr_files = load_arrs()
         trashed = in_trash()
-        try: sport, sport_roots = sportarr_files()
-        except Exception as e:
-            log("sportarr failed: %r" % e); sport, sport_roots = {}, []
         ep_files = {}   # (arr name, series id) -> set of episode file paths Sonarr tracks (fetched only for duplicates)
         def sonarr_tracked(a, sid):
             k = (a["name"], sid)
@@ -720,7 +711,7 @@ def scan():
                         "%s S%02dE%02d" % (m.get("grandparentTitle"), int(m.get("parentIndex", 0) or 0), int(m.get("index", 0) or 0))
                 g = guids(m)
                 medias = m.get("Media", [])
-                links, refs, tracked = [plex_link(m["ratingKey"])], [], set(sport)
+                links, refs, tracked = [plex_link(m["ratingKey"])], [], set()
                 if kind == "movie":
                     for a, it in lib_movies.get(g.get("tmdb"), []):
                         links.append(arr_link(a, it, "movie")); refs.append({"arr": a["name"], "kind": "movie", "id": it["id"]})
@@ -838,10 +829,6 @@ def scan():
             issues += meta_scan(sections, movies, series, arr_files)
         except Exception as e:
             log("metadata check failed: %r" % e)
-        try:
-            issues += coming_scan(sections, movies, series)
-        except Exception as e:
-            log("coming soon check failed: %r" % e)
         sizes = {}
         try:
             q, sizes = quality_scan(sections, movies, series, trashed); issues += q
@@ -862,10 +849,6 @@ def scan():
             issues += unwatched_scan(sections, sizes)
         except Exception as e:
             log("unwatched check failed: %r" % e)
-        try:
-            issues += sports_scan(sections, sport, sport_roots, trashed)
-        except Exception as e:
-            log("sportarr check failed: %r" % e)
         STATE.update(step="Checking Radarr files", progress=0.95)
         for a, m, path, size in arr_files:
             if not os.path.exists(path) and path not in trashed:
@@ -1399,7 +1382,7 @@ def purge_recycle(ids=None):
 
 # ---------------- metadata gaps (stage 2) ----------------
 GENERIC = re.compile(r"(?:episode|episodio|folge|\u00e9pisode)\s*#?\d+(?:\.\d+)?|tba|tbd|", re.I)
-STD_AGENTS = ("tv.plex.agents.movie", "tv.plex.agents.series")   # custom agents (Sportarr) use their own ids
+STD_AGENTS = ("tv.plex.agents.movie", "tv.plex.agents.series")   # custom agents use their own ids
 
 def is_generic(t): return bool(GENERIC.fullmatch((t or "").strip()))
 
@@ -2975,243 +2958,8 @@ def nightly():
             except Exception as e: log("tdarr followup failed: %r" % e)
         time.sleep(60)
 
-# ---------------- Coming Soon placeholders (v17) ----------------
-# Agregarr makes a placeholder per upcoming film/show in /media/placeholder/<lib>/ so it shows in Plex. Each should be the
-# real YouTube trailer; if the download fails Agregarr drops in a generic 30 s clip. Library Doctor checks:
-#   generic   - still the generic clip -> "Pick trailer": top YouTube results, you choose, it downloads over the clip in place
-#   wronglib  - placeholder in a library whose Radarr/Sonarr doesn't have it, while another one does (collection set to All Servers / linked)
-#   stale     - Plex lists a placeholder whose file is gone (Plex keeps items from an EMPTY library folder: disk-dropped-off safety)
-#   arrived   - the real film/show arrived over a day ago but the placeholder is still there -> Remove (to the trash)
-#   ytdlp     - the yt-dlp Agregarr uses (its config/bin, mounted here as AG_BIN) is old -> "Update yt-dlp" (GitHub release, sha256 checked)
-AG_BIN = os.environ.get("LD_AGREGARR_BIN", "/agregarr-bin")
-YTDLP = os.path.join(AG_BIN, "yt-dlp")
-GENERIC_SIZE = 6200828                                    # Agregarr's built-in fallback clip
-YTDLP_OLD_DAYS = int(os.environ.get("LD_YTDLP_OLD_DAYS", "60"))
-TRAILER_TMP = os.path.join(PLACEHOLDER_ROOT, ".library-doctor-tmp")   # dot folder: Plex and the scans skip it; same dataset -> atomic replace
-TRAILER_FMT = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]"   # same as Agregarr
-TRAILER_LOCK, YTDLP_LOCK = threading.Lock(), threading.Lock()
-VID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
-YT_ENV = {"HOME": "/tmp", "DENO_DIR": "/tmp/deno", "XDG_CACHE_HOME": "/tmp/cache"}
-_YT = {"mtime": None, "version": None, "latest": None, "latest_t": 0.0}
-
-def ytdlp(args, timeout=120, exe=None):
-    return subprocess.run(["python3", exe or YTDLP, "--no-update"] + args, capture_output=True, text=True,
-                          timeout=timeout, env=dict(os.environ, **YT_ENV))
-
-def _ver_days(v):
-    try: return (datetime.now() - datetime.strptime(".".join(v.split(".")[:3]), "%Y.%m.%d")).days
-    except Exception: return None
-
-def ytdlp_status(refresh=False):
-    try: mt = os.path.getmtime(YTDLP)
-    except OSError: return {"ok": False, "error": "There's no yt-dlp in Agregarr's config/bin folder, so Agregarr uses the old one inside its image.",
-                            "writable": os.access(AG_BIN, os.W_OK)}
-    if _YT["mtime"] != mt:
-        try:
-            r = ytdlp(["--version"], timeout=60)
-            v = r.stdout.strip().splitlines()[-1] if r.returncode == 0 and r.stdout.strip() else None
-        except Exception: v = None
-        _YT.update(mtime=mt, version=v)
-    v = _YT["version"]
-    if not v: return {"ok": False, "error": "yt-dlp is in Agregarr's bin folder but won't run.", "writable": os.access(AG_BIN, os.W_OK)}
-    if refresh and time.time() - _YT["latest_t"] > 6 * 3600:
-        _YT["latest_t"] = time.time()
-        try: _YT["latest"] = http("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest", {"User-Agent": "library-doctor"}, timeout=20).get("tag_name")
-        except Exception as e: log("yt-dlp latest check failed: %r" % e)
-    lt = _YT["latest"]
-    return {"ok": True, "version": v, "days": _ver_days(v), "latest": lt, "newer": bool(lt and lt > v),
-            "writable": os.access(AG_BIN, os.W_OK), "old_days": YTDLP_OLD_DAYS}
-
-def ytdlp_update():
-    if not YTDLP_LOCK.acquire(blocking=False): return {"ok": False, "error": "An update is already running."}
-    try:
-        if not os.access(AG_BIN, os.W_OK): return {"ok": False, "error": "Library Doctor can't write to Agregarr's bin folder."}
-        old = ytdlp_status().get("version")
-        def get(name):
-            req = urllib.request.Request("https://github.com/yt-dlp/yt-dlp/releases/latest/download/" + name, headers={"User-Agent": "library-doctor"})
-            with urllib.request.urlopen(req, timeout=180) as r: return r.read()
-        want = next((l.split()[0] for l in get("SHA2-256SUMS").decode().splitlines() if l.split()[-1:] == ["yt-dlp"]), None)
-        if not want: return {"ok": False, "error": "yt-dlp wasn't in the release's checksum list, so nothing was changed."}
-        blob = get("yt-dlp")
-        if hashlib.sha256(blob).hexdigest() != want: return {"ok": False, "error": "The download didn't match its checksum, so nothing was changed."}
-        tmp = os.path.join(AG_BIN, ".yt-dlp.new")
-        with open(tmp, "wb") as f: f.write(blob)
-        os.chmod(tmp, 0o755)
-        r = ytdlp(["--version"], timeout=60, exe=tmp)
-        new = r.stdout.strip().splitlines()[-1] if r.returncode == 0 and r.stdout.strip() else ""
-        if not new:
-            os.unlink(tmp); return {"ok": False, "error": "The new yt-dlp wouldn't run, so the old one was kept."}
-        if os.path.exists(YTDLP): shutil.copy2(YTDLP, os.path.join(AG_BIN, "yt-dlp.prev"))
-        os.replace(tmp, YTDLP)
-        _YT.update(mtime=None, latest=new, latest_t=time.time())
-        event("coming", "Updated yt-dlp %s → %s (Agregarr uses it for Coming Soon trailers)." % (old or "?", new))
-        return {"ok": True, "old": old, "new": new}
-    except Exception as e:
-        return {"ok": False, "error": "Update failed: %s" % e}
-    finally:
-        YTDLP_LOCK.release()
-
-def _ph_root(f, ph_locs):
-    return next((l for l in ph_locs if f.startswith(l + "/")), None)
-
-def _real_age_days(kind, have):
-    """Days since the real copy arrived (Radarr movieFile.dateAdded / newest Sonarr episode file), None if none."""
-    ages = []
-    for a, it in have:
-        try:
-            if kind == "movie":
-                mf = it.get("movieFile") or {}
-                if it.get("hasFile") and mf.get("path") and os.path.exists(mf["path"]):
-                    ages.append(mf.get("dateAdded"))
-            elif ((it.get("statistics") or {}).get("episodeFileCount") or 0) > 0:
-                ages += [x.get("dateAdded") for x in arr(a, "/episodefile?seriesId=%d" % it["id"])]
-        except Exception as e:
-            log("arrived check %s: %r" % (a["name"], e))
-    ages = [datetime.fromisoformat(x.replace("Z", "+00:00")).replace(tzinfo=None) for x in ages if x]
-    return (datetime.utcnow() - min(ages)).total_seconds() / 86400 if ages else None
-
-def _coming_item(sec, ph_locs, owners, rk, title, name, year, f, ext, real_files, pool):
-    lib, kind, key = sec["title"], sec["type"], sec["key"]
-    links = [plex_link(rk)] if rk else []
-    root = _ph_root(f, ph_locs) or os.path.dirname(f)
-    base_d = {"path": f, "section": key, "root": root}
-    mk = lambda k, sev, text, note, fixes, **x: dict(id=iid("coming", k, lib, f), chk="coming", sev=sev, title=title, library=lib,
-                                                     detail=dict(base_d, kind=k, text=text, note=note, fixes=fixes, **x), links=links)
-    if not os.path.exists(f):
-        try: empty = not [n for n in os.listdir(root) if not n.startswith(".")]
-        except OSError: empty = True
-        if empty:
-            return [mk("stale", "att", "Plex still lists this Coming Soon placeholder, but its file is gone.",
-                       "Plex never removes anything from a library folder that's completely empty (in case a disk has dropped off), so it stays until Agregarr makes another placeholder in %s. It's harmless." % root.replace(MEDIA_ROOT, "/media"), [])]
-        return [mk("stale", "att", "Plex still lists this Coming Soon placeholder, but its file is gone.", "Refresh in Plex rescans the placeholder folder so it drops off.", ["refresh"])]
-    out, have = [], pool.get(str(ext), []) if ext else []
-    own_names = {a["name"] for a in owners}
-    mine = [(a, it) for a, it in have if a["name"] in own_names]
-    if owners and have and not mine:
-        others = sorted({a["name"] for a, _ in have})
-        out.append(mk("wronglib", "att", "This placeholder is in %s, but it's for something %s has, not %s." % (lib, " / ".join(others), " / ".join(sorted(own_names))),
-                      "In Agregarr, this library's Coming Soon collection is probably linked to another one or set to All Servers. Set its Radarr/Sonarr server to %s and unlink it. Agregarr removes this one at its next sync." % " / ".join(sorted(own_names)), []))
-        return out
-    age = _real_age_days(kind, mine) if mine else None
-    if age is None and real_files:
-        try: age = (time.time() - max(os.path.getmtime(x) for x in real_files)) / 86400
-        except OSError: pass
-    if age is not None and age >= 1:
-        when = "%d day%s ago" % (age, "" if int(age) == 1 else "s") if age < 60 else "a while ago"
-        out.append(mk("arrived", "att", "The real %s arrived %s, but its Coming Soon placeholder is still there." % ("film" if kind == "movie" else "show", when),
-                      "Agregarr normally removes placeholders by itself at its next collection sync. Remove moves the placeholder to the trash.", ["remove"]))
-    elif os.path.getsize(f) == GENERIC_SIZE:
-        q = "%s %s official trailer" % (name or title, year or "")
-        out.append(mk("generic", "att", "It plays Agregarr's generic 30-second clip, not the real trailer.",
-                      "The trailer download failed when Agregarr made it: usually an old yt-dlp, or YouTube had no trailer under 3½ minutes. Pick trailer shows the top YouTube results to choose from.",
-                      ["trailer"], query=re.sub(r"\s+", " ", q).strip(), media="movie" if kind == "movie" else "tv"))
-    return out
-
-def coming_scan(sections, movies, series):
-    out = []
-    STATE["step"] = "Checking Coming Soon placeholders"
-    st = ytdlp_status(refresh=True)
-    if os.path.isdir(PLACEHOLDER_ROOT):
-        if not os.path.isdir(AG_BIN): pass                  # Agregarr's config/bin isn't mounted: the yt-dlp part is switched off
-        elif not st.get("ok"):
-            out.append(dict(id=iid("coming", "ytdlp"), chk="coming", sev="att", title="yt-dlp for Coming Soon trailers", library="Agregarr",
-                            detail={"kind": "ytdlp", "text": st.get("error", ""), "note": "Without a current yt-dlp, new placeholders get the generic clip.",
-                                    "fixes": ["ytdlp"] if st.get("writable") else []}, links=[]))
-        elif (st["days"] or 0) > YTDLP_OLD_DAYS or (st["newer"] and (st["days"] or 0) > 30):
-            out.append(dict(id=iid("coming", "ytdlp"), chk="coming", sev="att", title="yt-dlp is %d days old" % st["days"], library="Agregarr",
-                            detail={"kind": "ytdlp", "text": "Agregarr downloads Coming Soon trailers with yt-dlp %s.%s" % (st["version"], " Version %s is out." % st["latest"] if st["newer"] else ""),
-                                    "note": "YouTube regularly breaks older versions, and then every new placeholder gets the generic clip. Update yt-dlp fetches the latest release and checks its checksum. Agregarr doesn't need a restart.",
-                                    "fixes": ["ytdlp"] if st.get("writable") else []}, links=[]))
-    for sec in sections:
-        kind, key = sec["type"], sec["key"]
-        locs = [l["path"].rstrip("/") for l in sec.get("Location", [])]
-        ph_locs = [l for l in locs if l.startswith(PLACEHOLDER_ROOT + "/")]
-        if not ph_locs: continue
-        owners = [a for a in S.get("arrs", []) if a["kind"] == ("radarr" if kind == "movie" else "sonarr") and any(r in locs for r in a.get("roots", []))]
-        seen = set()
-        try:
-            if kind == "movie":
-                for m in plex_paged("/library/sections/%s/all" % key, type=1, includeGuids=1, _raw=True):
-                    parts = [pt.get("file") for md in m.get("Media", []) for pt in md.get("Part", []) if pt.get("file")]
-                    ph = [x for x in parts if is_placeholder(x)]
-                    if not ph: continue
-                    real = [x for x in parts if not is_placeholder(x) and os.path.exists(x)]
-                    for f in ph:
-                        seen.add(f)
-                        out += _coming_item(sec, ph_locs, owners, m["ratingKey"], "%s (%s)" % (m.get("title"), m.get("year", "?")), m.get("title"), m.get("year"),
-                                            f, guids(m).get("tmdb"), real, movies)
-            else:
-                shows = {sh["ratingKey"]: sh for sh in plex_paged("/library/sections/%s/all" % key, type=2, includeGuids=1, _raw=True)}
-                for e in plex_paged("/library/sections/%s/all" % key, type=4, _raw=True):
-                    for f in [pt.get("file") for md in e.get("Media", []) for pt in md.get("Part", []) if pt.get("file")]:
-                        if not is_placeholder(f): continue
-                        seen.add(f); sh = shows.get(e.get("grandparentRatingKey"), {})
-                        nm = sh.get("title") or e.get("grandparentTitle")
-                        out += _coming_item(sec, ph_locs, owners, sh.get("ratingKey") or e["ratingKey"], nm, nm, sh.get("year"), f, guids(sh).get("tvdb"), [], series)
-        except Exception as ex:
-            log("coming soon check %s failed: %r" % (sec["title"], ex))
-        for root in ph_locs:                                  # clips on disk that Plex hasn't picked up yet
-            for dp, dn, fn in os.walk(root):
-                dn[:] = [d for d in dn if not d.startswith(".")]
-                for n in fn:
-                    f = os.path.join(dp, n)
-                    if f in seen or not n.lower().endswith(".mp4"): continue
-                    try:
-                        if os.path.getsize(f) != GENERIC_SIZE: continue
-                    except OSError: continue
-                    folder = os.path.relpath(f, root).split("/")[0]
-                    mt = re.match(r"^(.*?)\s*\((\d{4})\)", folder)
-                    out += _coming_item(sec, ph_locs, [], None, folder, mt.group(1) if mt else folder, mt.group(2) if mt else "", f, None, [], {})
-    return out
-
-def _coming_row(issue_id):
-    with db() as c:
-        row = c.execute("SELECT * FROM issues WHERE id=? AND chk='coming'", (issue_id,)).fetchone()
-    return (row, json.loads(row["detail"])) if row else (None, None)
-
-def _safe_placeholder(p):
-    rp = os.path.realpath(p or "")
-    return rp.startswith(PLACEHOLDER_ROOT + "/") and not rp.startswith(TRAILER_TMP + "/") and os.path.isfile(rp)
-
-def trailer_search(issue_id, q=None):
-    row, d = _coming_row(issue_id)
-    if not row or d.get("kind") != "generic": return {"ok": False, "error": "That placeholder isn't in the last scan any more. Scan again first."}
-    q = re.sub(r"\s+", " ", str(q or d.get("query") or row["title"]))[:120].strip()
-    try:
-        r = ytdlp(["--flat-playlist", "--no-warnings", "--print", "%(id)s\t%(duration)s\t%(channel)s\t%(title)s", "ytsearch8:" + q], timeout=90)
-    except Exception as e:
-        return {"ok": False, "error": "YouTube search failed: %s" % e}
-    res = []
-    for line in r.stdout.splitlines():
-        p = line.split("\t", 3)
-        if len(p) == 4 and VID_RE.match(p[0]):
-            try: dur = int(float(p[1]))
-            except ValueError: dur = 0
-            if dur and dur > 600: continue                   # not a trailer
-            res.append({"id": p[0], "secs": dur, "channel": "" if p[2] == "NA" else p[2], "title": p[3]})
-    if not res: return {"ok": False, "error": "YouTube didn't return anything for “%s”. Try other words." % q, "q": q}
-    return {"ok": True, "q": q, "results": res[:6]}
-
-def trailer_use(issue_id, vid):
-    vid = str(vid or "")
-    if not VID_RE.match(vid): return {"ok": False, "error": "That isn't a YouTube video id."}
-    row, d = _coming_row(issue_id)
-    if not row or d.get("kind") != "generic": return {"ok": False, "error": "That placeholder isn't in the last scan any more. Scan again first."}
-    f = d["path"]
-    if not _safe_placeholder(f): return {"ok": False, "error": "The placeholder isn't where it was. Scan again."}
-    if os.path.getsize(f) != GENERIC_SIZE: return {"ok": False, "error": "That placeholder isn't the generic clip any more."}
-    if not TRAILER_LOCK.acquire(blocking=False): return {"ok": False, "error": "Another trailer is downloading. Try again in a minute."}
-    try:                                              # the lock is handed to the download thread, which releases it
-        with db() as c:
-            c.execute("DELETE FROM done WHERE issue_id=? AND status='checking'", (issue_id,))
-            done_id = c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                                (issue_id, row["title"], row["library"], "", "[]", "[]", row["links"], now_iso(), "checking", "Downloading the trailer…", "coming")).lastrowid
-    except Exception:
-        TRAILER_LOCK.release(); raise
-    threading.Thread(target=_trailer_dl, args=(done_id, issue_id, row["title"], f, vid, d.get("section")), daemon=True).start()
-    return {"ok": True}
-
 def _probe(p):
+    """(duration seconds, video height) via ffprobe; (0.0, 0) if it can't be read. Used by Convert to MKV."""
     try:
         r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height:format=duration", "-of", "json", p],
                            capture_output=True, text=True, timeout=60)
@@ -3219,74 +2967,7 @@ def _probe(p):
         return float((j.get("format") or {}).get("duration") or 0), int(((j.get("streams") or [{}])[0]).get("height") or 0)
     except Exception: return 0.0, 0
 
-def _trailer_dl(done_id, issue_id, title, f, vid, section):
-    status, note = "warn", ""
-    try:
-        try:
-            os.makedirs(TRAILER_TMP, exist_ok=True)
-            tmp = os.path.join(TRAILER_TMP, issue_id + ".mp4")
-            for n in os.listdir(TRAILER_TMP):
-                if n.startswith(issue_id): os.unlink(os.path.join(TRAILER_TMP, n))
-            r = ytdlp(["--no-playlist", "--no-warnings", "-q", "-f", TRAILER_FMT, "--merge-output-format", "mp4", "--match-filter", "duration < 600",
-                       "-o", tmp, "https://www.youtube.com/watch?v=" + vid], timeout=600)
-            dur, h = _probe(tmp) if os.path.isfile(tmp) else (0.0, 0)
-            if r.returncode != 0 or dur < 20:
-                err = (r.stderr.strip().splitlines() or ["no video file came back"])[-1]
-                note = "The download didn't work, so the generic clip is still there: %s" % err[:200]
-            elif not _safe_placeholder(f) or os.path.getsize(f) != GENERIC_SIZE:
-                note = "The placeholder changed while downloading (Agregarr may have replaced or removed it), so it was left alone."
-            else:
-                size = os.path.getsize(tmp)
-                os.replace(tmp, f)
-                plex_refresh_folder(section, os.path.dirname(f))
-                status = "ok"
-                note = "✓ Real trailer in place: %d:%02d, %s, %s. Plex picks it up after its folder scan." % (dur // 60, dur % 60, "%dp" % h if h else "video", human(size))
-                with db() as c: c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
-                event("coming", "%s: swapped the generic Coming Soon clip for the real trailer (youtu.be/%s)." % (title, vid))
-            for n in os.listdir(TRAILER_TMP):
-                if n.startswith(issue_id): os.unlink(os.path.join(TRAILER_TMP, n))
-        except Exception as e:
-            note = "The download failed: %s" % e
-    finally:
-        TRAILER_LOCK.release()
-    with db() as c:
-        c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (status, note, now_iso(), done_id))
-    log("trailer %s: %s" % (done_id, note))
-
-def coming_fix(issue_id, how):
-    row, d = _coming_row(issue_id)
-    if not row: return {"ok": False, "error": "That one isn't in the last scan any more. Scan again first."}
-    if how not in d.get("fixes", []): return {"ok": False, "error": "That fix doesn't apply here."}
-    moved, tids, status = [], [], "ok"
-    if how == "ytdlp":
-        r = ytdlp_update()
-        if not r.get("ok"): return r
-        note = "✓ yt-dlp updated %s → %s. New Coming Soon placeholders use it straight away." % (r.get("old") or "?", r["new"])
-    elif how == "refresh":
-        if not plex_refresh_folder(d["section"], d["root"]): return {"ok": False, "error": "Plex didn't answer."}
-        note = "Asked Plex to rescan %s. Scan again in a minute to check it's gone." % d["root"].replace(MEDIA_ROOT, "/media")
-    elif how == "remove":
-        src = d["path"]
-        if not _safe_placeholder(src): return {"ok": False, "error": "The placeholder isn't where it was. Scan again."}
-        with MOVE_LOCK:
-            dst = os.path.join(TRASH_DIR, datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
-            os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
-            with db() as c:
-                tids.append(c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
-                                      (issue_id, row["title"], src, dst, size, "Coming Soon placeholder (film arrived)", now_iso())).lastrowid)
-            moved.append(src)
-        plex_refresh_folder(d["section"], os.path.dirname(src))
-        note = "Moved the placeholder to the trash. Plex drops it after its folder scan."
-        event("coming", "%s: moved the leftover Coming Soon placeholder to the trash." % row["title"])
-    else:
-        return {"ok": False, "error": "Unknown fix."}
-    with db() as c:
-        c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                  (issue_id, row["title"], row["library"], "", json.dumps(moved), json.dumps(tids), row["links"], now_iso(), status, note, "coming"))
-        c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
-    return {"ok": True}
-
-# ---------------- quality & space, unwatched (Tautulli), Sportarr (v18) ----------------
+# ---------------- quality & space, unwatched (Tautulli) (v18) ----------------
 TIER = {"sd": 0, "480": 0, "576": 1, "720": 2, "1080": 3, "2k": 3, "4k": 4}
 RES_LABEL = {"sd": "SD", "480": "480p", "576": "576p", "720": "720p", "1080": "1080p", "2k": "2K", "4k": "4K"}
 TIER_LABEL = {0: "SD", 1: "576p", 2: "720p", 3: "1080p", 4: "4K"}
@@ -3648,42 +3329,6 @@ def unwatched_scan(sections, sizes):
                                     human(total), "in the last year" if full_year else "since %s (when Tautulli started keeping history)" % since_txt, UNWATCHED_MIN_AGE),
                                 "note": "Nothing is ever deleted from here. Keep hides one for %s (or for good, from the Kept list). To free space, delete in Radarr/Sonarr so they don't download it again." % ("about 6 months" if KEEP_DAYS == 182 else "%d days" % KEEP_DAYS)},
                         links=[{"label": "Open Tautulli", "url": t.get("public", "")}] if t.get("public") else []))
-    return out
-
-def sportarr_files():
-    """{path as Library Doctor sees it: event} for every Sportarr event with a file, + Sportarr's root folders."""
-    sp = S.get("sportarr")
-    if not sp: return {}, []
-    fix = lambda p: to_local(p, sp)
-    hdr = {"X-Api-Key": sp["key"]}
-    files = {fix(e["filePath"]): e for e in http(sp["url"].rstrip("/") + "/api/events", hdr, timeout=90) if e.get("hasFile") and e.get("filePath")}
-    roots = [fix(r["path"].rstrip("/")) for r in http(sp["url"].rstrip("/") + "/api/rootfolder", hdr, timeout=30)]
-    return files, roots
-
-def sports_scan(sections, sport, roots, trashed):
-    sp = S.get("sportarr") or {}
-    out, link = [], ([{"label": "Open Sportarr", "url": sp["public"]}] if sp.get("public") else [])
-    for f, e in sport.items():
-        if not os.path.exists(f) and f not in trashed:
-            out.append(dict(id=iid("sportmissing", f), chk="missing", sev="bad", title="%s: %s" % (e.get("leagueName") or "Sport", e.get("title")), library="Sportarr",
-                            detail={"text": "Sportarr thinks it has this file, but it isn't on the disk.", "path": f,
-                                    "note": "Sportarr will look for it again if the event is monitored. A Plex scan drops it from Plex.", "size": human(e.get("fileSize"))},
-                            links=link))
-    for sec in sections:
-        locs = [l["path"].rstrip("/") for l in sec.get("Location", [])]
-        if not any(l == r or l.startswith(r + "/") or r.startswith(l + "/") for l in locs for r in roots): continue
-        for m in plex_paged("/library/sections/%s/all" % sec["key"], type=4 if sec["type"] == "show" else 1):
-            for md in m.get("Media", []):
-                for p in md.get("Part", []):
-                    f = p.get("file")
-                    if not f or f in sport or f in trashed or not os.path.exists(f): continue
-                    if not any(f.startswith(r + "/") for r in roots): continue
-                    title = "%s: %s" % (m.get("grandparentTitle") or sec["title"], m.get("title") or os.path.basename(f))
-                    out.append(dict(id=iid("meta", "notsportarr", sec["title"], f), chk="meta", sev="att", title=title, library=sec["title"],
-                                    detail={"kind": "notsportarr", "rk": m["ratingKey"], "path": f, "fixes": [], "section": sec["key"],
-                                            "text": "Sportarr doesn't know this file, so it shows as missing there and won't be upgraded or replaced.",
-                                            "note": "Import it in Sportarr (Wanted → Manual Import, pick this file), or Ignore if you keep it by hand."},
-                                    links=[plex_link(m["ratingKey"])] + link))
     return out
 
 # ---------------- smaller copy for space hogs (v19) ----------------
@@ -5079,7 +4724,7 @@ def session_end(tok, everyone=False):
 
 # ---------------- settings page ----------------
 SECRET_FIELDS = ("token", "key", "password")
-SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
+SINGLE = ("plex", "tautulli", "tdarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
 LISTS = ("arrs", "bazarr")
 
 def settings_public():
@@ -5149,9 +4794,6 @@ def settings_test(kind, e):
         if kind == "prowlarr":
             r = http(u + "/api/v1/system/status", {"X-Api-Key": e.get("key", "")}, timeout=15)
             return {"ok": True, "msg": "Connected to Prowlarr %s." % r.get("version", "")}
-        if kind == "sportarr":
-            http(u + "/api/rootfolder", {"X-Api-Key": e.get("key", "")}, timeout=15)
-            return {"ok": True, "msg": "Connected to Sportarr."}
         if kind == "qbit":
             op = _qbit(e)
             v = op.open(u.rstrip("/") + "/api/v2/app/version", timeout=15).read().decode().strip()
@@ -5215,9 +4857,6 @@ def _samples(kind, e):
     elif kind == "tdarr":
         req = urllib.request.Request(u + "/api/v2/cruddb", data=json.dumps({"data": {"collection": "LibrarySettingsJSONDB", "mode": "getAll"}}).encode(), headers={"Content-Type": "application/json", "x-api-key": e.get("key", "")})
         with urllib.request.urlopen(req, timeout=30) as r: out = [l["folder"] for l in json.loads(r.read().decode()) if l.get("folder")]
-    elif kind == "sportarr":
-        h = {"X-Api-Key": e["key"]}
-        out = [x["path"] for x in http(u + "/api/rootfolder", h, timeout=20) if x.get("path")]
     return out
 
 # ---------------- folder check (v0.1.7) ----------------
@@ -5239,7 +4878,7 @@ def _fc_apps():
         if a.get("url"): out.append(("arrs", i, a, a.get("name") or a.get("kind", "").title(), True))
     for i, b in enumerate(S.get("bazarr") or []):
         if b.get("url"): out.append(("bazarr", i, b, b.get("name") or "Bazarr", False))
-    for k, n in (("tdarr", "Tdarr"), ("sportarr", "Sportarr")):
+    for k, n in (("tdarr", "Tdarr"),):
         if (S.get(k) or {}).get("url"): out.append((k, None, S[k], n, False))
     return out
 
@@ -5437,7 +5076,7 @@ TDARR_SAVE_GUESS = 0.30          # Tdarr's HEVC conversions here have saved 28-3
 AREAS = [("integrity", "File integrity", 0.30, 25.0), ("quality", "Quality", 0.20, 4.0), ("sync", "App sync", 0.20, None),
          ("metadata", "Metadata", 0.15, 6.0), ("dupes", "Duplicates", 0.15, 10.0)]
 SEV_W = {"bad": 1.0, "att": 0.6}
-SYNC_KINDS = ("notarr", "notsportarr", "gaps")
+SYNC_KINDS = ("notarr", "gaps")
 
 def area_of(chk, kind):
     if chk == "unwatched": return None
@@ -5547,7 +5186,7 @@ def recurring(days=90, limit=8):
         key = (chk, (title or "").strip().lower(), library or "")          # one row per problem, however it was spotted
         r = rec.setdefault(key, {"title": title, "library": library, "chk": chk, "times": 0, "why": set(), "last": "", "ids": set()})
         r["times"] = max(r["times"], n); r["why"].add(why); r["last"] = max(r["last"], last or ""); r["ids"].add(issue_id)
-    SUMMARY = ("wanted", "tdarrmissed", "tdarrfail", "incomplete", "ytdlp")     # running totals, not one problem: they come back by design
+    SUMMARY = ("wanted", "tdarrmissed", "tdarrfail", "incomplete")     # running totals, not one problem: they come back by design
     def skip(issue_id, kind=""):
         if issue_id in ign or kind in SUMMARY: return True
         o = openi.get(issue_id)
@@ -5730,10 +5369,9 @@ def state():
         log("recycle list failed: %r" % e)
     virus = {"clam": clam_status(cached=True), "last": kv_get("virus_last_incremental"), "full": kv_get("virus_full_last"),
              "full_running": VIRUS_LOCK.locked(), "full_started": (kv_get("virus_full_running") or {}).get("at")}
-    coming = {"ytdlp": ytdlp_status(), "busy": TRAILER_LOCK.locked(), "updating": YTDLP_LOCK.locked()}
     try: space = space_forecast()
     except Exception as e: space = None; log("space forecast failed: %r" % e)
-    return {"space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "coming": coming, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
+    return {"space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
             "scan_hour": sched()[0], "scan_minute": sched()[1], "scan_days": sched()[2], "keep_days": KEEP_DAYS, "stats": stats(), "score": library_score(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
             "configured": configured(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT, "security_blocked": security_info()["blocked"],
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
@@ -5918,18 +5556,6 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, plex_backup())
             if path == "/api/queuerefresh":
                 return self.send(200, {"ok": True, "cards": queue_refresh()})
-            if path == "/api/comingfix":
-                ids = body.get("ids") or [body.get("id")]
-                how = str(body.get("how", ""))
-                res = [dict(coming_fix(str(i)[:32], how), id=i) for i in ids if i][:100]
-                return self.send(200, {"ok": any(r.get("ok") for r in res), "started": sum(1 for r in res if r.get("ok")),
-                                       "errors": [r["error"] for r in res if not r.get("ok")]})
-            if path == "/api/trailer/search":
-                return self.send(200, trailer_search(str(body.get("id", ""))[:32], body.get("q")))
-            if path == "/api/trailer/use":
-                return self.send(200, trailer_use(str(body.get("id", ""))[:32], body.get("vid")))
-            if path == "/api/ytdlp/update":
-                return self.send(200, ytdlp_update())
             if path == "/api/gotifytest":
                 return self.send(200, notify("Library Doctor: test", "This is a test from Library Doctor. After each nightly scan you get one message like this, but only when there's something new.", 4))
             if path == "/api/followup":

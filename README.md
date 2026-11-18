@@ -2,11 +2,18 @@
 
 # Library Doctor
 
-**A nightly health check for your Plex library.** Library Doctor compares what Plex shows with what's really on the disk and what Radarr and Sonarr think they have. Every morning you get one page with everything that needs fixing, and a button to fix most of it.
+**A nightly health check for Plex, Radarr and Sonarr.** Library Doctor compares what Plex shows with what's really on the disk and what Radarr and Sonarr think they have. Every morning you get one page with everything that needs fixing, and a button to fix most of it.
 
 > **Beta.** Built on the author's own home server and now being tested on others. Please [open an issue](../../issues) if something looks wrong.
 
 [Try the live demo](https://mymediabuild.uk/library-doctor-plex-library-health-check/#try-the-demo) (made-up library, nothing real is changed) · [How it works](https://mymediabuild.uk/library-doctor-plex-library-health-check/)
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="assets/screenshot-light.png">
+    <img src="assets/screenshot-dark.png" width="880" alt="The Library Doctor main screen with a made-up library: a health score of 99.8%, space saved, jobs left, one tile per check, and the duplicates list showing which copy to keep and why">
+  </picture>
+</p>
 
 <p align="center"><img src="assets/tour.gif" width="880" alt="A quick tour of Library Doctor with a made-up library: the main screen, a dubbed film found by File Health, a stuck download with its reason, duplicates with editions, and the folder check in Settings"></p>
 
@@ -22,12 +29,11 @@
 | Subtitles | Subtitle files that are only adverts, names that no longer match the video, what Bazarr is still looking for | Bazarr |
 | Unwatched | What nobody has played in a year, biggest first (never deletes anything) | Tautulli |
 | Virus scan | Programs pretending to be films (film.mkv.exe), and ClamAV on every new file | ClamAV (optional) |
-| Coming Soon | Agregarr placeholders playing a generic clip instead of the real trailer | Agregarr (optional) |
 | App Health | Each app's own warnings (Radarr/Sonarr/Prowlarr health, Bazarr, Tdarr nodes), apps that stop answering, updates (with Update now, or the Docker commands to copy), and indexers that keep failing and never find anything | Radarr/Sonarr (Prowlarr optional) |
 | Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), downloads that are stuck, with the reason from your download client (no seeds, tracker error, slow, usenet failure) and Re-announce / Remove & try another, and leftovers in the download clients' incomplete folder | Radarr/Sonarr (qBittorrent, Transmission, SABnzbd, NZBGet optional) |
 | Disk space | Free space now and, after a week of daily readings, how fast it fills and roughly when it's full | — |
 
-Tdarr (Convert with Tdarr) and Sportarr (sports libraries) are optional too. For the nightly summary you can add any of Gotify, Discord, Telegram, ntfy, a webhook or email in Settings → Notifications.
+Tdarr (Convert with Tdarr) is optional too. For the nightly summary you can add any of Gotify, Discord, Telegram, ntfy, a webhook or email in Settings → Notifications.
 
 ## Nothing is deleted without asking
 
@@ -126,6 +132,6 @@ docker compose pull && docker compose up -d
 
 ## Thank you
 
-Library Doctor talks to Plex, Radarr, Sonarr, Bazarr, Tautulli, Tdarr, Sportarr, Agregarr, ClamAV, Gotify, Discord, Telegram and ntfy, and uses ffmpeg and yt-dlp. It isn't connected to any of those projects.
+Library Doctor talks to Plex, Radarr, Sonarr, Bazarr, Tautulli, Tdarr, ClamAV, Gotify, Discord, Telegram and ntfy, and uses ffmpeg. It isn't connected to any of those projects.
 
 Made by [My Media Build](https://mymediabuild.uk). MIT licence.
