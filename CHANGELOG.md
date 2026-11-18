@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 (beta)
+
+- **Settings has clearer sections:** **Media server** (Plex, Jellyfin and Emby side by side: pick yours; each keeps its own address while you switch), **Radarr, Sonarr & Sportarr** (with Lidarr shown as coming soon: music isn't checked yet), then **Optional apps**.
+- **Jellyfin and Emby support.** Settings → Media server: pick Plex, Jellyfin or Emby, paste the server's API key, press Test. Every check runs on all three. On a test library scanned side by side, Plex, Jellyfin and Emby gave the same findings (duplicates across folders, broken, too short and wrong-language files, app warnings), and a duplicate clean-up through Jellyfin was confirmed by Jellyfin afterwards. Open in Jellyfin/Emby buttons go to the item's page.
+- Fixes that only exist in Plex are hidden on Jellyfin/Emby: Split, Pick posters, Use Sonarr's titles, Fix Plex's listing, Plex tidy-up and the backup reminder. Season-poster and episode-title cards offer Refresh instead.
+- Messages name your server ("Jellyfin checked: 1 version left", "Open in Emby"); "Fix Match" is "Identify" there.
+- Jellyfin and Emby take a minute or two to notice moved files, so the check after a clean-up waits up to about 4 minutes on them (1 minute on Plex).
+- Under the hood: every request to the media server now goes through one place. Plex behaves exactly as before (checked request by request against 0.1.15).
+
 ## 0.1.15 (beta)
 
 - **Fixed:** if Library Doctor restarted while a clean-up or replace was still being checked, that item stayed "Checking…" for ever and its card was hidden (the tile still counted it). Unfinished checks are now marked "Interrupted" at start-up and the card comes back.

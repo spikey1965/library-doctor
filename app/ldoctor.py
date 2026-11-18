@@ -32,7 +32,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.15"
+APP_VERSION = "0.2.0"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -185,6 +185,7 @@ def init_db():
     os.makedirs(CONFIG_DIR, exist_ok=True)
     with db() as c:
         c.executescript("""
+        CREATE TABLE IF NOT EXISTS ms_ids (rk INTEGER PRIMARY KEY AUTOINCREMENT, sid TEXT UNIQUE);
         CREATE TABLE IF NOT EXISTS scans (id INTEGER PRIMARY KEY, started TEXT, finished TEXT, ok INTEGER,
             items INTEGER, files INTEGER, issues INTEGER, note TEXT);
         CREATE TABLE IF NOT EXISTS issues (id TEXT PRIMARY KEY, scan_id INTEGER, chk TEXT, sev TEXT, title TEXT,
@@ -245,18 +246,199 @@ def event(kind, text):
     _STATS["v"] = None                     # something changed: the Space saved / Jobs left rings recount
     log("%s: %s" % (kind, text))
 
+# ---------------- media server (v0.2: one door for every request) ----------------
+# Everything Library Doctor asks the media server goes through ms_request(). The rest of the code speaks Plex's API
+# (paths like /library/sections, replies with MediaContainer/Metadata/Media/Part); for Plex this is a straight pass-through.
+def ms_request(method, path, params=None, headers=None, timeout=60, raw=False, server=None):
+    """raw=False: JSON reply as a dict (like http()). raw=True: (status, body bytes), no Accept header (refreshes, images).
+    server: settings being tested (Settings page) instead of the saved ones."""
+    p = server or S["plex"]
+    if ms_kind(p) in ("jellyfin", "emby"):
+        return jf_request(p, method, path, params, headers, timeout, raw)
+    q = urllib.parse.urlencode(params or {})
+    url = p["url"].rstrip("/") + path + ("?" + q if q else "")
+    h = dict({"X-Plex-Token": p.get("token", "")}, **(headers or {}))
+    if not raw:
+        return http(url, h, method=method, timeout=timeout)
+    with urllib.request.urlopen(urllib.request.Request(url, headers=h, method=method), timeout=timeout) as r:
+        return r.status, r.read()
+
+# ---------------- Jellyfin / Emby (v0.2) ----------------
+# The rest of Library Doctor speaks Plex's API. For Jellyfin and Emby, ms_request() answers the same handful of Plex
+# requests from their API and returns Plex-shaped replies (MediaContainer / Directory / Metadata / Media / Part).
+# Their item ids are long hex strings; Library Doctor uses whole numbers as ids (ratingKey), so each one gets a stable
+# number from the ms_ids table. Things only Plex has (split, poster picking, title locks, Plex's own housekeeping)
+# answer with JFUnsupported, and the page hides those buttons.
+class JFUnsupported(Exception):
+    pass
+
+MS_NAMES = {"plex": "Plex", "jellyfin": "Jellyfin", "emby": "Emby"}
+def ms_kind(p=None):
+    return ((p if p is not None else S.get("plex")) or {}).get("kind") or "plex"
+def ms_name(p=None):
+    return MS_NAMES.get(ms_kind(p), "Plex")
+
+# Messages are written for Plex; with Jellyfin/Emby the page gets them with the right name (only message fields, never
+# titles, paths or links). Plex's "Fix Match" is "Identify" in Jellyfin and Emby.
+_MS_TEXT_KEYS = {"text", "note", "msg", "error", "errors", "warn", "notes", "reason", "problems"}
+def ms_words(v):
+    if ms_kind() == "plex": return v
+    if isinstance(v, str):
+        return v.replace("Fix Match", "Identify").replace("X-Plex", "X-PLEXHDR").replace("Plex", ms_name()).replace("X-PLEXHDR", "X-Plex")
+    if isinstance(v, list): return [ms_words(x) for x in v]
+    return v
+
+def ms_words_in(obj):
+    """Apply ms_words to the message fields of a reply, at any depth."""
+    if ms_kind() == "plex": return obj
+    if isinstance(obj, dict):
+        return {k: (ms_words(v) if k in _MS_TEXT_KEYS and isinstance(v, (str, list)) and all(isinstance(x, str) for x in (v if isinstance(v, list) else [v]))
+                    else ms_words_in(v)) for k, v in obj.items()}
+    if isinstance(obj, list): return [ms_words_in(x) for x in obj]
+    return obj
+
+_MSID, _MSRK = {}, {}
+def ms_rk(sid):
+    """Stable whole-number id for a Jellyfin/Emby item id."""
+    if not sid: return None
+    if sid in _MSID: return _MSID[sid]
+    with db() as c:
+        r = c.execute("SELECT rk FROM ms_ids WHERE sid=?", (sid,)).fetchone()
+        rk = r["rk"] if r else c.execute("INSERT INTO ms_ids (sid) VALUES (?)", (sid,)).lastrowid
+    _MSID[sid] = rk; _MSRK[rk] = sid
+    return rk
+
+def ms_sid(rk):
+    rk = int(rk)
+    if rk in _MSRK: return _MSRK[rk]
+    with db() as c:
+        r = c.execute("SELECT sid FROM ms_ids WHERE rk=?", (rk,)).fetchone()
+    if not r: raise urllib.error.HTTPError("", 404, "Not Found", {}, None)
+    _MSRK[rk] = r["sid"]; _MSID[r["sid"]] = rk
+    return r["sid"]
+
+_JF_FIELDS = "Path,MediaSources,ProviderIds,ProductionYear,ParentId,DateCreated"
+_JF_TYPES = {"1": "Movie", "2": "Series", "3": "Season", "4": "Episode"}
+
+def _jf_auth(p):
+    tok = p.get("token", "")
+    return {"Authorization": 'MediaBrowser Token="%s"' % tok} if ms_kind(p) == "jellyfin" else {"X-Emby-Token": tok}
+
+def _jf_get(p, path, params=None, timeout=60):
+    q = urllib.parse.urlencode(params or {})
+    return http(p["url"].rstrip("/") + path + ("?" + q if q else ""), _jf_auth(p), timeout=timeout)
+
+def _jf_send(p, method, path, params=None, body=None, timeout=60):
+    q = urllib.parse.urlencode(params or {})
+    h = dict(_jf_auth(p), **({"Content-Type": "application/json"} if body is not None else {}))
+    req = urllib.request.Request(p["url"].rstrip("/") + path + ("?" + q if q else ""), headers=h, method=method,
+                                 data=json.dumps(body).encode() if body is not None else b"")
+    with urllib.request.urlopen(req, timeout=timeout) as r: return r.status, r.read()
+
+def _jf_res(h):
+    h = int(h or 0)
+    return "4k" if h >= 1600 else "1080" if h >= 900 else "720" if h >= 650 else "576" if h >= 540 else "480" if h >= 400 else "sd" if h else ""
+
+def _jf_media(src):
+    vs = next((s for s in src.get("MediaStreams") or [] if s.get("Type") == "Video"), {})
+    au = next((s for s in src.get("MediaStreams") or [] if s.get("Type") == "Audio"), {})
+    dur = int((src.get("RunTimeTicks") or 0) / 10000)
+    return {"id": src.get("Id"), "duration": dur, "bitrate": int((src.get("Bitrate") or 0) / 1000),
+            "width": vs.get("Width") or 0, "height": vs.get("Height") or 0, "videoResolution": _jf_res(vs.get("Height")),
+            "videoCodec": (vs.get("Codec") or "").lower(), "audioCodec": (au.get("Codec") or "").lower(), "container": src.get("Container") or "",
+            "Part": [{"file": src.get("Path") or "", "size": src.get("Size") or 0, "duration": dur, "container": src.get("Container") or ""}]}
+
+def _jf_item(it):
+    ids = {k.lower(): v for k, v in (it.get("ProviderIds") or {}).items() if v}
+    out = {"ratingKey": ms_rk(it["Id"]), "title": it.get("Name") or "", "type": (it.get("Type") or "").lower(),
+           "Guid": [{"id": "%s://%s" % (k, ids[k])} for k in ("tmdb", "tvdb", "imdb") if k in ids],
+           # Plex marks a matched item with a plex:// guid; here "matched" = the server found online ids for it
+           "guid": ("plex://%s/%s" % (ms_kind(), it["Id"])) if ids else "local://%s" % it["Id"],
+           "thumb": "/Items/%s/Images/Primary" % it["Id"] if (it.get("ImageTags") or {}).get("Primary") else None}
+    if it.get("ProductionYear"): out["year"] = it["ProductionYear"]
+    t = it.get("Type")
+    if t == "Episode":
+        out.update(grandparentTitle=it.get("SeriesName") or "", grandparentRatingKey=ms_rk(it.get("SeriesId")),
+                   parentRatingKey=ms_rk(it.get("SeasonId")), parentIndex=it.get("ParentIndexNumber"), index=it.get("IndexNumber"))
+    elif t == "Season":
+        out.update(index=it.get("IndexNumber"), parentRatingKey=ms_rk(it.get("SeriesId") or it.get("ParentId")))
+    if it.get("MediaSources") is not None or it.get("Path"):
+        srcs = it.get("MediaSources") or ([{"Path": it["Path"], "Size": 0}] if it.get("Path") and t in ("Movie", "Episode") else [])
+        if srcs: out["Media"] = [_jf_media(s) for s in srcs]
+    return out
+
+def _jf_items(p, params, start=None, size=None):
+    q = dict({"Recursive": "true", "Fields": _JF_FIELDS, "EnableImageTypes": "Primary", "SortBy": "SortName"}, **params)
+    if start is not None: q["StartIndex"] = int(start)
+    if size is not None: q["Limit"] = int(size)
+    r = _jf_get(p, "/Items", q, timeout=120)
+    rows = [_jf_item(it) for it in r.get("Items") or []]
+    return {"MediaContainer": {"size": len(rows), "totalSize": r.get("TotalRecordCount", len(rows)), "Metadata": rows}}
+
+def _jf_folders(p):
+    r = _jf_get(p, "/Library/VirtualFolders")
+    return r if isinstance(r, list) else (r.get("Items") or [])
+
+def jf_request(p, method, path, params, headers, timeout, raw):
+    params = dict(params or {}); headers = headers or {}
+    start = headers.get("X-Plex-Container-Start", params.pop("X-Plex-Container-Start", None))
+    size = headers.get("X-Plex-Container-Size", params.pop("X-Plex-Container-Size", None))
+    name = ms_name(p)
+    if path == "/identity":
+        i = _jf_get(p, "/System/Info", timeout=timeout)
+        return {"MediaContainer": {"machineIdentifier": i.get("Id", ""), "version": i.get("Version", ""), "friendlyName": i.get("ServerName", "")}}
+    if path == "/library/sections" and method == "GET":
+        dirs = []
+        for f in _jf_folders(p):
+            typ = {"movies": "movie", "tvshows": "show"}.get((f.get("CollectionType") or "").lower())
+            if not typ: continue
+            dirs.append({"key": str(ms_rk(f.get("ItemId") or f.get("Id"))), "type": typ, "title": f.get("Name") or "",
+                         "agent": "tv.plex.agents.movie" if typ == "movie" else "tv.plex.agents.series",
+                         "Location": [{"path": x} for x in (f.get("Locations") or [])]})
+        return {"MediaContainer": {"Directory": dirs}}
+    m = re.match(r"^/library/sections/(\d+)/(all|search|refresh|emptyTrash)$", path)
+    if m:
+        lib, what = ms_sid(m.group(1)), m.group(2)
+        if what == "all" and method == "GET":
+            return _jf_items(p, {"ParentId": lib, "IncludeItemTypes": _JF_TYPES.get(str(params.get("type", "1")), "Movie")}, start, size)
+        if what == "search":
+            return _jf_items(p, {"ParentId": lib, "IncludeItemTypes": "Episode", "SearchTerm": params.get("query", "")})
+        if what == "refresh":            # rescan one folder: tell the server that path changed
+            body = {"Updates": [{"Path": params.get("path", ""), "UpdateType": "Modified"}]}
+            return _jf_send(p, "POST", "/Library/Media/Updated", body=body, timeout=timeout)
+        if what == "emptyTrash":         # Jellyfin/Emby drop missing files on their own scan: nothing to empty
+            return (200, b"") if raw else {}
+        raise JFUnsupported("Locking titles isn't available on %s." % name)
+    m = re.match(r"^/library/metadata/(\d+)(/[a-zA-Z]+)?$", path)
+    if m:
+        sid, sub = ms_sid(m.group(1)), m.group(2) or ""
+        if sub == "" and method == "GET":
+            r = _jf_items(p, {"Ids": sid})
+            if not r["MediaContainer"]["Metadata"]: raise urllib.error.HTTPError("", 404, "Not Found", {}, None)
+            return r
+        if sub == "/allLeaves":
+            return _jf_items(p, {"ParentId": sid, "IncludeItemTypes": "Episode"})
+        if sub == "/refresh":
+            return _jf_send(p, "POST", "/Items/%s/Refresh" % sid, {"Recursive": "true", "MetadataRefreshMode": "Default", "ImageRefreshMode": "Default"}, timeout=timeout)
+        raise JFUnsupported({"/split": "Splitting merged items", "/posters": "Picking posters", "/poster": "Picking posters"}.get(sub, "That") + " isn't available on %s." % name)
+    if path == "/photo/:/transcode":     # the cheap poster check: fetch a tiny copy of the image
+        img = params.get("url") or ""
+        if not img.startswith("/Items/"): return (404, b"")
+        q = urllib.parse.urlencode({"maxWidth": params.get("width", 40)})
+        with urllib.request.urlopen(urllib.request.Request(p["url"].rstrip("/") + img + "?" + q, headers=_jf_auth(p)), timeout=timeout) as r:
+            return r.status, r.read()
+    raise JFUnsupported("That isn't available on %s." % name)
+
 # ---------------- Plex ----------------
 def plex(path, **params):
-    p = S["plex"]
-    q = urllib.parse.urlencode(params)
-    return map_in(http(p["url"].rstrip("/") + path + ("?" + q if q else ""), {"X-Plex-Token": p["token"]})["MediaContainer"], p)
+    return map_in(ms_request("GET", path, params)["MediaContainer"], S["plex"])
 
 def plex_backup():
     """v0.1.5: ask Plex to run its own "Back up database" task now (Plex keeps the copy in its Databases folder)."""
     p = S.get("plex") or {}
     if not p.get("url"): return {"ok": False, "error": "Plex isn't set up."}
     try:
-        http(p["url"].rstrip("/") + "/butler/BackupDatabase", {"X-Plex-Token": p.get("token", "")}, method="POST", timeout=20)
+        ms_request("POST", "/butler/BackupDatabase", timeout=20)
         kv_set("plex_backup_at", now_iso()); event("backup", "Asked Plex to back up its database.")
         return {"ok": True, "at": now_iso()}
     except urllib.error.HTTPError as e:
@@ -273,7 +455,7 @@ def plex_tidy():
     done, errs = [], []
     for label, path in (("Clean Bundles", "/library/clean/bundles"), ("Optimize Database", "/library/optimize?async=1")):
         try:
-            http(p["url"].rstrip("/") + path, {"X-Plex-Token": p.get("token", "")}, method="PUT", timeout=30); done.append(label)
+            ms_request("PUT", path, timeout=30); done.append(label)
         except urllib.error.HTTPError as e: errs.append("%s: Plex said %d %s" % (label, e.code, e.reason))
         except Exception as e: errs.append("%s: %s" % (label, getattr(e, "reason", e)))
     if done:
@@ -301,9 +483,7 @@ def plex_paged(path, **params):
     start = 0
     while True:
         p = S["plex"]
-        q = urllib.parse.urlencode(params)
-        mc = http(p["url"].rstrip("/") + path + "?" + q, {"X-Plex-Token": p["token"],
-                  "X-Plex-Container-Start": str(start), "X-Plex-Container-Size": str(PAGE)}, timeout=120)["MediaContainer"]
+        mc = ms_request("GET", path, params, {"X-Plex-Container-Start": str(start), "X-Plex-Container-Size": str(PAGE)}, timeout=120)["MediaContainer"]
         mc = map_in(mc, p)
         rows = mc.get("Metadata", [])
         for r in rows:
@@ -316,10 +496,7 @@ def plex_paged(path, **params):
 def plex_refresh_folder(section, folder):
     """Ask Plex to rescan one folder (partial scan) so it drops moved copies / picks restored ones."""
     try:
-        p = S["plex"]
-        q = urllib.parse.urlencode({"path": to_app(folder, p)})
-        req = urllib.request.Request("%s/library/sections/%s/refresh?%s" % (p["url"].rstrip("/"), section, q), headers={"X-Plex-Token": p["token"]})
-        urllib.request.urlopen(req, timeout=30).read()
+        ms_request("GET", "/library/sections/%s/refresh" % section, {"path": to_app(folder, S["plex"])}, timeout=30, raw=True)
         return True
     except Exception as e:
         log("plex refresh failed: %r" % e); return False
@@ -382,16 +559,24 @@ def guids(m):
 
 def plex_link(rating_key):
     p = S["plex"]
+    k = ms_kind(p)
+    if k in ("jellyfin", "emby"):       # v0.2: ldrk= carries Library Doctor's own id so the link can be followed later
+        base = (p.get("public") or p["url"]).rstrip("/")
+        try: sid = ms_sid(rating_key)
+        except Exception: sid = ""
+        page = "/web/#/details?id=%s&serverId=%s" if k == "jellyfin" else "/web/index.html#!/item?id=%s&serverId=%s"
+        return {"label": "Open in Plex", "url": base + page % (sid, p.get("machine", "")) + "&ldrk=%s" % rating_key}
     return {"label": "Open in Plex", "url": "%s/desktop/#!/server/%s/details?key=%s" % (
         p.get("public", "https://app.plex.tv").rstrip("/"), p["machine"], urllib.parse.quote("/library/metadata/%s" % rating_key, safe=""))}
 
-_RK_RE = re.compile(r"key=%2Flibrary%2Fmetadata%2F(\d+)")
+_RK_RE = re.compile(r"(?:key=%2Flibrary%2Fmetadata%2F|[?&]ldrk=)(\d+)")
 def live_plex_links(links, kind, row_id):
     """v0.1.13: Plex gives an item a new ID when it merges or re-adds it (after a restore, a clean-up, a replace).
     'Open in Plex' goes through /api/plex-open, which checks the saved ID and finds the item by its file if it moved."""
-    out = []
+    out, jf = [], ms_kind() != "plex"
     for l in links or []:
         m = _RK_RE.search(l.get("url", "")) if l.get("label") == "Open in Plex" else None
+        if m and (("ldrk=" in l["url"]) != jf): m = None   # a link from before you switched media server: leave it as it was
         out.append(dict(l, url="/api/plex-open?" + urllib.parse.urlencode({"rk": m.group(1), kind: row_id})) if m else l)
     return out
 
@@ -525,9 +710,8 @@ def plex_split(issue_id):
     if not row: return {"ok": False, "error": "That card has gone; scan again."}
     d = json.loads(row["detail"])
     if d.get("kind") != "mismatch" or not d.get("rk"): return {"ok": False, "error": "Nothing to split here."}
-    p = S["plex"]
     try:
-        http("%s/library/metadata/%s/split" % (p["url"].rstrip("/"), d["rk"]), {"X-Plex-Token": p["token"]}, method="PUT", timeout=30)
+        ms_request("PUT", "/library/metadata/%s/split" % d["rk"], timeout=30)
     except urllib.error.HTTPError as e:
         return {"ok": False, "error": "Plex said %d %s." % (e.code, e.reason)}
     except Exception as e:
@@ -1004,8 +1188,9 @@ def plex_parts(rk):
 
 def verify(done_id, rks, removed, kept):
     """After a clean-up: wait for Plex's folder rescan and check it now lists only the kept copy."""
-    status, note = "warn", "Couldn't reach Plex to check."
-    for attempt in range(20):                      # up to ~60 s
+    status, note = "warn", "Couldn't reach %s to check." % ms_name()
+    # Plex rescans a folder within seconds; Jellyfin/Emby batch change notices (about a minute or two), so wait longer
+    for attempt in range(20 if ms_kind() == "plex" else 80):     # up to ~60 s (Plex) / ~4 min (Jellyfin, Emby)
         time.sleep(3)
         try:
             parts = []
@@ -1033,9 +1218,7 @@ def verify(done_id, rks, removed, kept):
     log("verify %s: %s" % (done_id, note))
 
 def plex_put(path):
-    p = S["plex"]
-    req = urllib.request.Request(p["url"].rstrip("/") + path, headers={"X-Plex-Token": p["token"]}, method="PUT")
-    urllib.request.urlopen(req, timeout=30).read()
+    ms_request("PUT", path, timeout=30, raw=True)
 
 def find_listing(section, ep_title, path):
     """Plex items in a section that list this file: [(ratingKey, number of entries for the file)]."""
@@ -1193,7 +1376,7 @@ def cleanup(issue_id, keep_idx=None):
             for f in folders: plex_refresh_folder(d.get("section"), f)
             rescanned = arr_rescan(d.get("refs"))
             links = json.loads(row["links"] or "[]")
-            rks = [m.group(1) for l in links for m in [re.search(r"metadata%2F(\d+)", l.get("url", ""))] if m]
+            rks = [m.group(1) for l in links for m in [_RK_RE.search(l.get("url", ""))] if m]
             with db() as c:
                 tids = [r["id"] for r in c.execute("SELECT id FROM trash WHERE issue_id=? AND restored_at IS NULL AND purged_at IS NULL AND dst LIKE ?",
                                                     (issue_id, "%" + stamp + "%"))]
@@ -1570,10 +1753,9 @@ def meta_scan(sections, movies, series, arr_files):
 def plex_img_ok(thumb):
     """Does Plex actually serve this image? (tiny transcode, so it's cheap)"""
     if not thumb: return False
-    p = S["plex"]
-    u = p["url"].rstrip("/") + "/photo/:/transcode?" + urllib.parse.urlencode({"width": 40, "height": 60, "minSize": 1, "url": thumb})
     try:
-        with urllib.request.urlopen(urllib.request.Request(u, headers={"X-Plex-Token": p["token"]}), timeout=30) as r: return r.status == 200 and len(r.read()) > 200
+        st, body = ms_request("GET", "/photo/:/transcode", {"width": 40, "height": 60, "minSize": 1, "url": thumb}, timeout=30, raw=True)
+        return st == 200 and len(body) > 200
     except Exception: return False
 
 def season_posters(sh, seasons, lib, sec):
@@ -1582,8 +1764,9 @@ def season_posters(sh, seasons, lib, sec):
     bad.sort(key=lambda x: (len(x["t"]), x["t"]))
     return [_meta("seasonposters", lib, sh["ratingKey"], sh.get("title") or "?", "att",
                   "%d season%s show a blank poster in Plex: no poster is picked for %s." % (len(bad), "" if len(bad) == 1 else "s", "it" if len(bad) == 1 else "them"),
-                  "Pick posters chooses the top poster Plex already has for each season (from TMDB). You can still change it in Plex afterwards.",
-                  ["posters", "refresh"], [plex_link(sh["ratingKey"])], section=sec, seasons=bad)]
+                  "Pick posters chooses the top poster Plex already has for each season (from TMDB). You can still change it in Plex afterwards."
+                  if ms_kind() == "plex" else "Refresh asks %s to look for posters again. If none turns up, pick one on the show's page in %s (Edit images)." % (ms_name(), ms_name()),
+                  ["posters", "refresh"] if ms_kind() == "plex" else ["refresh"], [plex_link(sh["ratingKey"])], section=sec, seasons=bad)]
 
 def _meta(kind, lib, rk, title, sev, text, note, fixes, links, **extra):
     return dict(id=iid("meta", kind, lib, rk), chk="meta", sev=sev, title=title, library=lib,
@@ -1659,8 +1842,8 @@ def show_meta(sh, eps, lib, sec, std, owners, series, sonarr_paths, sonarr_title
             fix.sort(key=lambda x: x["se"])
             out.append(_meta("titles", lib, rk, title, "att",
                 "%d episode%s still called \u201cEpisode N\u201d in Plex. %s has the real titles." % (len(fix), "" if len(fix) == 1 else "s", a["name"]),
-                "Use %s's titles copies them into Plex and locks them so Plex can't change them back. Refresh asks Plex to look again with its own info, which sometimes still lacks them." % a["name"],
-                ["titles", "refresh"], links + [arr_link(a, s, "series")], section=sec, eps=fix[:400]))
+                ("Refresh asks %s to look again with its own info." % ms_name()) if ms_kind() != "plex" else "Use %s's titles copies them into Plex and locks them so Plex can't change them back. Refresh asks Plex to look again with its own info, which sometimes still lacks them." % a["name"],
+                ["titles", "refresh"] if ms_kind() == "plex" else ["refresh"], links + [arr_link(a, s, "series")], section=sec, eps=fix[:400]))
     return out
 
 def _plex_item(rk):
@@ -4954,6 +5137,9 @@ def _with_secrets(kind, e):
     """Fill blank secret fields of an edited entry from what's saved (matched by _i for lists)."""
     e = {k: v for k, v in _clean_entry(e).items() if not k.endswith("_set")}
     old = (S.get(kind) or [])[e["_i"]] if kind in LISTS and isinstance(e.get("_i"), int) and e["_i"] < len(S.get(kind) or []) else S.get(kind) if kind in SINGLE else None
+    if kind == "plex":                       # v0.2: never hand a saved Plex token to Jellyfin/Emby (or the other way round)
+        if e.get("kind") not in ("plex", "jellyfin", "emby"): e["kind"] = "plex"
+        if isinstance(old, dict) and (old.get("kind") or "plex") != e["kind"]: old = None
     for f in SECRET_FIELDS:
         if not e.get(f) and isinstance(old, dict) and old.get(f): e[f] = old[f]
     e.pop("_i", None)
@@ -4969,9 +5155,9 @@ def settings_test(kind, e):
     u = e["url"]
     try:
         if kind == "plex":
-            r = http(u + "/identity", {"X-Plex-Token": e.get("token", "")}, timeout=15)["MediaContainer"]
-            http(u + "/library/sections", {"X-Plex-Token": e.get("token", "")}, timeout=15)      # identity works without a token; this doesn't
-            return {"ok": True, "msg": "Connected to Plex %s." % r.get("version", ""), "machine": r.get("machineIdentifier")}
+            r = ms_request("GET", "/identity", timeout=15, server=e)["MediaContainer"]
+            ms_request("GET", "/library/sections", timeout=15, server=e)      # identity works without a token; this doesn't
+            return {"ok": True, "msg": "Connected to %s %s." % (ms_name(e), r.get("version", "")), "machine": r.get("machineIdentifier")}
         if kind == "arrs":
             r = http(u + "/api/v3/system/status", {"X-Api-Key": e.get("key", "")}, timeout=15)
             app = (r.get("appName") or "").lower()
@@ -5037,12 +5223,11 @@ def _samples(kind, e):
     """A few real paths exactly as the app reports them (no mapping applied)."""
     raw = dict(e, paths=[]); u = e["url"]; out = []
     if kind == "plex":
-        h = {"X-Plex-Token": e["token"]}
-        for sec in http(u + "/library/sections", h, timeout=20)["MediaContainer"].get("Directory", []):
+        for sec in ms_request("GET", "/library/sections", timeout=20, server=e)["MediaContainer"].get("Directory", []):
             typ = {"movie": 1, "show": 4}.get(sec.get("type"))
             if not typ: continue
-            q = urllib.parse.urlencode({"type": typ, "X-Plex-Container-Start": 0, "X-Plex-Container-Size": 4})
-            for m in http(u + "/library/sections/%s/all?%s" % (sec["key"], q), h, timeout=30)["MediaContainer"].get("Metadata", []):
+            for m in ms_request("GET", "/library/sections/%s/all" % sec["key"], {"type": typ, "X-Plex-Container-Start": 0, "X-Plex-Container-Size": 4},
+                                timeout=30, server=e)["MediaContainer"].get("Metadata", []):
                 out += [pt["file"] for md in m.get("Media", []) for pt in md.get("Part", []) if pt.get("file")][:1]
     elif kind == "arrs":
         if e.get("kind") == "sonarr":
@@ -5573,7 +5758,7 @@ def state():
              "full_running": VIRUS_LOCK.locked(), "full_started": (kv_get("virus_full_running") or {}).get("at")}
     try: space = space_forecast()
     except Exception as e: space = None; log("space forecast failed: %r" % e)
-    return {"space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
+    return {"ms_kind": ms_kind(), "ms_name": ms_name(), "space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
             "scan_hour": sched()[0], "scan_minute": sched()[1], "scan_days": sched()[2], "keep_days": KEEP_DAYS, "stats": stats(), "score": library_score(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
             "configured": configured(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT, "security_blocked": security_info()["blocked"],
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
@@ -5611,7 +5796,7 @@ class H(BaseHTTPRequestHandler):
     def authed(self):
         return not AUTH_ON or session_ok(self._tok())
     def send(self, code, body, ctype="application/json", cookie=None):
-        b = body if isinstance(body, bytes) else json.dumps(body).encode()
+        b = body if isinstance(body, bytes) else json.dumps(ms_words_in(body)).encode()
         self.send_response(code)
         if cookie: self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Type", ctype)
