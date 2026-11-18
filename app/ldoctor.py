@@ -32,7 +32,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.1.14"
+APP_VERSION = "0.1.15"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -1125,6 +1125,14 @@ def _dance_steps(done_id, issue_id, item_title, src, tmp, sec, ep_title):
         c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (status, note, now_iso(), done_id))
     event("plexfix", "%s: %s" % (item_title, note))
 
+def outside_arr_warning(row, vers, kept):
+    """v0.1.15: you kept a copy that isn't the tracked one and sits in another folder, so Radarr/Sonarr lose their file."""
+    trk = next((v for v in vers if v.get("tracked") and v is not kept), None)
+    if not trk or kept.get("tracked") or os.path.dirname(kept["path"]) == os.path.dirname(trk["path"]): return None
+    app = next((l["label"][8:] for l in json.loads(row["links"] or "[]") if l.get("label", "").startswith("Open in ") and l["label"] != "Open in Plex"), "Radarr/Sonarr")
+    return ("%s doesn't see the copy you kept (it's in another folder), so it now thinks this is missing and may download it again. "
+            "Move the kept file into %s or point %s at it." % (app, os.path.dirname(trk["path"]), app))
+
 def cleanup(issue_id, keep_idx=None):
     """Move the 'remove' copies of one duplicate issue into the trash. keep_idx = your choice of copy to keep (optional)."""
     with MOVE_LOCK:
@@ -1199,7 +1207,10 @@ def cleanup(issue_id, keep_idx=None):
             event("cleanup", "%s: moved %d cop%s to the trash (%s)%s. Kept %s." % (row["title"], len(moved), "y" if len(moved) == 1 else "ies",
                   human(sum(s for _, s in moved)), (" plus %d leftover side file%s" % (side_n, "" if side_n == 1 else "s")) if side_n else "",
                   os.path.basename(keep[0]["path"])))
-            return {"ok": True, "moved": len(moved), "side_files": side_n, "freed_later": human(sum(s for _, s in moved)), "rescanned": rescanned, "problems": problems}
+            warn = outside_arr_warning(row, vers, keep[0])
+            if warn: event("cleanup", "%s: %s" % (row["title"], warn))
+            return {"ok": True, "moved": len(moved), "side_files": side_n, "freed_later": human(sum(s for _, s in moved)), "rescanned": rescanned, "problems": problems,
+                    "warn": warn}
         return {"ok": False, "error": "Nothing was moved. " + "; ".join(problems)}
 
 def restore(trash_id):
@@ -1217,7 +1228,42 @@ def restore(trash_id):
             if any(t["src"].startswith(l["path"].rstrip("/") + "/") for l in sec.get("Location", [])):
                 plex_refresh_folder(sec["key"], os.path.dirname(t["src"]))
         event("restore", "Put back %s" % os.path.basename(t["src"]))
+        threading.Thread(target=_restore_followup, args=(dict(t),), daemon=True).start()
         return {"ok": True}
+
+def _restore_followup(t):
+    """v0.1.14: after a file is put back, Radarr/Sonarr must see it again (else they keep searching for a copy you
+    chose to keep), and a Replace that was waiting for a new copy stops waiting."""
+    d, ref = None, None
+    with db() as c:
+        for r in c.execute("SELECT * FROM done WHERE issue_id=? ORDER BY id DESC", (t["issue_id"] or "",)):
+            if t["id"] in json.loads(r["trash_ids"] or "[]"): d = dict(r); break
+    try: ref = json.loads((d or {}).get("ref") or "null")
+    except Exception: ref = None
+    told = None
+    try:
+        a = arr_by_name(ref.get("arr")) if isinstance(ref, dict) and ref.get("arr") else None
+        if a and ref.get("kind") == "movie":
+            arr(a, "/command", {"name": "RescanMovie", "movieId": int(ref["id"])}, "POST"); told = a["name"]
+        elif a and ref.get("series"):
+            arr(a, "/command", {"name": "RescanSeries", "seriesId": int(ref["series"])}, "POST"); told = a["name"]
+        else:                                          # no record of which item: find it by folder
+            for a in S.get("arrs", []):
+                items = arr(a, "/movie" if a["kind"] == "radarr" else "/series")
+                hit = next((x for x in items if x.get("path") and t["src"].startswith(x["path"].rstrip("/") + "/")), None)
+                if hit:
+                    arr(a, "/command", {"name": "RescanMovie", "movieId": hit["id"]} if a["kind"] == "radarr" else {"name": "RescanSeries", "seriesId": hit["id"]}, "POST")
+                    told = a["name"]; break
+    except Exception as e:
+        log("restore: couldn't ask Radarr/Sonarr to rescan %s: %r" % (t["src"], e))
+    if d and d["status"] in ("waiting", "checking") and "(replaced)" in (t["reason"] or ""):
+        note = "You put the file back, so Library Doctor stopped waiting for a new copy." + \
+               (" %s was asked to rescan; if it already grabbed a new copy, that still arrives." % told if told else "")
+        with db() as c:
+            c.execute("UPDATE done SET status='ok', note=?, checked_at=? WHERE id=?", (note, now_iso(), d["id"]))
+        event("restore", "%s: %s" % (d["title"], note))
+    elif told:
+        log("restore: asked %s to rescan for %s" % (told, os.path.basename(t["src"])))
 
 # v0.1.8: a closer look before anything leaves the trash for good. A file is kept back (and you're told why) when:
 #   - a duplicate clean-up's KEPT copy is no longer on the disk,
@@ -2719,7 +2765,7 @@ def followup():
                 event("health", "%s: still no new copy after %d days." % (r["title"], FOLLOW_DAYS))
             else:
                 with db() as c: c.execute("UPDATE done SET status='waiting', note=?, checked_at=? WHERE id=?",
-                                          ("Waiting for %s to download a new copy (usually overnight). Checked %s." % (a["name"], datetime.now().strftime("%a %H:%M")), now_iso(), r["id"]))
+                                          ("Waiting for %s to download a new copy%s. Checked %s." % (a["name"], " (in your download window)" if NIGHT_END_HOUR is not None else "", datetime.now().strftime("%a %H:%M")), now_iso(), r["id"]))
         except urllib.error.HTTPError as e:
             if e.code == 404:                                 # v0.1.6: the film/show was removed from Radarr/Sonarr: nothing to wait for
                 with db() as c: c.execute("UPDATE done SET status='ok', note=?, checked_at=? WHERE id=?",
@@ -5783,6 +5829,13 @@ if __name__ == "__main__":
         log("Can't write to %s (%s). Library Doctor keeps its settings and database there. Mount a folder at %s that user %d can write to "
             "(set PUID/PGID in compose to the folder's owner), then start it again." % (CONFIG_DIR, e, CONFIG_DIR, os.getuid()))
         raise SystemExit(1)
+    try:   # v0.1.15: a check that was running when Library Doctor stopped never finishes; free its card again
+        with db() as c:
+            n = c.execute("UPDATE done SET status='warn', note=? WHERE status='checking'",
+                          ("Interrupted: Library Doctor restarted before this check finished. Scan again to see where things stand.",)).rowcount
+        if n: log("startup: %d unfinished check%s marked as interrupted" % (n, "" if n == 1 else "s"))
+    except Exception as e:
+        log("startup: couldn't tidy unfinished checks: %r" % e)
     threading.Thread(target=nightly, daemon=True).start()
     apply_trash_days()
     log("Library Doctor listening on %s:%d (nightly scan at %02d:00, trash kept %d days)" % (LISTEN, PORT, SCAN_HOUR, TRASH_DAYS))

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.15 (beta)
+
+- **Fixed:** if Library Doctor restarted while a clean-up or replace was still being checked, that item stayed "Checking…" for ever and its card was hidden (the tile still counted it). Unfinished checks are now marked "Interrupted" at start-up and the card comes back.
+- **Warning when you keep a copy Radarr/Sonarr can't see.** If you press "Keep this one instead" on a copy in a different folder from the file Radarr/Sonarr track, the card now warns that they'll think it's missing and may download it again, and the clean-up message says so too.
+- **Restore now tells Radarr/Sonarr the file is back.** Before, a restored file stayed "missing" in Radarr/Sonarr, so they kept searching for (and could download) a replacement for a file you chose to keep, and checks that read their file info (like the audio language) skipped it. A Replace that was still waiting for a new copy now says "You put the file back" instead of waiting forever.
+- The last two "overnight" / "tonight" messages now only mention a download window when `LD_DOWNLOAD_WINDOW_END` is set.
+
 ## 0.1.14 (beta)
 
 - **Replace checks Radarr/Sonarr can download first.** If the app has no download client, or no indexer with searches on, Library Doctor now says so and moves nothing, instead of putting the file in the trash and waiting for a copy that can never come. Search for missing episodes and Find a smaller copy check the same.
