@@ -2,13 +2,13 @@
 
 # Library Doctor
 
-**A nightly health check for Plex, Radarr and Sonarr.** Library Doctor compares what Plex shows with what's really on the disk and what Radarr and Sonarr think they have. Every morning you get one page with everything that needs fixing, and a button to fix most of it.
+**A nightly health check for Plex, Jellyfin and Emby, with Radarr and Sonarr.** Library Doctor compares what your media server shows with what's really on the disk and what Radarr and Sonarr think they have. Every morning you get one page with everything that needs fixing, and a button to fix most of it.
 
 > **New in 0.2: Jellyfin and Emby.** Pick your media server in Settings. Plex is the most tested; Jellyfin and Emby are new, so please report anything that looks wrong.
 
 > **Beta.** Built on the author's own home server and now being tested on others. Please [open an issue](../../issues) if something looks wrong.
 
-[Try the live demo](https://mymediabuild.uk/library-doctor-plex-library-health-check/#try-the-demo) (made-up library, nothing real is changed) · [How it works](https://mymediabuild.uk/library-doctor-plex-library-health-check/)
+**[librarydoctor.uk](https://librarydoctor.uk)** · [Try the live demo](https://librarydoctor.uk/demo/) (made-up library, nothing real is changed) · [How it works](https://mymediabuild.uk/library-doctor-plex-library-health-check/)
 
 <p align="center">
   <picture>
@@ -24,7 +24,7 @@
 | Check | What it finds | Needs |
 |---|---|---|
 | Missing files | Plex, Radarr or Sonarr list a file that isn't on the disk, and **season gaps**: aired episodes Sonarr wants but never got (Search for these) | Media server + Radarr/Sonarr |
-| Duplicates | Two copies of the same film or episode, with which one to keep and why (different Plex editions, like Theatrical and Director's Cut, are never counted as duplicates, and neither are different films with the same title, like The Fly 1958 and 1986: if Plex mixed them up you get Split in Plex instead) | Plex |
+| Duplicates | Two copies of the same film or episode, with which one to keep and why (different Plex editions, like Theatrical and Director's Cut, are never counted as duplicates, and neither are different films with the same title, like The Fly 1958 and 1986: if Plex mixed them up you get Split in Plex instead) | Media server |
 | Metadata gaps | "Episode 5" titles Sonarr knows the name of, wrong years, things not in Radarr/Sonarr | Media server + Radarr/Sonarr |
 | File health | Broken files, files much shorter than they should be, and **the wrong audio language** (also checked within 10 minutes of each import) (an English film with only Russian audio, a dubbed season). Replace asks Radarr/Sonarr for a new copy and checks it when it arrives | Media server + Radarr/Sonarr |
 | Quality & space | Files far bigger than usual, old .ts/.avi files (Convert to MKV, no re-encoding), episodes much worse than their season, Find a smaller copy, and release groups whose files keep having to be replaced (Block it) | Media server + Radarr/Sonarr |
