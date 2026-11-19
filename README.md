@@ -37,6 +37,10 @@
 
 Tdarr (Convert with Tdarr) is optional too. For the nightly summary you can add any of Gotify, Discord, Telegram, ntfy, a webhook or email in Settings → Notifications.
 
+### No Radarr or Sonarr?
+
+Library Doctor works with just Plex, Jellyfin or Emby (new in 0.2.2). It then runs in **report-only mode**: it still finds missing files, duplicates, broken files, programs and fake videos, metadata problems (unmatched items, blank posters) and space hogs, and duplicate clean-ups still go to the trash. Without Radarr or Sonarr it can't replace a file or search for a new copy, and it doesn't check the audio language, cut-short files, subtitles, missing episodes or stuck downloads. Add them in Settings any time to switch those on.
+
 ## Nothing is deleted without asking
 
 - Library Doctor **only reads** from your apps until you press a fix button.
@@ -53,7 +57,7 @@ Tdarr (Convert with Tdarr) is optional too. For the nightly summary you can add 
    ```sh
    docker compose up -d
    ```
-3. Open `http://<your-server>:8790` and **create a password straight away**: until one is set, anyone who can reach the page could set it, so don't expose the port to the internet before this. Then add Plex and at least one Radarr or Sonarr under **Settings**. Press **Test** on each one, then **Save** and **Scan now**.
+3. Open `http://<your-server>:8790` and **create a password straight away**: until one is set, anyone who can reach the page could set it, so don't expose the port to the internet before this. Then add your media server (Plex, Jellyfin or Emby) under **Settings**, plus Radarr and/or Sonarr if you have them (recommended, see *No Radarr or Sonarr?* below). Press **Test** on each one, then **Save** and **Scan now**.
 
 After that it scans by itself every night at 3am.
 

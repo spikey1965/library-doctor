@@ -413,6 +413,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
         <div class="splitw expw" id="expWarn" role="status" hidden></div>
         <div class="splitw expw" id="fcWarn" role="status" hidden></div>
         <div class="checks" id="checks" role="group" aria-label="Checks"></div>
+        <p class="note" id="roNote" hidden></p>
       </div>
       <div class="panel">
         <div class="h"><h2 id="listTitle">Duplicates</h2>
@@ -813,8 +814,11 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     $("checks").innerHTML = CHECKS.map(c => {
       if (!c.live) return `<button class="check" disabled><span class="ico">${svg(c.id)}</span><span class="l">${esc(c.label)}</span><span class="s">Coming in stage ${c.stage}</span></button>`;
       const n = c.id === "unwatched" ? open.filter(i => i.chk === c.id).reduce((a, i) => a + (i.detail.count || 0), 0) : open.filter(i => i.chk === c.id).length;
-      return `<button class="check ${n ? c.sev : ""}" data-c="${c.id}" aria-pressed="${filter === c.id}"><span class="ico">${svg(n ? c.id : "ok")}</span><span class="l">${esc(c.label)}</span><span class="s">${n ? n + " " + (n === 1 && c.unit === "warnings" ? "warning" : c.unit) : "All clear"}</span></button>`;
+      const none = !n && S.configured && !S.has_arrs && (c.id === "queue" || c.id === "subs");   // v0.2.2 report-only: stuck downloads and the subtitle check work from Radarr/Sonarr
+      return `<button class="check ${n ? c.sev : ""}" data-c="${c.id}" aria-pressed="${filter === c.id}"><span class="ico">${svg(n ? c.id : "ok")}</span><span class="l">${esc(c.label)}</span><span class="s">${n ? n + " " + (n === 1 && c.unit === "warnings" ? "warning" : c.id === "health" && !S.has_arrs ? "to look at" : c.unit) : none ? "Needs Radarr or Sonarr" : "All clear"}</span></button>`;
     }).join("");
+    $("roNote").hidden = !(S.configured && !S.has_arrs);
+    $("roNote").innerHTML = `<b>Report-only mode:</b> no Radarr or Sonarr is set up, so Library Doctor lists problems but can't replace files or search for new copies, and audio language, cut-short files, subtitles, missing episodes and stuck downloads aren't checked. Add them in Settings any time.`;
     $("checks").querySelectorAll("[data-c]").forEach(b => b.onclick = () => { filter = b.dataset.c; render(); });
     const libs = [...new Set(S.issues.map(i => i.library))].sort(), cur = $("lib").value;
     $("lib").innerHTML = '<option value="">All libraries</option>' + libs.map(l => `<option ${l === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
@@ -1024,11 +1028,13 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       const sp = rows.filter(i => !i.ignored && i.detail.kind === "seasonposters"), ns = sp.reduce((a, i) => a + i.detail.seasons.length, 0);
       if (sp.length > 1) top += `<div class="acts"><button class="b-teal" id="postersAll" data-ids="${sp.map(i => esc(i.id)).join(",")}">Pick posters for all ${sp.length} shows (${ns} seasons)</button></div>`;
     }
-    const EMPTY = { missing: "Every file " + SN() + ", Radarr and Sonarr list is on the disk.", dupes: "No duplicates found.",
-                    health: "No broken or cut-short files: every file plays for about as long as Radarr and Sonarr expect.",
+    const RO = !S.has_arrs;   // v0.2.2 report-only mode
+    const EMPTY = { missing: RO ? "Every file " + SN() + " lists is on the disk." : "Every file " + SN() + ", Radarr and Sonarr list is on the disk.", dupes: "No duplicates found.",
+                    health: RO ? "No broken files. (Cut-short files and the wrong audio language need Radarr or Sonarr to check.)" : "No broken or cut-short files: every file plays for about as long as Radarr and Sonarr expect.",
+                    queue: RO ? "Stuck downloads are read from Radarr and Sonarr, so there's nothing to check without them." : "Nothing stuck in your downloads.",
                     virus: "Nothing found: no programs, archives or fake videos in your libraries, and ClamAV found nothing in the new files.",
-                    subs: "No advert-only, mis-named or stray subtitle files, and Bazarr isn't missing anything.",
-                    meta: "Everything is matched, has a poster, and its titles and year agree with Radarr and Sonarr.",
+                    subs: RO ? "The subtitle check goes through the films and shows in Radarr and Sonarr, so it needs one of them." : "No advert-only, mis-named or stray subtitle files, and Bazarr isn't missing anything.",
+                    meta: RO ? "Everything is matched and has a poster." : "Everything is matched, has a poster, and its titles and year agree with Radarr and Sonarr.",
                     quality: "No files far bigger than usual, no old formats that make " + SN() + " convert, and no seasons with odd low-quality episodes.",
                     unwatched: "Everything has been watched recently, or you've marked it Keep." };
     if (!rows.length) { $("list").innerHTML = top + `<p class="empty"><b>All clear.</b> ${EMPTY[filter]}</p>` + doneHtml(); return wire(); }
@@ -1393,7 +1399,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     const bad = (FC.rows || []).filter(r => r.status === "bad" || r.status === "partial").length;
     return `<div class="app"><p class="help">Each app may see your media under a different folder (${MSN(SC.plex)} <code>/data/movies</code>, Radarr <code>/movies</code>, Library Doctor <code>${esc(SC._root || "/media")}</code>). This asks every app for a few real files and looks for them here. A scan stops instead of reporting everything as missing when ${MSN(SC.plex)}'s or Radarr/Sonarr's files can't be found.</p>
       ${FC.busy && !FC.rows ? `<p class="note">Checking…</p>` : FC.rows && FC.rows.length ? (bad ? `<div class="uww"><table class="uw fct">${rows}</table></div><p class="note"><b>${bad} app${bad === 1 ? "" : "s"} need${bad === 1 ? "s" : ""} attention.</b></p>`
-        : `<p class="fcok"><span class="dot ok"></span> All ${FC.rows.length} apps line up: Library Doctor can find their files.</p><details class="fcd"><summary>Show details</summary><div class="uww"><table class="uw fct">${rows}</table></div></details>`) : `<p class="note">Add your apps below first.</p>`}
+        : `<p class="fcok"><span class="dot ok"></span> ${FC.rows.length === 1 ? "Your app lines up: Library Doctor can find its files." : `All ${FC.rows.length} apps line up: Library Doctor can find their files.`}</p><details class="fcd"><summary>Show details</summary><div class="uww"><table class="uw fct">${rows}</table></div></details>`) : `<p class="note">Add your apps below first.</p>`}
       <div class="acts"><button class="b-line sm" id="fcRun" ${FC.busy ? "disabled" : ""}>${FC.busy ? "Checking…" : "Check again"}</button></div></div>`;
   }
   /* v0.1.9 "Don't have it?": what each optional app adds, a compose snippet filled in with what Library Doctor knows, and where to read more.
@@ -1544,7 +1550,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     const sec = (id, title, small, body, head) => `<section class="sec" id="sec-${id}" data-sec="${id}"><div class="sech"><h2>${title}${small ? ` <small>${small}</small>` : ""}</h2>${head || ""}</div>${body}</section>`;
     let top = `<h2>Settings</h2><p class="intro">Library Doctor only reads from these apps until you press a fix button. API keys stay on this server and are never shown again after saving.</p>`;
     if (S && (S.split_mounts || []).length) top += `<div class="splitw" role="note" style="margin-top:0"><b>Your media is on more than one disk.</b> ${S.split_mounts.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")} ${S.split_mounts.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. Scans will work, but clean-up can't move files from there into the trash. Mount the one parent folder instead.</div>`;
-    if (!SC._conf) top += `<div class="start"><b>Start here:</b> add your media server (Plex, Jellyfin or Emby) and at least one Radarr or Sonarr, press Test on each, then Save. The first scan runs when you press Scan now.</div>`;
+    if (!SC._conf) top += `<div class="start"><b>Start here:</b> add your media server (Plex, Jellyfin or Emby), press Test, then Save. Radarr and Sonarr are optional but recommended: they let Library Doctor replace bad files and check more. The first scan runs when you press Scan now.</div>`;
     let body = "";
     body += sec("folders", "Folder check", "", fcHtml());
     if (!SC.plex) SC.plex = { url: "", public: "https://app.plex.tv" };
@@ -1555,7 +1561,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     body += sec("media", "Media server", "pick the one you use", pick + `<div class="appgrid">${entryHtml("plex", SC.plex, null)}</div>`,
       `<button class="b-line sm" id="testAll" ${TA.busy ? "disabled" : ""}>${TA.busy ? `Testing ${TA.done} of ${TA.n}…` : "Test all apps"}</button>`);
     const arrCards = SC.arrs.map((e, i) => entryHtml("arrs", e, i)).concat(SC.sportarr ? [entryHtml("sportarr", SC.sportarr, null)] : []);
-    body += sec("arrs", "Radarr, Sonarr &amp; Sportarr", "the apps that manage your films, shows and sport", (arrCards.length ? `<div class="appgrid">${arrCards.join("")}</div>` : `<p class="note">Add at least one Radarr or Sonarr.</p>`) +
+    body += sec("arrs", "Radarr, Sonarr &amp; Sportarr", "the apps that manage your films, shows and sport", (arrCards.length ? `<div class="appgrid">${arrCards.join("")}</div>` : `<p class="note">Optional. Without Radarr or Sonarr, Library Doctor still finds missing, duplicate, broken and virus files, metadata problems and space hogs, but it can't replace or search for files, and it doesn't check audio language, cut-short files, subtitles, missing episodes or stuck downloads.</p>`) +
       `<div class="acts"><button class="b-line" data-add="arrs:radarr">${ico("radarr", null).replace('18" height="18"', '16" height="16"')}+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">${ico("sonarr", null).replace('18" height="18"', '16" height="16"')}+ Add Sonarr</button>${SC.sportarr ? "" : `<button class="b-line" data-add="sportarr">${ico("sportarr", null).replace('18" height="18"', '16" height="16"')}+ Sportarr</button>`}<button class="b-line soon" type="button" disabled title="Music libraries aren't checked yet. Lidarr support is planned.">${ico("lidarr", null).replace('18" height="18"', '16" height="16"')}Lidarr <small>coming soon</small></button></div>`);
     // v0.2.1: Indexers, Download clients and Optional apps each get their own named section
     const IDX = ["prowlarr"], DL = ["sabnzbd", "nzbget", "qbit", "transmission"], OPT = ["tautulli", "tdarr"], OK = IDX.concat(DL, OPT);
@@ -1664,7 +1670,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       if (SC.trash_days) body.trash_days = SC.trash_days; if (SC.digest) body.digest = SC.digest;
       if (SC.language != null) body.language = SC.language;
       const r = await api("/api/settings/save", { settings: body }); SCbusy = false;
-      if (r.ok) { SCmsg = { ok: true, msg: r.configured ? "Saved. Library Doctor is using the new settings now." : "Saved. Add your media server and at least one Radarr or Sonarr to start scanning." }; const keep = SCmsg; SC = null; await settingsOpen(); SCmsg = keep; settingsDraw(); load(); folderCheck(true); }
+      if (r.ok) { SCmsg = { ok: true, msg: r.configured ? "Saved. Library Doctor is using the new settings now." : "Saved. Add your media server (Plex, Jellyfin or Emby) to start scanning." }; const keep = SCmsg; SC = null; await settingsOpen(); SCmsg = keep; settingsDraw(); load(); folderCheck(true); }
       else { SCmsg = { ok: false, msg: r.msg || r.error || "Couldn't save." }; settingsDraw(); } });
   }
   $("tabSet").onclick = () => setView("settings");

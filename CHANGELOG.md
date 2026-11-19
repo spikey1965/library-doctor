@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2 (beta)
+
+- **Works without Radarr or Sonarr (report-only mode).** Only a media server (Plex, Jellyfin or Emby) is needed to scan now. Without Radarr/Sonarr, Library Doctor still finds missing, duplicate, broken and virus files, metadata problems and space hogs, and a note on the main screen says what isn't checked (audio language, cut-short files, subtitles, missing episodes, stuck downloads) and that Replace/Search need Radarr or Sonarr. Broken-file cards say to get a new copy yourself, and the Downloads and Subtitles tiles say "Needs Radarr or Sonarr" instead of "All clear", and File Health counts "to look at" instead of "to replace".
+- Folder check says "Your app lines up" when there's only one app (was "All 1 apps line up").
+
 ## 0.2.1 (beta)
 
 - **Synology tested** (DSM 7.2.2, Container Manager): the README has step-by-step Synology instructions, including the two things that stop most installs (create the `config` folder first, and give your own user Read/Write on the shares).

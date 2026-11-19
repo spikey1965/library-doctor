@@ -32,7 +32,7 @@ import http.cookiejar as _cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.2.2"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -87,8 +87,13 @@ def sched():
     return h, mi, (days or list(range(7)))
 
 def configured():
-    """Enough set up to scan: Plex plus at least one Radarr/Sonarr."""
-    return bool((S.get("plex") or {}).get("url") and (S.get("plex") or {}).get("token") and any(a.get("url") and a.get("key") for a in S.get("arrs") or []))
+    """Enough set up to scan: a media server (Plex, Jellyfin or Emby). Radarr/Sonarr are optional since 0.2.2:
+    without them Library Doctor runs in report-only mode (no Replace/Search, no language, short-file or gap checks)."""
+    return bool((S.get("plex") or {}).get("url") and (S.get("plex") or {}).get("token"))
+
+def has_arrs(kind=None):
+    """At least one Radarr/Sonarr with an address and key (optionally only of this kind)."""
+    return any(a.get("url") and a.get("key") and (kind is None or a.get("kind") == kind) for a in S.get("arrs") or [])
 
 # ---------------- folder mapping ----------------
 # Each app may see the media under a different folder than Library Doctor does (Plex: /data/movies, Radarr: /movies,
@@ -1037,7 +1042,7 @@ def scan():
                                     else:
                                         parts.append("%s has no file for it (%s)." % (a["name"], "monitored" if it.get("monitored") else "not monitored"))
                                 note = " ".join(parts)
-                            elif kind == "movie":
+                            elif kind == "movie" and has_arrs("radarr"):
                                 note = "Not in Radarr."
                             issues.append(dict(id=iid("missing", f), chk="missing", sev="bad", title=title, library=lib,
                                                detail={"text": "Plex lists a file that isn't on the disk.", "path": f, "note": note, "size": human(p.get("size"))},
@@ -2052,6 +2057,7 @@ def health_scan(sections, movies, series, arr_files, trashed):
                 else:
                     note, sev, conf = "Could be a cut-down or partial copy, or a listing that counts two parts as one. Play a bit of it if you're not sure.", "amb", "check"
                 if ref: note += " Replace moves it to the trash and asks %s to download a good copy." % ref["arr"]
+                elif not has_arrs(): note += " Without Radarr or Sonarr, Library Doctor can't fetch a new copy: get one yourself, then delete this file."
                 else: note += " Neither Radarr nor Sonarr manages it, so there's nothing to fetch a new copy."
                 out.append(dict(id=iid("health", f), chk="health", sev=sev, title=title, library=lib,
                                 detail={"kind": "broken" if broken else "short", "text": text, "note": note, "path": f, "size": size, "links": _link_info(f)["links"],
@@ -5799,7 +5805,7 @@ def state():
     except Exception as e: space = None; log("space forecast failed: %r" % e)
     return {"ms_kind": ms_kind(), "ms_name": ms_name(), "space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
             "scan_hour": sched()[0], "scan_minute": sched()[1], "scan_days": sched()[2], "keep_days": KEEP_DAYS, "stats": stats(), "score": library_score(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
-            "configured": configured(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT, "security_blocked": security_info()["blocked"],
+            "configured": configured(), "has_arrs": has_arrs(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT, "security_blocked": security_info()["blocked"],
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
 
 class H(BaseHTTPRequestHandler):
@@ -5924,7 +5930,7 @@ class H(BaseHTTPRequestHandler):
             if path == "/api/settings/detect": return self.send(200, settings_detect(str(body.get("kind")), body.get("cfg") or {}))
             if path == "/api/settings/save": return self.send(200, settings_save(body.get("settings") or {}))
             if path == "/api/scan":
-                if not configured(): return self.send(409, {"error": "Set up Plex and at least one Radarr or Sonarr in Settings first."})
+                if not configured(): return self.send(409, {"error": "Set up your media server (Plex, Jellyfin or Emby) in Settings first."})
                 if STATE["running"]: return self.send(409, {"error": "A scan is already running."})
                 STATE.update(running=True, step="Starting", progress=0.0)    # v0.1.5: the page sees "running" straight away
                 threading.Thread(target=scan, daemon=True).start()
