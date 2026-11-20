@@ -19,7 +19,7 @@
   </picture>
 </p>
 
-<p align="center"><img src="assets/tour.gif" width="880" alt="A quick tour of Library Doctor with a made-up library: the main screen, a dubbed film found by File Health, a stuck download with its reason, duplicates with editions, and the folder check in Settings"></p>
+<p align="center"><img src="assets/tour.gif" width="880" alt="A quick tour of Library Doctor with a made-up library: the main screen, a dubbed film found by File Health, a stuck download with its reason, duplicates with editions, and Settings with the Plex, Jellyfin or Emby picker"></p>
 
 ## What it checks
 
