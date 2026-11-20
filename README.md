@@ -4,11 +4,13 @@
 
 **A nightly health check for Plex, Jellyfin and Emby, with Radarr and Sonarr.** Library Doctor compares what your media server shows with what's really on the disk and what Radarr and Sonarr think they have. Every morning you get one page with everything that needs fixing, and a button to fix most of it.
 
-> **New in 0.2: Jellyfin and Emby.** Pick your media server in Settings. Plex is the most tested; Jellyfin and Emby are new, so please report anything that looks wrong.
+> **New in 0.2: Jellyfin and Emby** (pick your media server in Settings), and in 0.2.3 **Jackett and Seerr**: failing Jackett indexers, and problem reports from Seerr/Overseerr/Jellyseerr on the right file. Plex is the most tested; please report anything that looks wrong.
 
 > **Beta.** Built on the author's own home server and now being tested on others. Please [open an issue](../../issues) if something looks wrong.
 
 **[librarydoctor.uk](https://librarydoctor.uk)** · [Try the live demo](https://librarydoctor.uk/demo/) (made-up library, nothing real is changed) · [How it works](https://mymediabuild.uk/library-doctor-plex-library-health-check/)
+
+⭐ Featured under **New Software** in the [selfh.st weekly newsletter](https://selfh.st/weekly/) (20 November 2026). Thanks for stopping by: a star helps others find it.
 
 <p align="center">
   <picture>
