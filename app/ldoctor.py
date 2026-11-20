@@ -29,10 +29,11 @@ Standard library only.
 import errno, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, threading, time, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 import http.cookiejar as _cookiejar
+import xml.etree.ElementTree as _ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.2.3"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -64,7 +65,7 @@ def normalize(cfg):
         sp["paths"] = [{"from": sp.pop("container_root"), "to": sp.pop("media_root", None) or MEDIA_ROOT}]
     # optional fields the rest of the code relies on: the browser address falls back to the app's own address
     if isinstance(cfg.get("plex"), dict): cfg["plex"]["public"] = cfg["plex"].get("public") or "https://app.plex.tv"
-    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("prowlarr", "Prowlarr"), ("gotify", "Gotify")):
+    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("prowlarr", "Prowlarr"), ("jackett", "Jackett"), ("seerr", "Seerr"), ("gotify", "Gotify")):
         e = cfg.get(k)
         if isinstance(e, dict): e["public"] = e.get("public") or e.get("url", ""); e.setdefault("name", name); e.setdefault("key", e.get("key", ""))
     for k in ("arrs", "bazarr"):
@@ -968,6 +969,7 @@ def scan():
     STATE.update(running=True, step="Starting", progress=0.0)
     started = now_iso()
     issues, n_items, n_files = [], 0, 0
+    EXT_BY_RK.clear()
     try:
         STATE["step"] = "Checking folders"                   # v0.1.7: scan guard
         try: blockers = folder_blockers(folder_check(force=True))
@@ -1005,6 +1007,7 @@ def scan():
             if kind == "show":
                 for sh in plex_paged("/library/sections/%s/all" % sec["key"], type=2, includeGuids=1):
                     show_tvdb[sh["ratingKey"]] = guids(sh).get("tvdb")
+                    if show_tvdb[sh["ratingKey"]]: EXT_BY_RK[str(sh["ratingKey"])] = ("tv", str(show_tvdb[sh["ratingKey"]]))
             t = 1 if kind == "movie" else 4
             for m in plex_paged("/library/sections/%s/all" % sec["key"], type=t, includeGuids=1):
                 n_items += 1
@@ -1013,6 +1016,8 @@ def scan():
                 title = "%s (%s)" % (m.get("title"), m.get("year", "?")) if kind == "movie" else \
                         "%s S%02dE%02d" % (m.get("grandparentTitle"), int(m.get("parentIndex", 0) or 0), int(m.get("index", 0) or 0))
                 g = guids(m)
+                ext = ["movie", str(g.get("tmdb"))] if kind == "movie" and g.get("tmdb") else ["tv", str(show_tvdb.get(m.get("grandparentRatingKey")))] if kind == "show" and show_tvdb.get(m.get("grandparentRatingKey")) else None
+                if kind == "movie" and ext: EXT_BY_RK[str(m["ratingKey"])] = tuple(ext)
                 medias = m.get("Media", [])
                 links, refs, tracked = [plex_link(m["ratingKey"])], [], set(sport)
                 if kind == "movie":
@@ -1075,7 +1080,7 @@ def scan():
                         for a, it in arr_series: tracked |= sonarr_tracked(a, it["id"])
                     cf_scores(vers, refs); recommend(vers, tracked)
                     if dupes_useful(vers): issues.append(dict(id=iid("dupe-item", lib, m["ratingKey"]), chk="dupes", sev="amb", title=title, library=lib,
-                                       detail={"text": "%d copies in one Plex item." % len(vers), "versions": vers,
+                                       detail={"text": "%d copies in one Plex item." % len(vers), "versions": vers, "ext": ext,
                                                "leftovers": leftovers(vers), "confidence": confidence(vers), "section": sec["key"], "refs": refs},
                                        links=links))
                 key = g.get("tmdb") or g.get("imdb") or g.get("tvdb")
@@ -1083,13 +1088,13 @@ def scan():
                     gk = key if kind == "movie" else (key, m.get("parentIndex"), m.get("index"))
                     ed = edition_of(m) if kind == "movie" else ""
                     if ed: gk = (gk, "edition", ed)            # v0.1.3: each edition is its own group (ids unchanged when there's no edition)
-                    by_guid.setdefault(gk, []).append((m, title, links, refs, tracked, live, arr_series))
+                    by_guid.setdefault(gk, []).append((m, title, links, refs, tracked, live, arr_series, ext))
             # --- duplicates: the same film/episode as separate items in one library ---
             for k, lst in by_guid.items():
                 if len(lst) > 1:
-                    m0, title, links, refs, tracked, _, arr_series = lst[0]
+                    m0, title, links, refs, tracked, _, arr_series, ext0 = lst[0]
                     vers, tr = [], set(tracked)
-                    for m, _, _, _, t2, live, aser in lst:
+                    for m, _, _, _, t2, live, aser, _e in lst:
                         tr |= t2
                         if kind == "show":
                             for a, it in aser: tr |= sonarr_tracked(a, it["id"])
@@ -1102,7 +1107,7 @@ def scan():
                     if not dupes_useful(vers): continue
                     issues.append(dict(id=iid("dupe-guid", lib, k), chk="dupes", sev="amb", title=title, library=lib,
                                        detail={"text": "%d separate Plex items for the same %s." % (len(lst), "film" if kind == "movie" else "episode"),
-                                               "versions": vers, "leftovers": leftovers(vers), "confidence": confidence(vers), "section": sec["key"], "refs": refs},
+                                               "versions": vers, "ext": ext0, "leftovers": leftovers(vers), "confidence": confidence(vers), "section": sec["key"], "refs": refs},
                                        links=[plex_link(m["ratingKey"]) for m, *_ in lst] + [l for l in links if l["label"] != "Open in Plex"]))
         try:
             issues += health_scan(sections, movies, series, arr_files, trashed)
@@ -1156,6 +1161,8 @@ def scan():
             issues += sports_scan(sections, sport, sport_roots, trashed)
         except Exception as e:
             log("sportarr check failed: %r" % e)
+        try: issues += seerr_scan(issues, sections, movies, series)      # v0.2.3: Seerr reports + "requested by"
+        except Exception as e: log("seerr check failed: %r" % e)
         STATE.update(step="Checking Radarr files", progress=0.95)
         for a, m, path, size in arr_files:
             if not os.path.exists(path) and path not in trashed:
@@ -2078,6 +2085,164 @@ def health_side_files(path):
             out.append(p)
     return out
 
+# ---------------- Seerr (also Overseerr / Jellyseerr: same API) (v0.2.3) ----------------
+# 1. Problem reports people make in Seerr ("won't play", wrong audio, subtitles) become cards: attached to Library
+#    Doctor's own card for the same file when it found the problem too, otherwise a card of their own (Replace / Mark
+#    resolved). Replacing the file comments on the report and resolves it.
+# 2. "Requested by" (newest request) on Duplicates and Unwatched cards, so nobody deletes what someone just asked for.
+# 3. Replacing a requested film sets it to "processing" in Seerr; Seerr marks it available again when the new copy lands.
+EXT_BY_RK = {}                       # media-server rating key -> ("movie", tmdb) / ("tv", tvdb), filled by each scan
+SEERR_TYPES = {1: "video", 2: "audio", 3: "subtitle", 4: "other"}
+
+def seerr_api(path, data=None, method=None, cfg=None):
+    s = cfg or S.get("seerr") or {}
+    return http(s["url"].rstrip("/") + "/api/v1" + path, {"X-Api-Key": s.get("key", "")}, data=data, method=method, timeout=30)
+
+def _seerr_paged(path, cap=40):
+    out, skip = [], 0
+    for _ in range(cap):
+        r = seerr_api("%s%stake=100&skip=%d" % (path, "&" if "?" in path else "?", skip))
+        res = r.get("results") or []
+        out += res; skip += len(res)
+        if len(res) < 100: break
+    return out
+
+def _seerr_name(u):
+    u = u or {}
+    return u.get("displayName") or u.get("username") or u.get("plexUsername") or u.get("jellyfinUsername") or "someone"
+
+def seerr_requests():
+    """{("movie", tmdb) | ("tv", tvdb): {"by", "at"}} from the newest request per title (declined ones skipped)."""
+    out = {}
+    for r in sorted(_seerr_paged("/request?filter=all&sort=added"), key=lambda x: x.get("createdAt") or ""):
+        if r.get("status") == 3: continue
+        m = r.get("media") or {}
+        k = ("movie", str(m.get("tmdbId"))) if m.get("mediaType") == "movie" else ("tv", str(m.get("tvdbId")))
+        if k[1] in ("None", ""): continue
+        out[k] = {"by": _seerr_name(r.get("requestedBy")), "at": (r.get("createdAt") or "")[:10]}
+    return out
+
+def _seerr_public():
+    s = S.get("seerr") or {}
+    return (s.get("public") or s.get("url") or "").rstrip("/")
+
+def _seerr_file(movies, series, m, season, ep):
+    """(path, ref, arr link) of the file a Seerr report is about, or (None, ref/None, link/None)."""
+    if m.get("mediaType") == "movie":
+        for a, it in movies.get(str(m.get("tmdbId")), []):
+            mf = it.get("movieFile") or {}
+            return mf.get("path"), {"arr": a["name"], "kind": "movie", "id": it["id"]}, arr_link(a, it, "movie")
+        return None, None, None
+    for a, sr in series.get(str(m.get("tvdbId")), []):
+        link = arr_link(a, sr, "series")
+        if not (season and ep): return None, None, link
+        try:
+            e = next((x for x in arr(a, "/episode?seriesId=%d" % sr["id"]) if x.get("seasonNumber") == season and x.get("episodeNumber") == ep), None)
+            if not e: return None, None, link
+            ref = {"arr": a["name"], "kind": "episode", "id": e["id"], "series": sr["id"]}
+            if not e.get("episodeFileId"): return None, ref, link
+            return (arr(a, "/episodefile/%d" % e["episodeFileId"]) or {}).get("path"), ref, link
+        except Exception as x:
+            log("seerr episode lookup failed: %r" % x); return None, None, link
+    return None, None, None
+
+def seerr_scan(issues, sections, movies, series):
+    s = S.get("seerr") or {}
+    if not s.get("url"): return []
+    STATE["step"] = "Reading Seerr"
+    try: req = seerr_requests()
+    except Exception as e: log("seerr requests failed: %r" % e); req = {}
+    for it in issues:                                              # 2. requested by
+        d = it.get("detail") or {}
+        if it["chk"] == "dupes" and d.get("ext") and req.get(tuple(d["ext"])): d["requested"] = req[tuple(d["ext"])]
+        elif it["chk"] == "unwatched":
+            for x in (d.get("items") or []) + (d.get("kept") or []):
+                r = req.get(EXT_BY_RK.get(str(x.get("rk"))) or ("", ""))
+                if r: x["req"] = r["by"]; x["req_at"] = r["at"]
+    try: reports = _seerr_paged("/issue?filter=open&sort=added")
+    except Exception as e: log("seerr issues failed: %r" % e); return []
+    by_path = {}
+    for it in issues:
+        d = it.get("detail") or {}
+        for p in [d.get("path")] + [f.get("path") for f in d.get("files") or []]:
+            if p: by_path.setdefault(p, it)
+    out, pub = [], _seerr_public()
+    for r in reports:
+        m = r.get("media") or {}
+        season, ep = int(r.get("problemSeason") or 0), int(r.get("problemEpisode") or 0)
+        msg = ((r.get("comments") or [{}])[0].get("message") or "").strip()
+        rep = {"id": r["id"], "by": _seerr_name(r.get("createdBy")), "type": SEERR_TYPES.get(r.get("issueType"), "other"),
+               "msg": msg[:300], "at": (r.get("createdAt") or "")[:10], "url": pub + "/issues/%d" % r["id"]}
+        path, ref, alink = _seerr_file(movies, series, m, season, ep)
+        hit = by_path.get(path) if path else None
+        if hit:                                                    # Library Doctor found it too: one card, not two
+            hit["detail"].setdefault("reports", []).append(rep); continue
+        title = None
+        if m.get("mediaType") == "movie":
+            title = next((("%s (%s)" % (it.get("title"), it.get("year", "?"))) for a, it in movies.get(str(m.get("tmdbId")), [])), None)
+        else:
+            sh = next((sr.get("title") for a, sr in series.get(str(m.get("tvdbId")), [])), None)
+            if sh: title = "%s S%02dE%02d" % (sh, season, ep) if season and ep else "%s Season %d" % (sh, season) if season else sh
+        title = title or "TMDB %s" % m.get("tmdbId")
+        ok_file = bool(path and os.path.isfile(path))
+        sec = _section_for(sections, path) if path else None
+        note = ("Library Doctor's own checks found nothing wrong with this file, so play a bit of it. If it's fine, Mark resolved tells %s in Seerr; "
+                "if not, Replace moves it to the trash and asks %s for a new copy (the report is closed with a note)." % (rep["by"], ref["arr"]) if ok_file and ref else
+                "Library Doctor couldn't match this to a file (whole show or season, or not in Radarr/Sonarr). Open it in Seerr to see the details.")
+        out.append(dict(id=iid("seerr", r["id"]), chk="health", sev="amb", title=title, library=(sec or {}).get("title") or "Seerr",
+                        detail={"kind": "report", "text": "%s reported a %s problem in Seerr on %s%s" % (rep["by"], rep["type"], rep["at"], (": “%s”" % msg[:200]) if msg else "."),
+                                "note": note, "path": path if ok_file else None, "size": os.path.getsize(path) if ok_file else 0, "ref": ref if ok_file else None,
+                                "section": (sec or {}).get("key"), "confidence": "check", "report": rep,
+                                "links": _link_info(path)["links"] if ok_file else 1,
+                                "fixes": (["replace"] if ok_file and ref else []) + ["seerrok"]},
+                        links=[{"label": "Open in Seerr", "url": rep["url"]}] + ([alink] if alink else [])))
+    return out
+
+def _seerr_reports_for(d):
+    reps = list(d.get("reports") or []) + ([d["report"]] if d.get("report") else [])
+    paths = {d.get("path")} | {f.get("path") for f in d.get("files") or []}
+    paths.discard(None)
+    with db() as c:
+        for row in c.execute("SELECT id, detail FROM issues WHERE chk='health'").fetchall():
+            dd = json.loads(row["detail"])
+            if dd.get("kind") == "report" and dd.get("path") in paths:
+                reps.append(dd["report"]); c.execute("DELETE FROM issues WHERE id=?", (row["id"],))
+    seen, out = set(), []
+    for r in reps:
+        if r and r.get("id") not in seen: seen.add(r["id"]); out.append(r)
+    return out
+
+def seerr_after_replace(d, ref):
+    """After Replace: comment on + resolve the Seerr reports for that file, and mark a requested film as processing."""
+    if not (S.get("seerr") or {}).get("url"): return
+    try:
+        for r in _seerr_reports_for(d):
+            seerr_api("/issue/%d/comment" % r["id"], {"message": "Library Doctor moved this file to its trash and asked %s for a new copy. It plays again once that arrives." % ref["arr"]}, "POST")
+            seerr_api("/issue/%d/resolved" % r["id"], {}, "POST")
+            event("health", "Seerr: resolved %s's report (%s) with a note." % (r.get("by"), r.get("type")))
+    except Exception as e: log("seerr resolve failed: %r" % e)
+    try:
+        if ref.get("kind") == "movie":
+            a = arr_by_name(ref["arr"]); tmdb = (arr(a, "/movie/%d" % ref["id"]) or {}).get("tmdbId") if a else None
+            mi = (seerr_api("/movie/%d" % tmdb) or {}).get("mediaInfo") if tmdb else None
+            if mi and mi.get("status") == 5:
+                seerr_api("/media/%d/processing" % mi["id"], {}, "POST")
+    except Exception as e: log("seerr status failed: %r" % e)
+
+def seerr_ok(issue_id):
+    with db() as c: row = c.execute("SELECT * FROM issues WHERE id=?", (issue_id,)).fetchone()
+    if not row: return {"ok": False, "error": "That card has gone; press Scan now to refresh."}
+    rep = (json.loads(row["detail"]) or {}).get("report") or {}
+    if not rep.get("id"): return {"ok": False, "error": "This card isn't a Seerr report."}
+    try:
+        seerr_api("/issue/%d/comment" % rep["id"], {"message": "Checked in Library Doctor: no problem found with this file. If it still doesn't work for you, reply here."}, "POST")
+        seerr_api("/issue/%d/resolved" % rep["id"], {}, "POST")
+    except Exception as e:
+        return {"ok": False, "error": "Couldn't reach Seerr (%s)." % getattr(e, "reason", e)}
+    with db() as c: c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+    event("health", "%s: marked %s's Seerr report as resolved." % (row["title"], rep.get("by")))
+    return {"ok": True, "text": "Resolved in Seerr with a note to %s." % rep.get("by")}
+
 def health_fix(issue_id):
     with MOVE_LOCK:
         with db() as c:
@@ -2091,7 +2256,7 @@ def health_fix(issue_id):
         if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where it was, so nothing was moved. Scan again."}
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         moved, tids = [], []
-        for p, reason in [(src, "Broken file (replaced)" if d["kind"] == "broken" else "Too short (replaced)")] + [(x, "Leftover side file") for x in health_side_files(src)]:
+        for p, reason in [(src, "Broken file (replaced)" if d["kind"] == "broken" else "Reported in Seerr (replaced)" if d["kind"] == "report" else "Too short (replaced)")] + [(x, "Leftover side file") for x in health_side_files(src)]:
             dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(p), MEDIA_ROOT))
             try:
                 os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(p); move_file(p, dst)
@@ -2107,8 +2272,9 @@ def health_fix(issue_id):
                                 (issue_id, row["title"], row["library"], "", json.dumps(moved), json.dumps(tids), row["links"], now_iso(),
                                  "checking", "Asking %s for a new copy\u2026" % ref["arr"], "health", json.dumps(ref))).lastrowid
             c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
-    event("health", "%s: moved the %s file to the trash and asked %s for a new copy." % (row["title"], d["kind"], ref["arr"]))
+    event("health", "%s: moved the %s file to the trash and asked %s for a new copy." % (row["title"], "reported" if d["kind"] == "report" else d["kind"], ref["arr"]))
     threading.Thread(target=_health_search, args=(done_id, ref), daemon=True).start()
+    threading.Thread(target=seerr_after_replace, args=(d, ref), daemon=True).start()
     return {"ok": True}
 
 def _health_search(done_id, ref):
@@ -2426,6 +2592,7 @@ def lang_fix(issue_id, row, d):
         c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
     event("health", "%s: moved %d file%s with the wrong audio language to the trash and asked %s for another copy." % (row["title"], len(moved), "" if len(moved) == 1 else "s", ref["arr"]))
     threading.Thread(target=_lang_search, args=(done_id, ref, moved), daemon=True).start()
+    threading.Thread(target=seerr_after_replace, args=(d, ref), daemon=True).start()
     return {"ok": True}
 
 def _lang_block(a, ref, moved):
@@ -4283,6 +4450,117 @@ def _update_info(kind, name, url, key, ver, msg):
 def _skipped(app, new):
     return bool(new) and (kv_get("apps_skip") or {}).get(app) == new
 
+# ---------------- Jackett (v0.2.3) ----------------
+# Jackett has no Health page like the arrs. Two things are readable:
+#  - with the API key only (the Torznab API Radarr/Sonarr use): which indexers are set up
+#  - after logging in (admin password, or none set: Jackett then hands out a cookie): each indexer's last error,
+#    Jackett's version and whether FlareSolverr is set up
+# Cards: indexers whose last search failed (grouped: Cloudflare/FlareSolverr vs other errors), and Radarr/Sonarr indexers
+# that still point at a Jackett indexer that's no longer set up there (they fail on every search) -> Turn off.
+_JK_PATH = re.compile(r"/api/v2\.0/indexers/([^/?#]+)/results/torznab", re.I)
+_JK_CF = re.compile(r"flaresolverr|cloudflare|challenge detected|captcha|ddos-guard", re.I)
+
+class JackettLogin(Exception):
+    pass
+
+def _jackett_open(j):
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookiejar.CookieJar()))
+    u = j["url"].rstrip("/") + "/UI/Dashboard"
+    if j.get("password"): op.open(u, data=urllib.parse.urlencode({"password": j["password"]}).encode(), timeout=20).read()
+    else: op.open(u, timeout=20).read()
+    return op
+
+def jackett_api(j, path, op=None):
+    """Jackett's own (logged-in) API. Raises JackettLogin when Jackett sends us to its login page."""
+    r = (op or _jackett_open(j)).open(j["url"].rstrip("/") + path, timeout=60)
+    if "/UI/Login" in r.geturl(): raise JackettLogin("Jackett wants its admin password")
+    raw = r.read().decode("utf-8")
+    return json.loads(raw) if raw.strip() else {}
+
+def jackett_configured(j):
+    """{indexer id: title} of the indexers set up in Jackett, read with the API key (Torznab API)."""
+    u = j["url"].rstrip("/") + "/api/v2.0/indexers/all/results/torznab/api?" + urllib.parse.urlencode({"apikey": j.get("key", ""), "t": "indexers", "configured": "true"})
+    try:
+        with urllib.request.urlopen(u, timeout=60) as r: raw = r.read()
+    except urllib.error.HTTPError as e:
+        raw = e.read() or b""
+        try: msg = _ET.fromstring(raw).get("description")
+        except Exception: msg = None
+        raise RuntimeError(msg or "HTTP %d" % e.code)
+    root = _ET.fromstring(raw)
+    if root.tag == "error": raise RuntimeError(root.get("description") or "Jackett said no")
+    return {i.get("id"): (i.findtext("title") or i.get("id")) for i in root.iter("indexer") if (i.get("configured") or "true") == "true"}
+
+def _jk_names(lst, n=12):
+    names = [x for x in lst]
+    return ", ".join(names[:n]) + (" and %d more" % (len(names) - n) if len(names) > n else "")
+
+def jackett_cards(j):
+    """App Health cards from Jackett. Returns (cards, configured ids or None when Jackett couldn't be read)."""
+    name, public = j.get("name") or "Jackett", (j.get("public") or j["url"]).rstrip("/")
+    links = [{"label": "Open Jackett", "url": public + "/UI/Dashboard"}]
+    try: ids = jackett_configured(j)
+    except Exception as e:
+        return [_health_card(name, "unreachable", "error", "Library Doctor couldn't reach %s (%s)." % (name, getattr(e, "reason", e)), "", public, "/UI/Dashboard")], None
+    try:
+        op = _jackett_open(j)
+        lst = jackett_api(j, "/api/v2.0/indexers?configured=true", op)
+        cfg = jackett_api(j, "/api/v2.0/server/config", op)
+    except JackettLogin:
+        if not j.get("password"): return [], ids                # API key only: no per-indexer errors, that's fine
+        return [dict(id=iid("apps", name, "login"), chk="apps", sev="att", library=name, title="%s: the admin password doesn't work" % name,
+                     detail={"kind": "health", "source": "login", "text": "Jackett refused the admin password saved in Library Doctor, so it can't see which indexers are failing.",
+                             "note": "Put the current password in Settings → Indexers → Jackett (or leave it empty if you removed it in Jackett).", "fixes": []}, links=links)], ids
+    except Exception as e:
+        log("jackett details failed: %r" % e); return [], ids
+    bad = [i for i in lst if isinstance(i, dict) and i.get("configured") and (i.get("last_error") or "").strip()]
+    out = []
+    cf = [i for i in bad if _JK_CF.search(i["last_error"])]
+    other = [i for i in bad if i not in cf]
+    if cf:
+        fs = (cfg or {}).get("flaresolverrurl")
+        n = len(cf)
+        out.append(dict(id=iid("apps", name, "flaresolverr"), chk="apps", sev="att", library=name,
+                        title="%s: %d indexer%s blocked by Cloudflare" % (name, n, "" if n == 1 else "s"),
+                        detail={"kind": "health", "source": "flaresolverr", "count": n, "indexers": [i["name"] for i in cf],
+                                "text": "%s: the last search on %s hit a Cloudflare check, so %s found nothing." % (_jk_names([i["name"] for i in cf]), "it" if n == 1 else "each of them", "it" if n == 1 else "they"),
+                                "note": ("Jackett has no FlareSolverr set up. Run FlareSolverr (or Byparr), then put its address in Jackett → Settings → FlareSolverr API URL and test the indexers again." if not fs else
+                                         "Jackett's FlareSolverr (%s) didn't get through. Check it's running and up to date, then test the indexers again in Jackett." % fs),
+                                "fixes": []}, links=links))
+    if other:
+        n = len(other)
+        out.append(dict(id=iid("apps", name, "indexer-errors"), chk="apps", sev="att", library=name,
+                        title="%s: %d indexer%s failed on the last search" % (name, n, "" if n == 1 else "s"),
+                        detail={"kind": "health", "source": "indexer-errors", "count": n, "indexers": [i["name"] for i in other],
+                                "text": "; ".join("%s: %s" % (i["name"], re.sub(r"^Exception \([^)]*\):\s*", "", i["last_error"]).strip()[:140].rstrip(". ")) for i in other[:8]) + ("; and %d more." % (n - 8) if n > 8 else "."),
+                                "note": "This is the error each indexer gave the last time it was used. Sites go down or move, so press Test in Jackett: if one keeps failing, remove it there (and in Radarr/Sonarr if you added it by hand).",
+                                "fixes": []}, links=links))
+    return out, ids
+
+def jackett_gone_cards(a, j, ids):
+    """Radarr/Sonarr indexers that point at a Jackett indexer which is no longer set up in Jackett."""
+    if not ids: return []                                          # Jackett unread or empty: never guess
+    jp = urllib.parse.urlsplit(j["url"])
+    out = []
+    for i in arr(a, "/indexer"):
+        if (i.get("implementation") or "") != "Torznab": continue
+        if not (i.get("enableRss") or i.get("enableAutomaticSearch") or i.get("enableInteractiveSearch")): continue
+        base = next((f.get("value") for f in i.get("fields") or [] if f.get("name") == "baseUrl"), "") or ""
+        m = _JK_PATH.search(base)
+        if not m or m.group(1).lower() == "all": continue
+        bp = urllib.parse.urlsplit(base)
+        if bp.port != jp.port and bp.hostname != jp.hostname: continue   # another Jackett (or something else): leave it
+        jid = urllib.parse.unquote(m.group(1))
+        if jid in ids: continue
+        out.append(dict(id=iid("apps", a["name"], "jackett-gone", jid), chk="apps", sev="att", library=a["name"],
+                        title="%s: %s isn't in Jackett any more" % (a["name"], i.get("name") or jid),
+                        detail={"kind": "indexer", "source": "jackett-gone", "indexer": i.get("name") or jid, "indexer_id": i["id"],
+                                "text": "%s still searches Jackett's %s indexer, but it's no longer set up in Jackett, so every search through it fails." % (a["name"], jid),
+                                "note": "Turn off stops the failed searches and the warnings. It stays in %s, so you can switch it back on after setting it up in Jackett again." % a["name"],
+                                "ref": {"kind": "arr", "name": a["name"]}, "fixes": ["idxoff"]},
+                        links=[{"label": "Open indexers in %s" % a["name"], "url": (a.get("public") or a["url"]).rstrip("/") + "/settings/indexers"}]))
+    return out
+
 def apps_cards():
     out = []
     def arr_like(name, url, key, public, ver, page="/system/status", kind="arr"):
@@ -4306,6 +4584,14 @@ def apps_cards():
         arr_like(a["name"], a["url"], a.get("key", ""), a.get("public") or a["url"], "v3")
     pr = S.get("prowlarr") or {}
     if pr.get("url"): arr_like(pr.get("name") or "Prowlarr", pr["url"], pr.get("key", ""), pr.get("public") or pr["url"], "v1", kind="prowlarr")
+    jk = S.get("jackett") or {}
+    if jk.get("url"):                                             # v0.2.3
+        try:
+            cards, ids = jackett_cards(jk); out.extend(cards)
+            for a in S.get("arrs", []):
+                try: out.extend(jackett_gone_cards(a, jk, ids))
+                except Exception as e: log("jackett check %s failed: %r" % (a["name"], e))
+        except Exception as e: log("jackett failed: %r" % e)
     for b in S.get("bazarr", []) or []:
         try:
             r = http(b["url"].rstrip("/") + "/api/system/health", {"X-API-KEY": b.get("key", "")}, timeout=20)
@@ -5148,7 +5434,7 @@ def session_end(tok, everyone=False):
 
 # ---------------- settings page ----------------
 SECRET_FIELDS = ("token", "key", "password")
-SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "prowlarr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
+SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "prowlarr", "jackett", "seerr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
 LISTS = ("arrs", "bazarr")
 
 def settings_public():
@@ -5221,6 +5507,23 @@ def settings_test(kind, e):
         if kind == "prowlarr":
             r = http(u + "/api/v1/system/status", {"X-Api-Key": e.get("key", "")}, timeout=15)
             return {"ok": True, "msg": "Connected to Prowlarr %s." % r.get("version", "")}
+        if kind == "jackett":
+            try: ids = jackett_configured(e)
+            except RuntimeError as x: return {"ok": False, "msg": "Jackett said: %s. Check the API key." % str(x).rstrip(".")}
+            n = "%d indexer%s set up" % (len(ids), "" if len(ids) == 1 else "s")
+            try:
+                v = (jackett_api(e, "/api/v2.0/server/config") or {}).get("app_version") or ""
+                return {"ok": True, "msg": "Connected to Jackett %s: %s. Failing indexers show in App Health." % (v.lstrip("v"), n)}
+            except JackettLogin:
+                if e.get("password"): return {"ok": False, "msg": "The API key works (%s), but Jackett refused the admin password." % n}
+                return {"ok": True, "msg": "Connected to Jackett: %s. Add Jackett's admin password to also see which indexers fail." % n}
+        if kind == "seerr":
+            st = http(u + "/api/v1/status", timeout=15)
+            try: n = seerr_api("/issue/count", cfg=e)
+            except urllib.error.HTTPError as x:
+                if x.code in (401, 403): return {"ok": False, "msg": "Seerr answered, but refused the API key (Seerr → Settings → General)."}
+                raise
+            return {"ok": True, "msg": "Connected to Seerr %s: %d open report%s." % (st.get("version", ""), int(n.get("open") or 0), "" if int(n.get("open") or 0) == 1 else "s")}
         if kind == "sportarr":
             http(u + "/api/rootfolder", {"X-Api-Key": e.get("key", "")}, timeout=15)
             return {"ok": True, "msg": "Connected to Sportarr."}
@@ -5990,6 +6293,7 @@ class H(BaseHTTPRequestHandler):
                 only = str(body["path"])[:4096] if body.get("path") else None
                 res = [dict(queue_fix(str(i)[:32], how, only), id=i) for i in ids if i][:50]
                 return self.send(200, {"ok": any(r.get("ok") for r in res), "errors": [r["error"] for r in res if not r.get("ok") and r.get("error")]})
+            if path == "/api/seerrok": return self.send(200, seerr_ok(str(body.get("id", ""))[:32]))
             if path == "/api/appsfix":
                 return self.send(200, apps_fix(str(body.get("id", ""))[:32], str(body.get("how", ""))))
             if path == "/api/plextidy":

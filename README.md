@@ -24,14 +24,14 @@
 | Check | What it finds | Needs |
 |---|---|---|
 | Missing files | Plex, Radarr or Sonarr list a file that isn't on the disk, and **season gaps**: aired episodes Sonarr wants but never got (Search for these) | Media server + Radarr/Sonarr |
-| Duplicates | Two copies of the same film or episode, with which one to keep and why (different Plex editions, like Theatrical and Director's Cut, are never counted as duplicates, and neither are different films with the same title, like The Fly 1958 and 1986: if Plex mixed them up you get Split in Plex instead) | Media server |
+| Duplicates | Two copies of the same film or episode, with which one to keep and why (different Plex editions, like Theatrical and Director's Cut, are never counted as duplicates, and neither are different films with the same title, like The Fly 1958 and 1986: if Plex mixed them up you get Split in Plex instead) (with Seerr: who requested it) | Media server |
 | Metadata gaps | "Episode 5" titles Sonarr knows the name of, wrong years, things not in Radarr/Sonarr | Media server + Radarr/Sonarr |
-| File health | Broken files, files much shorter than they should be, and **the wrong audio language** (also checked within 10 minutes of each import) (an English film with only Russian audio, a dubbed season). Replace asks Radarr/Sonarr for a new copy and checks it when it arrives | Media server + Radarr/Sonarr |
+| File health | Broken files, files much shorter than they should be, and **the wrong audio language** (also checked within 10 minutes of each import) (an English film with only Russian audio, a dubbed season). Replace asks Radarr/Sonarr for a new copy and checks it when it arrives. **Seerr reports:** problems people report in Seerr/Overseerr/Jellyseerr (won't play, wrong audio, subtitles) show on the card for that file, or on their own card when Library Doctor found nothing; Replace closes the report with a note, Mark resolved closes it as fine | Media server + Radarr/Sonarr |
 | Quality & space | Files far bigger than usual, old .ts/.avi files (Convert to MKV, no re-encoding), episodes much worse than their season, Find a smaller copy, and release groups whose files keep having to be replaced (Block it) | Media server + Radarr/Sonarr |
 | Subtitles | Subtitle files that are only adverts, names that no longer match the video, what Bazarr is still looking for | Bazarr |
-| Unwatched | What nobody has played in a year, biggest first (never deletes anything) | Tautulli |
+| Unwatched | What nobody has played in a year, biggest first (never deletes anything) (with Seerr: who requested it) | Tautulli |
 | Virus scan | Programs pretending to be films (film.mkv.exe), and ClamAV on every new file | ClamAV (optional) |
-| App Health | Each app's own warnings (Radarr/Sonarr/Prowlarr health, Bazarr, Tdarr nodes), apps that stop answering, updates (with Update now, or the Docker commands to copy), and indexers that keep failing and never find anything | Radarr/Sonarr (Prowlarr optional) |
+| App Health | Each app's own warnings (Radarr/Sonarr/Prowlarr health, Bazarr, Tdarr nodes), apps that stop answering, updates (with Update now, or the Docker commands to copy), indexers that keep failing and never find anything, Jackett indexers whose last search failed (Cloudflare blocks are grouped, with the FlareSolverr fix), and Radarr/Sonarr indexers that point at one you removed from Jackett (Turn off) | Radarr/Sonarr (Prowlarr and Jackett optional; Jackett's failing indexers need its admin password if you set one) |
 | Downloads | Radarr/Sonarr queue problems: finished downloads they won't import (Import button), downloads that are stuck, with the reason from your download client (no seeds, tracker error, slow, usenet failure) and Re-announce / Remove & try another, and leftovers in the download clients' incomplete folder | Radarr/Sonarr (qBittorrent, Transmission, SABnzbd, NZBGet optional) |
 | Disk space | Free space now and, after a week of daily readings, how fast it fills and roughly when it's full | — |
 
@@ -93,7 +93,7 @@ Before every scan Library Doctor checks again: if it can't find Plex's or Radarr
 
 No dates, just the order things are likely to happen. Ideas and offers to test are welcome in [Issues](https://github.com/spikey1965/library-doctor/issues).
 
-- **Done in 0.2:** Jellyfin and Emby support (new: reports welcome).
+- **Done in 0.2:** Jellyfin and Emby support (new: reports welcome), report-only mode without Radarr/Sonarr (0.2.2), Jackett and Seerr (0.2.3).
 - **Being considered:** music libraries; a Home Assistant card.
 
 ## Known limitations

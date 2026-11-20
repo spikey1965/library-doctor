@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.3 (beta)
+
+- **Jackett support.** Settings → Indexers → Jackett: address, API key and (only if you set one in Jackett) its admin password. Test says how many indexers are set up.
+- **App Health: Jackett indexers that failed on their last search.** Cloudflare blocks are grouped into one card that says whether Jackett has FlareSolverr set up and what to do; other errors (site down, timeouts) are listed in a second card with each indexer's own error. This needs the admin password if Jackett has one; with only the API key, Library Doctor can see which indexers are set up but not which ones fail.
+- **App Health: Radarr/Sonarr indexers that point at a Jackett indexer you removed.** They fail on every search; the card has a Turn off button (the indexer stays set up in Radarr/Sonarr). Works with just the API key.
+- **Seerr support (also Overseerr and Jellyseerr: same API).** Settings → Optional apps → Seerr (address + API key); Test says how many reports are open.
+- **Problem reports from Seerr in File Health.** When someone reports a problem in Seerr (won't play, wrong audio, subtitles), it shows on Library Doctor's own card for that file ("Also reported in Seerr by…") when Library Doctor found the problem too, or on a card of its own when it didn't (Replace, or Mark resolved in Seerr if the file is fine). Replace comments on the report and resolves it in Seerr.
+- **"Requested by" on Duplicates and Unwatched**, from the newest Seerr request, so you don't clean up something someone just asked for.
+- **Replacing a requested film marks it "processing" in Seerr** until the new copy arrives (Seerr marks it available again by itself).
+- The Replace confirmation no longer says the new copy "downloads in the night window" (that was the author's own download schedule).
+
 ## 0.2.2 (beta)
 
 - **Works without Radarr or Sonarr (report-only mode).** Only a media server (Plex, Jellyfin or Emby) is needed to scan now. Without Radarr/Sonarr, Library Doctor still finds missing, duplicate, broken and virus files, metadata problems and space hogs, and a note on the main screen says what isn't checked (audio language, cut-short files, subtitles, missing episodes, stuck downloads) and that Replace/Search need Radarr or Sonarr. Broken-file cards say to get a new copy yourself, and the Downloads and Subtitles tiles say "Needs Radarr or Sonarr" instead of "All clear", and File Health counts "to look at" instead of "to replace".
