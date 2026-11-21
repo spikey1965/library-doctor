@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2 (beta)
+
+- **Quick test (new).** A light version of the deep check: ffprobe opens the file, then ffmpeg plays 6 seconds at the start, at 25, 50 and 75 % and near the end, seeking straight to each one. A few seconds a file (a 44-minute 1080p episode took 3 s, a 2-hour 4K HEVC film 14 s). It finds downloads that were cut off ("it stops playing somewhere between 1 h 5 min and 1 h 38 min"), files that won't open or won't start, and parts with lots of errors. It can't see damage between the samples, so the card offers Deep check to be sure. Damaged files get the same File Health card with Replace.
+  - **Quick test** button on every File Health card (next to Deep check), and **Test a folder…** now offers Quick test or Deep check for a whole folder.
+  - **Settings → Quick test & deep check → Quick-test new downloads when they're imported** (on by default; if the deep check for new downloads is on, that runs instead).
+  - **Quick-test the whole library in the night window** (off by default): each file once, newest first, then only new and changed files, so after the first night or two it takes seconds. It uses the same window as the nightly deep check and goes first. Files a deep check already passed are skipped.
+  - A deep check result for the same file always wins over a quick test.
+- **Deep check fix:** 4K Blu-ray files with PGS subtitles print ffmpeg notes like "not enough frames to estimate rate; consider increasing probesize" when they open. They aren't damage, but the deep check counted them, so a good 4K file could get a "Some errors" card. They're ignored now.
+
 ## 0.3.1 (beta)
 
 - **Plex, Jellyfin or Emby on Windows** ([#2](https://github.com/spikey1965/library-doctor/issues/2)). Folder mappings now work for Windows paths: `Q:\Plex` → `/media/Q` matches `Q:\Plex\Movies\…` whether you type the mapping with backslashes or forward slashes, and the drive letter and folder names ignore upper/lower case (as Windows does). Paths sent back to a Windows server are turned back into Windows paths. **Detect** in Settings → Folder check also finds the mapping for Windows paths now (it only understood `/` before, so it found 0 files).

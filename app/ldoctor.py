@@ -33,7 +33,7 @@ import xml.etree.ElementTree as _ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -320,6 +320,8 @@ def init_db():
         # v0.3 deep check: one row per file played through (result), and files waiting to be checked
         c.execute("CREATE TABLE IF NOT EXISTS deep (path TEXT PRIMARY KEY, size INTEGER, mtime REAL, at TEXT, status TEXT, errors INTEGER, got REAL, dur REAL, msg TEXT, how TEXT, first TEXT, secs INTEGER)")
         c.execute("CREATE TABLE IF NOT EXISTS deep_queue (path TEXT PRIMARY KEY, at TEXT, why TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS quick (path TEXT PRIMARY KEY, size INTEGER, mtime REAL, at TEXT, status TEXT, errors INTEGER, got REAL, dur REAL, msg TEXT, how TEXT, first TEXT, secs INTEGER)")
+        c.execute("CREATE TABLE IF NOT EXISTS quick_queue (path TEXT PRIMARY KEY, at TEXT, why TEXT)")
         cols = [r[1] for r in c.execute("PRAGMA table_info(done)")]
         if "chk" not in cols:
             c.execute("ALTER TABLE done ADD COLUMN chk TEXT DEFAULT 'dupes'")
@@ -3513,7 +3515,8 @@ VIRUS_LOCK = threading.Lock()
 # weeks. One file at a time, at low priority, and it stops while someone is watching. Results live in the deep table;
 # health_scan turns bad ones into File Health cards (kind "corrupt") with the usual Replace. Tdarr's own health-check
 # errors become the same cards. Nothing here ever moves or deletes a file.
-DEEP_DEFAULT = {"crawl": False, "start": 1, "end": 6, "imports": False, "recheck": 12, "pause": True}
+DEEP_DEFAULT = {"crawl": False, "start": 1, "end": 6, "imports": False, "recheck": 12, "pause": True,
+                "quick_imports": True, "quick_nightly": False}           # v0.3.2 quick test
 DEEP_BAD_ERRS, DEEP_MINOR_ERRS = 100, 2
 def _cpu_limit():
     """CPUs this container may use: the cgroup quota (compose "cpus:") when there is one, else all of them."""
@@ -3527,9 +3530,10 @@ DEEP_THREADS = max(1, min((os.cpu_count() or 4) // 2, int(_cpu_limit() + 0.5))) 
 DEEP_HARMLESS = re.compile(r"timescale not set|UDTA parsing failed|Guessed Channel Layout|Estimating duration|non monotonically increasing dts|"
                            r"Could not find codec parameters|deprecated|Unknown cover type|matches no streams|max_analyze_duration|"
                            r"Thread message queue blocking|Discarding ID3 tags|Referenced QT chapter track not found|"
-                           r"Starting new cluster due to timestamp|unknown tag|unsupported|Ignoring", re.I)
+                           r"Starting new cluster due to timestamp|unknown tag|unsupported|Ignoring|"
+                           r"not enough frames to estimate rate|increasing the value for the 'analyzeduration'|consider increasing probesize", re.I)
 DEEP = {"cur": None, "pct": 0.0, "started": None, "cancel": False, "paused": "", "list": None, "list_day": None,
-        "found_new": False, "crawl_done": 0, "skip_night": None}
+        "found_new": False, "crawl_done": 0, "skip_night": None, "mode": "deep", "qlist": None, "qlist_day": None, "qdone": 0}
 
 def deep_cfg():
     c = dict(DEEP_DEFAULT)
@@ -3672,6 +3676,151 @@ def deep_check_file(path, how):
     log("deep check %s (%s): %s %s [%d s]" % (path, how, status, msg, res["secs"]))
     return res
 
+# ---------------- Quick test (v0.3.2) ----------------
+# A few seconds per file instead of minutes: ffprobe opens it, then ffmpeg decodes 6 s at the start, at 25/50/75 % and
+# near the end (seeking straight there, so only those parts are read). A cut-off download can't play its later samples
+# ("stops after about 60 %"), a file that isn't a video won't open, and badly damaged parts throw errors. It can't see
+# damage between the samples: that's what the Deep check is for. Results live in the quick table; a deep result for
+# the same file (same size and time) always wins. Same worker, queue order: quick buttons, deep buttons, new downloads,
+# then the nightly passes (quick first, then deep).
+QUICK_SECS = 6
+QUICK_SEEK = re.compile(r"Could not find ref with POC|co located POCs unavailable|Missing reference picture|reference picture missing|"
+                        r"decode_slice_header error|no frame!|mmco: unref short failure|exceeds max", re.I)   # normal right after a seek
+QUICK_BAD_ERRS, QUICK_MINOR_ERRS = 10, 2
+
+def _quick_probe(path):
+    """(duration, video height or -1 when there's no video stream, ffprobe's complaint)."""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,height", "-of", "json", path],
+                           capture_output=True, text=True, errors="replace", timeout=60)
+        j = json.loads(r.stdout or "{}")
+    except Exception as e:
+        return 0.0, -1, str(e)[:160]
+    v = [x for x in j.get("streams") or [] if x.get("codec_type") == "video"]
+    try: dur = float((j.get("format") or {}).get("duration") or 0)
+    except (TypeError, ValueError): dur = 0.0
+    err = re.sub(r"^(\[[^\]]*\]\s*)+", "", (r.stderr or "").strip().splitlines()[-1] if (r.stderr or "").strip() else "")[:160]
+    return dur, (int(v[0].get("height") or 0) if v else -1), err
+
+def _quick_sample(path, at):
+    """Decode QUICK_SECS seconds from `at`: (seconds that played, counted error lines)."""
+    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-v", "warning", "-threads", "2", "-ss", "%.2f" % at, "-i", path, "-t", str(QUICK_SECS),
+           "-map", "0:v:0?", "-map", "0:a:0?", "-f", "null", "-", "-progress", "pipe:1", "-nostats"]
+    def low():
+        try: os.nice(19)
+        except Exception: pass
+    try: r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=180, preexec_fn=low)
+    except subprocess.TimeoutExpired: return None, []
+    got = 0.0
+    for line in r.stdout.splitlines():
+        if line.startswith("out_time_us="):
+            try: got = max(got, int(line.split("=", 1)[1]) / 1e6)
+            except ValueError: pass
+    errs = []
+    for line in r.stderr.splitlines():
+        line = line.strip()
+        if not line or DEEP_HARMLESS.search(line) or (at > 0 and QUICK_SEEK.search(line)) or line.startswith("Last message repeated"): continue
+        errs.append(re.sub(r"^(\[[^\]]*\]\s*)+", "", line)[:160])
+    return got, errs
+
+def quick_check_file(path, how):
+    """Quick test of one file. Returns the result, or None when it was stopped (Stop pressed)."""
+    try: st = os.stat(path)
+    except OSError: return None
+    t0 = time.time()
+    dur, height, perr = _quick_probe(path)
+    got_total, n, first, status, msg = 0.0, 0, [], "ok", ""
+    if height < 0:
+        status, msg = "bad", "It won't open as a video file." + (" ffprobe: " + perr if perr else "")
+        if perr: first.append(perr)
+    else:
+        pts = [0.0] + ([dur * f for f in (0.25, 0.5, 0.75)] + [max(0.0, dur - QUICK_SECS - 14)] if dur >= 120 else [])
+        DEEP.update(cur=path, pct=0.0, started=now_iso(), mode="quick")
+        try:
+            for i, at in enumerate(pts):
+                if DEEP["cancel"]: return None
+                got, errs = _quick_sample(path, at)
+                DEEP["pct"] = round((i + 1) * 100 / len(pts))
+                if got is None:
+                    status, msg = "skip", "One of the samples took more than 3 minutes to play, so the test was stopped. That's the computer being slow, not a fault in the file."; break
+                got_total += got; n += len(errs)
+                for e in errs:
+                    if len(first) < 3 and e not in first: first.append(e)
+                if got < 1:
+                    if at == 0: status, msg = "bad", "It won't start playing."
+                    else:
+                        prev = pts[i - 1] if i else 0
+                        status, msg = "bad", ("It stops playing somewhere between %s and %s (of %s): most likely a download that was cut off." % (_hms(prev), _hms(at), _hms(dur))
+                                              if i < len(pts) - 1 else "The last few minutes won't play (of %s): most likely a download that was cut off." % _hms(dur))
+                    break
+        finally:
+            DEEP.update(cur=None, pct=0.0, mode="deep")
+        if status == "ok":
+            if n >= QUICK_BAD_ERRS: status, msg = "bad", "%d errors in %d short samples." % (n, len(pts))
+            elif n >= QUICK_MINOR_ERRS: status, msg = "minor", "%d errors in %d short samples." % (n, len(pts))
+            else: msg = "The samples play cleanly." if not n else "The samples play (%d small error%s)." % (n, "" if n == 1 else "s")
+    res = {"path": path, "size": st.st_size, "mtime": st.st_mtime, "at": now_iso(), "status": status, "errors": n, "got": round(got_total, 1),
+           "dur": round(dur, 1), "msg": msg, "how": how, "first": first[:3], "secs": int(time.time() - t0)}
+    with db() as c:
+        c.execute("INSERT OR REPLACE INTO quick (path, size, mtime, at, status, errors, got, dur, msg, how, first, secs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (path, st.st_size, st.st_mtime, res["at"], status, n, res["got"], res["dur"], msg, how, json.dumps(first[:3]), res["secs"]))
+    if status == "bad":
+        DEEP["found_new"] = True
+        event("health", "Quick test: %s looks damaged. %s" % (os.path.basename(path), msg))
+    log("quick test %s (%s): %s %s [%d s]" % (path, how, status, msg, res["secs"]))
+    return res
+
+def quick_enqueue(paths, why):
+    n = 0
+    with db() as c:
+        for p in paths:
+            if not isinstance(p, str) or not safe_media_path(p) or not os.path.isfile(p) or not p.lower().endswith(VIDEO_EXT): continue
+            c.execute("INSERT OR IGNORE INTO quick_queue (path, at, why) VALUES (?,?,?)", (p, now_iso(), why)); n += 1
+    return n
+
+def quick_request(body):
+    """Button: quick-test these files, or every video in a folder (relative to the media folder)."""
+    if "folder" in body:
+        f = _deep_folder(body.get("folder"))
+        if not f: return {"ok": False, "error": "That folder isn't inside your media folder."}
+        paths = []
+        for p in _deep_videos(f):
+            paths.append(p)
+            if len(paths) >= 50000: break
+    else:
+        paths = [p for p in (body.get("paths") or []) if isinstance(p, str)][:200]
+    n = quick_enqueue(paths, "manual")
+    if not n: return {"ok": False, "error": "No video files to test there."}
+    return {"ok": True, "queued": n, "text": "%d file%s added to the quick test. Each takes a few seconds (4K up to about 15)." % (n, "" if n == 1 else "s")}
+
+def quick_crawl_list():
+    """Files never quick-tested (or changed since), skipping ones a deep check already passed as they are now. Newest first."""
+    with db() as d:
+        known = {r["path"]: (r["size"], r["mtime"] or 0) for r in d.execute("SELECT path, size, mtime FROM quick")}
+        known.update({r["path"]: (r["size"], r["mtime"] or 0) for r in d.execute("SELECT path, size, mtime FROM deep WHERE status != 'skip'")})
+    todo, total, done = [], 0, 0
+    for p in _deep_videos(MEDIA_ROOT):
+        try: st = os.stat(p)
+        except OSError: continue
+        total += 1
+        k = known.get(p)
+        if k and k[0] == st.st_size and abs(k[1] - st.st_mtime) < 2: done += 1
+        elif time.time() - st.st_mtime > 3600: todo.append((st.st_mtime, p))
+    todo.sort(reverse=True)
+    kv_set("quick_progress", {"total": total, "done": done, "at": now_iso()})
+    DEEP["qdone"] = 0
+    return [p for _, p in todo]
+
+def quick_next_crawl():
+    night = _deep_night()
+    if DEEP["skip_night"] == night: return None
+    if DEEP["qlist_day"] != night or DEEP["qlist"] is None:
+        DEEP["qlist"], DEEP["qlist_day"] = quick_crawl_list(), night
+    while DEEP["qlist"]:
+        p = DEEP["qlist"].pop(0)
+        if os.path.isfile(p): return p
+    return None
+
 def deep_enqueue(paths, why):
     n = 0
     with db() as c:
@@ -3709,9 +3858,9 @@ def deep_browse(rel):
     return {"ok": True, "path": here, "dirs": dirs[:1000], "more": max(0, len(dirs) - 1000)}
 
 def deep_cancel():
-    with db() as c: n = c.execute("DELETE FROM deep_queue").rowcount
+    with db() as c: n = c.execute("DELETE FROM deep_queue").rowcount + c.execute("DELETE FROM quick_queue").rowcount
     DEEP["cancel"] = bool(DEEP["cur"])
-    if deep_cfg()["crawl"] and deep_in_window(deep_cfg()): DEEP["skip_night"] = DEEP["list_day"]   # and no more crawling tonight
+    if (deep_cfg()["crawl"] or deep_cfg()["quick_nightly"]) and deep_in_window(deep_cfg()): DEEP["skip_night"] = _deep_night()   # and no more crawling tonight
     return {"ok": True, "text": "Stopped." + (" %d waiting file%s taken off the list." % (n, "" if n == 1 else "s") if n else "")}
 
 def _deep_night():
@@ -3751,26 +3900,35 @@ def deep_worker():
         try:
             if not configured(): time.sleep(30); continue
             c = deep_cfg()
-            with db() as d:
-                job = d.execute("SELECT path, why FROM deep_queue ORDER BY CASE why WHEN 'manual' THEN 0 ELSE 1 END, at LIMIT 1").fetchone()
-            path, how = (job["path"], job["why"]) if job else (None, None)
-            if not path and c["crawl"] and deep_in_window(c) and not STATE["running"]:
-                path, how = deep_next_crawl(c), "crawl"
+            with db() as d:     # order: quick buttons, deep buttons, quick new downloads, deep new downloads, then the nightly passes
+                jobs = [("quick", r) for r in d.execute("SELECT path, why FROM quick_queue ORDER BY CASE why WHEN 'manual' THEN 0 ELSE 1 END, at LIMIT 1")] + \
+                       [("deep", r) for r in d.execute("SELECT path, why FROM deep_queue ORDER BY CASE why WHEN 'manual' THEN 0 ELSE 1 END, at LIMIT 1")]
+            jobs.sort(key=lambda j: (0 if j[1]["why"] == "manual" else 1, 0 if j[0] == "quick" else 1))
+            mode, path, how = (jobs[0][0], jobs[0][1]["path"], jobs[0][1]["why"]) if jobs else ("deep", None, None)
+            night_ok = deep_in_window(c) and not STATE["running"]
+            if not path and c["quick_nightly"] and night_ok:
+                path = quick_next_crawl()
+                if path: mode, how = "quick", "crawl"
+            if not path and c["crawl"] and night_ok:
+                mode, path, how = "deep", deep_next_crawl(c), "crawl"
             if not path:
                 DEEP["paused"] = ""
                 if DEEP["found_new"] and not STATE["running"]:       # list what was found without waiting for the nightly scan
                     DEEP["found_new"] = False; threading.Thread(target=scan, daemon=True).start()
                 time.sleep(30); continue
+            back = (lambda: DEEP["qlist"].insert(0, path)) if mode == "quick" else (lambda: DEEP["list"].insert(0, path))
             if c["pause"] and deep_playing():
-                if how == "crawl": DEEP["list"].insert(0, path)
+                if how == "crawl": back()
                 DEEP["paused"] = "Waiting: someone is watching something."; time.sleep(60); continue
             DEEP["paused"] = ""; DEEP["cancel"] = False
-            res = deep_check_file(path, how) if os.path.isfile(path) else None
+            res = (quick_check_file if mode == "quick" else deep_check_file)(path, how) if os.path.isfile(path) else None
             if res is not None or not os.path.isfile(path) or DEEP["cancel"]:
-                with db() as d: d.execute("DELETE FROM deep_queue WHERE path=?", (path,))
-                if how == "crawl" and res is not None: DEEP["crawl_done"] += 1
+                with db() as d: d.execute("DELETE FROM %s WHERE path=?" % ("quick_queue" if mode == "quick" else "deep_queue"), (path,))
+                if how == "crawl" and res is not None:
+                    if mode == "quick": DEEP["qdone"] += 1
+                    else: DEEP["crawl_done"] += 1
             elif how == "crawl":
-                DEEP["list"].insert(0, path)                       # stopped because someone started watching: same file next time
+                back()                                             # stopped because someone started watching: same file next time
             DEEP["cancel"] = False
         except Exception as e:
             log("deep check worker: %r" % e); time.sleep(60)
@@ -3786,6 +3944,18 @@ def deep_findings():
                 except ValueError: x["first"] = []
                 out[r["path"]] = x
             ok_at = {r["path"]: r["at"] or "" for r in c.execute("SELECT path, at FROM deep WHERE status='ok'")}
+            deep_seen = {r["path"]: (r["size"], r["mtime"] or 0) for r in c.execute("SELECT path, size, mtime FROM deep WHERE status != 'skip'")}
+            for r in c.execute("SELECT * FROM quick WHERE status IN ('bad','minor')"):       # v0.3.2
+                if r["path"] in out: continue
+                try: st = os.stat(r["path"])
+                except OSError: continue
+                if st.st_size != r["size"] or abs(st.st_mtime - (r["mtime"] or 0)) >= 2: continue      # file changed since: stale
+                k = deep_seen.get(r["path"])
+                if k and k[0] == st.st_size and abs(k[1] - st.st_mtime) < 2: continue                 # a deep check of this exact file wins
+                x = dict(r); x["src"] = "quick"
+                try: x["first"] = json.loads(x.get("first") or "[]")
+                except ValueError: x["first"] = []
+                out[r["path"]] = x
     except Exception as e:
         log("deep findings failed: %r" % e)
     if S.get("tdarr"):
@@ -3813,6 +3983,10 @@ def deep_card(dz, f, size, title, lib, key, ref, m, link):
     if dz.get("src") == "tdarr":
         text = dz["msg"]
         note = "Checked by Tdarr%s. Most likely a damaged or badly finished download." % (" on " + when if when else "")
+    elif dz.get("src") == "quick":
+        text = ("Damaged: " if bad else "Some errors: ") + dz.get("msg", "")
+        note = ("Found by a quick test%s: short parts at the start, middle and end were played." % (" on " + when if when else "")) + (
+                "" if bad else " A few errors are often harmless.") + " Deep check plays the whole file if you want to be sure."
     else:
         text = ("Damaged: " if bad else "Some errors: ") + dz.get("msg", "")
         note = ("Found by a deep check%s: the whole file was played through. Most likely a damaged or badly finished download." if bad else
@@ -3920,8 +4094,13 @@ def deep_status():
             counts = {r[0]: r[1] for r in d.execute("SELECT status, COUNT(*) FROM deep GROUP BY status")}
             recent = [dict(r) for r in d.execute("SELECT path, at, status, msg, how, secs FROM deep ORDER BY at DESC LIMIT 12")]
             avg = d.execute("SELECT AVG(secs) FROM (SELECT secs FROM deep WHERE how='crawl' AND status!='skip' ORDER BY at DESC LIMIT 200)").fetchone()[0]
+            qq = d.execute("SELECT COUNT(*) FROM quick_queue").fetchone()[0]
+            qcounts = {r[0]: r[1] for r in d.execute("SELECT status, COUNT(*) FROM quick GROUP BY status")}
+            qrecent = [dict(r, kind="quick") for r in d.execute("SELECT path, at, status, msg, how, secs FROM quick ORDER BY at DESC LIMIT 12")]
+            qavg = d.execute("SELECT AVG(secs) FROM (SELECT secs FROM quick WHERE status!='skip' ORDER BY at DESC LIMIT 200)").fetchone()[0]
+        recent = sorted([dict(r, kind="deep") for r in recent] + qrecent, key=lambda r: r.get("at") or "", reverse=True)[:12]
     except Exception as e:
-        log("deep status failed: %r" % e); q, counts, recent, avg = 0, {}, [], None
+        log("deep status failed: %r" % e); q, counts, recent, avg, qq, qcounts, qavg = 0, {}, [], None, 0, {}, None
     rel = lambda p: os.path.relpath(p, MEDIA_ROOT) if p and p.startswith(MEDIA_ROOT + os.sep) else p
     pr = kv_get("deep_progress") or {}
     done = (pr.get("done") or 0) + DEEP["crawl_done"]
@@ -3929,9 +4108,14 @@ def deep_status():
     hours = (int(c["end"]) - int(c["start"])) % 24 or 24
     nights = int(-(-left * avg // (hours * 3600))) if avg and left and c["crawl"] else None
     for r in recent: r["name"] = rel(r.pop("path"))
-    return {"cfg": c, "cur": rel(DEEP["cur"]), "pct": round(DEEP["pct"]), "paused": DEEP["paused"], "queue": q, "counts": counts,
+    qp = kv_get("quick_progress") or {}
+    qdone = (qp.get("done") or 0) + DEEP["qdone"]
+    qleft = max(0, (qp.get("total") or 0) - qdone)
+    qnights = int(-(-qleft * qavg // (hours * 3600))) if qavg and qleft and c["quick_nightly"] else None
+    quick = {"queue": qq, "counts": qcounts, "total": qp.get("total"), "done": qdone, "nights": qnights, "avg_secs": round(qavg, 1) if qavg else None}
+    return {"cfg": c, "cur": rel(DEEP["cur"]), "mode": DEEP["mode"], "quick": quick, "pct": round(DEEP["pct"]), "paused": DEEP["paused"], "queue": q + qq, "counts": counts,
             "recent": recent, "total": pr.get("total"), "done": done, "listed_at": pr.get("at"), "nights": nights,
-            "avg_secs": int(avg) if avg else None, "in_window": bool(c["crawl"] and deep_in_window(c)),
+            "avg_secs": int(avg) if avg else None, "in_window": bool((c["crawl"] or c["quick_nightly"]) and deep_in_window(c)),
             "skip_tonight": DEEP["skip_night"] == _deep_night()}
 
 # ---------------- follow-up after Replace: did a good copy arrive? ----------------
@@ -4301,6 +4485,7 @@ def import_check():
                 p = f.get("path") or ""
                 if not p: continue
                 if deep_cfg()["imports"]: deep_enqueue([p], "import")       # v0.3: played through when the worker is free
+                elif deep_cfg()["quick_imports"]: quick_enqueue([p], "import")   # v0.3.2: quick test instead (seconds, not minutes)
                 mi = f.get("mediaInfo") or {}
                 why = None
                 if os.path.splitext(p)[1].lower() in _FAKE_EXT: why = "it's a %s file, not a video" % os.path.splitext(p)[1]
@@ -6785,11 +6970,12 @@ def settings_save(new):
         dp = new["deep"]
         try:
             cd = {"crawl": bool(dp.get("crawl")), "start": int(dp.get("start", 1)) % 24, "end": int(dp.get("end", 6)) % 24,
-                  "imports": bool(dp.get("imports")), "recheck": int(dp.get("recheck", 12)), "pause": bool(dp.get("pause", True))}
+                  "imports": bool(dp.get("imports")), "recheck": int(dp.get("recheck", 12)), "pause": bool(dp.get("pause", True)),
+                  "quick_imports": bool(dp.get("quick_imports", True)), "quick_nightly": bool(dp.get("quick_nightly"))}
         except (TypeError, ValueError):
             return {"ok": False, "msg": "The deep check settings aren't valid."}
         if cd["recheck"] not in (0, 1, 3, 6, 12): return {"ok": False, "msg": "Pick how often the deep check looks at a file again."}
-        if cd["crawl"] and cd["start"] == cd["end"]: return {"ok": False, "msg": "Pick different start and end times for the nightly deep check."}
+        if (cd["crawl"] or cd["quick_nightly"]) and cd["start"] == cd["end"]: return {"ok": False, "msg": "Pick different start and end times for the nightly checks."}
         cfg["deep"] = cd
     elif "deep" in S: cfg["deep"] = S["deep"]
     if "language" in (new or {}):                            # v0.1.6: audio language check ("" = off)
@@ -7339,6 +7525,7 @@ class H(BaseHTTPRequestHandler):
                 threading.Thread(target=followup, daemon=True).start()
                 return self.send(200, {"ok": True})
             if path == "/api/deep": return self.send(200, deep_request(body))
+            if path == "/api/quick": return self.send(200, quick_request(body))
             if path == "/api/deep/browse": return self.send(200, deep_browse(body.get("path")))
             if path == "/api/deep/cancel": return self.send(200, deep_cancel())
             if path == "/api/deep/advice": return self.send(200, deep_advice())
