@@ -33,7 +33,7 @@ import xml.etree.ElementTree as _ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -41,7 +41,8 @@ LISTEN = os.environ.get("LD_LISTEN", "0.0.0.0")
 PORT = int(os.environ.get("LD_PORT", "8790"))
 SCAN_HOUR = int(os.environ.get("LD_SCAN_HOUR", "3"))   # default; the Settings page can set time + days (v0.1.3)
 MEDIA_ROOT = os.path.realpath(os.environ.get("LD_MEDIA_ROOT", "/media"))
-TRASH_DIR = os.path.join(MEDIA_ROOT, ".library-doctor-trash")
+TRASH_NAME = ".library-doctor-trash"
+TRASH_DIR = os.path.join(MEDIA_ROOT, TRASH_NAME)   # trash for files on the media root mount; other mounts get their own (v0.3.1, trash_dir_for)
 TRASH_DAYS = int(os.environ.get("LD_TRASH_DAYS", "7"))
 TRASH_DAYS_ENV = TRASH_DAYS
 PAGE = 1000
@@ -105,14 +106,29 @@ PATH_KEYS_IN = {"file", "path", "folderPath", "rootFolderPath", "filePath", "fol
 PATH_KEYS_OUT = {"path", "file", "folder", "arrayOrPath", "docID", "folderPath"}
 
 def _pairs(cfg, out=False):
-    ps = [((m.get("from") or "").rstrip("/") or "/", (m.get("to") or "").rstrip("/") or "/") for m in (cfg or {}).get("paths") or [] if m.get("from") and m.get("to")]
+    strip = lambda x: (x.rstrip("\\/") or x[:1]) if is_win_path(x) else (x.rstrip("/") or "/")
+    ps = [(strip(m.get("from") or ""), strip(m.get("to") or "")) for m in (cfg or {}).get("paths") or [] if m.get("from") and m.get("to")]
     ps = [(b, a) for a, b in ps] if out else ps
     return sorted(ps, key=lambda x: -len(x[0]))               # longest prefix first
 
+_WIN_RE = re.compile(r"^[A-Za-z]:(?:[\\/]|$)|^\\\\")
+def is_win_path(s):
+    """v0.3.1 (issue #2): Q:\\Plex, Q:/Plex, Q: or \\\\server\\share = a Windows path (Plex/Jellyfin/Emby running on Windows)."""
+    return isinstance(s, str) and bool(_WIN_RE.match(s))
+
 def _swap(v, pairs):
     for a, b in pairs:
+        if is_win_path(a):                                    # Windows: either slash, any letter case
+            vf, af = v.replace("\\", "/"), a.replace("\\", "/").rstrip("/")
+            if vf.lower() == af.lower(): return b
+            if not vf.lower().startswith(af.lower() + "/"): continue
+            rest = vf[len(af):]
+            return b.rstrip("\\/") + (rest.replace("/", "\\") if is_win_path(b) else rest)
         if v == a: return b
-        if v.startswith(a + "/") or a == "/": return (b.rstrip("/") + "/" + v[len(a):].lstrip("/")) if a == "/" else b + v[len(a):]
+        if v.startswith(a + "/") or a == "/":
+            rest = v[len(a):]
+            if is_win_path(b): return b.rstrip("\\/") + "\\" + rest.lstrip("/").replace("/", "\\")   # back to a Windows app
+            return (b.rstrip("/") + "/" + rest.lstrip("/")) if a == "/" else b + rest
     return v
 
 def to_local(v, cfg): return _swap(v, _pairs(cfg)) if isinstance(v, str) else v
@@ -167,9 +183,71 @@ def move_file(src, dst):
         os.rename(src, dst)
     except OSError as e:
         if e.errno == errno.EXDEV:
-            raise OSError(e.errno, "%s is on a different disk or dataset from %s, so it can't be moved instantly. Library Doctor needs your media in one mount (see Known limitations in the README). Nothing was moved."
+            raise OSError(e.errno, "%s is on a different disk or dataset from %s, so it can't be moved instantly. Nothing was moved."
                           % (src, os.path.dirname(dst) or dst)) from None
         raise
+
+def _media_mounts():
+    """Mount points at or under MEDIA_ROOT, from /proc/self/mountinfo (longest first). Cached for 60 s."""
+    if time.time() - _MOUNTS["t"] < 60: return _MOUNTS["v"]
+    out, ok = set(), False
+    try:
+        with open("/proc/self/mountinfo") as fh:
+            ok = True
+            for line in fh:
+                mp = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), line.split()[4])
+                if mp == MEDIA_ROOT or mp.startswith(MEDIA_ROOT + os.sep): out.add(mp)
+    except (OSError, IndexError): pass
+    _MOUNTS.update(t=time.time(), v=sorted(out, key=len, reverse=True), ok=ok); return _MOUNTS["v"]
+_MOUNTS = {"t": 0, "v": [], "ok": False}
+
+def mount_root(path):
+    """v0.3.1 (issue #1): the folder under MEDIA_ROOT where this file's mount starts (MEDIA_ROOT itself when it's on the
+    same mount). A rename only works inside one mount, so each mount keeps its own trash folder at its top."""
+    rp = os.path.realpath(path)
+    for mp in _media_mounts():
+        if rp == mp or rp.startswith(mp.rstrip(os.sep) + os.sep): return mp
+    if _MOUNTS["ok"]: return MEDIA_ROOT                         # not on a mount of its own: the media root's trash
+    try:                                                      # no mountinfo (unusual): walk up while the device stays the same
+        dev, d = os.stat(rp if os.path.isdir(rp) else os.path.dirname(rp)).st_dev, rp if os.path.isdir(rp) else os.path.dirname(rp)
+        while d != MEDIA_ROOT and os.path.dirname(d).startswith(MEDIA_ROOT) and os.stat(os.path.dirname(d)).st_dev == dev: d = os.path.dirname(d)
+        return d if d.startswith(MEDIA_ROOT) else MEDIA_ROOT
+    except OSError: return MEDIA_ROOT
+
+TRASH_IGNORE = {".plexignore": "*\n", ".ignore": ""}          # Plex skips everything under a .plexignore with *, Jellyfin/Emby a folder with .ignore
+def trash_dir_for(path):
+    """The trash folder on the same mount as `path` (created with ignore files so media servers never index it)."""
+    root = mount_root(path)
+    t = TRASH_DIR if root == MEDIA_ROOT else os.path.join(root, TRASH_NAME)
+    try:
+        os.makedirs(t, exist_ok=True)
+        for n, body in TRASH_IGNORE.items():
+            if not os.path.exists(os.path.join(t, n)):
+                with open(os.path.join(t, n), "w") as fh: fh.write(body)
+    except OSError: pass                                      # e.g. a read-only mount: the move itself then fails with a clear error
+    return t
+
+def trash_dst(src, stamp, issue_id="", sub=None):
+    """Where a clean-up puts `src`: <mount>/.library-doctor-trash/[sub/]<stamp>-<issue>/<path inside that mount>."""
+    rp = os.path.realpath(src); t = trash_dir_for(rp)
+    rel = os.path.relpath(rp, os.path.dirname(t))
+    return os.path.join(*([t] + ([sub] if sub else []) + [stamp + ("-" + issue_id if issue_id else ""), rel]))
+
+def is_trash_path(path):
+    return TRASH_NAME in os.path.realpath(path).split(os.sep)
+
+def trash_dirs():
+    """Every trash folder in use: the media root one plus one per other mount that has one."""
+    out = [TRASH_DIR] + [os.path.join(mp, TRASH_NAME) for mp in _media_mounts() if mp != MEDIA_ROOT]
+    return [t for t in dict.fromkeys(out) if os.path.isdir(t)]
+
+def tidy_trash():
+    """Remove empty folders inside every trash folder (the trash folders themselves and their ignore files stay)."""
+    for t in trash_dirs():
+        for root, dirs, files in os.walk(t, topdown=False):
+            if root != t and not os.listdir(root):
+                try: os.rmdir(root)
+                except OSError: pass
 
 _SPLIT = {"t": 0, "v": []}
 def split_mounts():
@@ -1228,7 +1306,7 @@ def scan():
 # ---------------- trash ----------------
 def safe_media_path(p):
     rp = os.path.realpath(p)
-    return rp.startswith(MEDIA_ROOT + os.sep) and not rp.startswith(TRASH_DIR + os.sep)
+    return rp.startswith(MEDIA_ROOT + os.sep) and not is_trash_path(rp)
 
 def plex_parts(rk):
     """Files Plex lists for one item, or None if the item is gone."""
@@ -1298,7 +1376,7 @@ def fix_double(issue_id):
     src, sec, title = d["path"], d.get("section"), d.get("ep_title", "")
     if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where Plex says it is, so nothing was changed."}
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    tmp = os.path.join(TRASH_DIR, ".plex-fix", stamp + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
+    tmp = trash_dst(src, stamp, issue_id, sub=".plex-fix")
     with db() as c:
         done_id = c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note) VALUES (?,?,?,?,?,?,?,?,?,?)",
                             (issue_id, row["title"], row["library"], src, "[]", "[]", row["links"], now_iso(), "checking", "Fixing Plex's listing…")).lastrowid
@@ -1316,10 +1394,7 @@ def _dance(done_id, issue_id, item_title, src, tmp, sec, ep_title):
                       ("Something went wrong (%s). %s" % (e, "The file is back in place." if back else "The file is in the Trash: use Put Back."), now_iso(), done_id))
         log("plex fix failed: %r" % e)
     finally:
-        for root, dirs, files in os.walk(os.path.join(TRASH_DIR, ".plex-fix"), topdown=False):
-            if not os.listdir(root):
-                try: os.rmdir(root)
-                except OSError: pass
+        tidy_trash()
 
 def _dance_steps(done_id, issue_id, item_title, src, tmp, sec, ep_title):
     folder = os.path.dirname(src)
@@ -1398,9 +1473,8 @@ def cleanup(issue_id, keep_idx=None):
                 if src == keep[0]["path"] or src in keep[0].get("parts", []): continue
                 if not safe_media_path(src) or not os.path.isfile(src):
                     problems.append("%s: not found or outside the media folder" % os.path.basename(src)); continue
-                rel = os.path.relpath(os.path.realpath(src), MEDIA_ROOT)
-                dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, rel)
                 try:
+                    dst = trash_dst(src, stamp, issue_id)
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     size = os.path.getsize(src)
                     move_file(src, dst)        # same dataset: instant, nothing copied
@@ -1417,9 +1491,8 @@ def cleanup(issue_id, keep_idx=None):
             if os.path.dirname(src) not in rm_dirs or os.path.splitext(src)[1].lower() not in SIDE_EXT: continue
             if not safe_media_path(src) or not os.path.isfile(src): continue
             if src.lower().endswith(".txt") and os.path.getsize(src) > 0: continue
-            rel = os.path.relpath(os.path.realpath(src), MEDIA_ROOT)
-            dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, rel)
             try:
+                dst = trash_dst(src, stamp, issue_id)
                 os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
                 with db() as c:
                     c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
@@ -1602,16 +1675,12 @@ def purge(older_than_days=None):
             if cutoff and datetime.fromisoformat(t["moved_at"]) > cutoff: continue
             if str(t["id"]) in held: kept_back += 1; continue
             hl = False
-            if os.path.realpath(t["dst"]).startswith(TRASH_DIR + os.sep) and os.path.isfile(t["dst"]):
+            if is_trash_path(t["dst"]) and os.path.isfile(t["dst"]):
                 hl = os.stat(t["dst"]).st_nlink > 1        # v0.1.7: another link still holds the data, so nothing is freed
                 os.remove(t["dst"]); n += 1; freed += 0 if hl else (t["size"] or 0)
             with db() as c:
                 c.execute("UPDATE trash SET purged_at=?, reason=? WHERE id=?", (now_iso(), (t["reason"] or "") + (" (hardlinked)" if hl else ""), t["id"]))
-        # tidy empty folders inside the trash
-        for root, dirs, files in os.walk(TRASH_DIR, topdown=False):
-            if root != TRASH_DIR and not os.listdir(root):
-                try: os.rmdir(root)
-                except OSError: pass
+        tidy_trash()
         if n: event("purge", "Emptied %d file%s from the trash (%s freed)." % (n, "" if n == 1 else "s", human(freed)))
         return {"ok": True, "deleted": n, "freed": human(freed), "kept_back": kept_back}
 
@@ -1625,15 +1694,12 @@ def purge_ids(ids):
                 t = c.execute("SELECT * FROM trash WHERE id=? AND restored_at IS NULL AND purged_at IS NULL", (tid,)).fetchone()
             if not t: continue
             hl = False
-            if os.path.realpath(t["dst"]).startswith(TRASH_DIR + os.sep) and os.path.isfile(t["dst"]):
+            if is_trash_path(t["dst"]) and os.path.isfile(t["dst"]):
                 hl = os.stat(t["dst"]).st_nlink > 1
                 os.remove(t["dst"]); n += 1; freed += 0 if hl else (t["size"] or 0)
             with db() as c:
                 c.execute("UPDATE trash SET purged_at=?, reason=? WHERE id=?", (now_iso(), (t["reason"] or "") + (" (hardlinked)" if hl else ""), tid))
-        for root, dirs, files in os.walk(TRASH_DIR, topdown=False):
-            if root != TRASH_DIR and not os.listdir(root):
-                try: os.rmdir(root)
-                except OSError: pass
+        tidy_trash()
         if n: event("purge", "Deleted %d file%s from the trash for good (%s freed)." % (n, "" if n == 1 else "s", human(freed)))
         return {"ok": True, "deleted": n, "freed": human(freed)}
 
@@ -1653,7 +1719,7 @@ def recycle_bins():
             mm = arr(a, "/config/mediamanagement")
             raw = (mm.get("recycleBin") or "").rstrip("/")
             root = os.path.realpath(raw) if raw else ""
-            if root and root.startswith(MEDIA_ROOT + os.sep) and not root.startswith(TRASH_DIR) and os.path.isdir(root):
+            if root and root.startswith(MEDIA_ROOT + os.sep) and not is_trash_path(root) and os.path.isdir(root):
                 bins.append({"arr": a, "root": root, "days": int(mm.get("recycleBinCleanupDays") or 7)})
         except Exception as e:
             log("recycle bin of %s: %r" % (a["name"], e))
@@ -1719,7 +1785,7 @@ def restore_recycle(rid, items=None):
         if a["kind"] == "qbm" and not os.path.abspath(dst).startswith(os.path.join(MEDIA_ROOT, "downloads") + os.sep):
             return {"ok": False, "error": "Refused: qbit_manage files only go back under downloads."}
         if not os.path.realpath(src).startswith(it["bin"]["root"] + os.sep): return {"ok": False, "error": "Refused: not inside the recycle bin."}
-        if not os.path.abspath(dst).startswith(MEDIA_ROOT + os.sep) or os.path.abspath(dst).startswith(TRASH_DIR):
+        if not os.path.abspath(dst).startswith(MEDIA_ROOT + os.sep) or is_trash_path(os.path.abspath(dst)):
             return {"ok": False, "error": "Refused: the original place is outside the media folder."}
         if os.path.exists(dst): return {"ok": False, "error": "%s: a file already exists at the original place, so nothing was changed." % os.path.basename(dst)}
         os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -2293,7 +2359,7 @@ def health_fix(issue_id):
         moved, tids = [], []
         why = {"broken": "Broken file (replaced)", "report": "Reported in Seerr (replaced)", "corrupt": "Damaged file (replaced)"}.get(d["kind"], "Too short (replaced)")
         for p, reason in [(src, why)] + [(x, "Leftover side file") for x in health_side_files(src)]:
-            dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(p), MEDIA_ROOT))
+            dst = trash_dst(p, stamp, issue_id)
             try:
                 os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(p); move_file(p, dst)
                 with db() as c:
@@ -2686,7 +2752,7 @@ def album_clean(issue_id):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S"); moved, tids, size = [], [], 0
         for dp, dirs, fs in os.walk(sd):
             for n in fs:
-                p = os.path.join(dp, n); dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(p), MEDIA_ROOT))
+                p = os.path.join(dp, n); dst = trash_dst(p, stamp, issue_id)
                 try:
                     os.makedirs(os.path.dirname(dst), exist_ok=True); sz = os.path.getsize(p); move_file(p, dst); size += sz
                     with db() as c:
@@ -2716,7 +2782,7 @@ def track_fix(issue_id, row, d):
     src = d["path"]
     if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where it was, so nothing was moved. Scan again."}
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
+    dst = trash_dst(src, stamp, issue_id)
     try:
         os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
     except Exception as e: return {"ok": False, "error": "Couldn't move it: %s" % e}
@@ -2943,7 +3009,7 @@ def lang_fix(issue_id, row, d):
         src = x["path"]
         if not safe_media_path(src) or not os.path.isfile(src): continue
         for p, reason in [(src, "Wrong audio language (replaced)")] + [(y, "Leftover side file") for y in health_side_files(src)]:
-            dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(p), MEDIA_ROOT))
+            dst = trash_dst(p, stamp, issue_id)
             try:
                 os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(p); move_file(p, dst)
                 with db() as c:
@@ -3206,7 +3272,7 @@ def subs_fix(issue_id, how):
                 event("subtitles", "%s: renamed the subtitle to match its video." % row["title"])
             else:
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
+                dst = trash_dst(src, stamp, issue_id)
                 os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
                 with db() as c:
                     tids.append(c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
@@ -3414,7 +3480,7 @@ def virus_fix(issue_id):
         d = json.loads(row["detail"]); src = d["path"]
         if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where it was. Scan again."}
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
+        dst = trash_dst(src, stamp, issue_id)
         os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); old_mode = os.stat(src).st_mode & 0o7777; move_file(src, dst)
         made_safe = False
         if not acl_protected(dst):                   # never executable in the trash (but a chmod would wipe a NAS permission list)
@@ -3616,7 +3682,7 @@ def deep_enqueue(paths, why):
 
 def _deep_folder(rel):
     f = os.path.realpath(os.path.join(MEDIA_ROOT, str(rel or "").lstrip("/")))
-    if not (f == MEDIA_ROOT or f.startswith(MEDIA_ROOT + os.sep)) or f == TRASH_DIR or f.startswith(TRASH_DIR + os.sep) or not os.path.isdir(f): return None
+    if not (f == MEDIA_ROOT or f.startswith(MEDIA_ROOT + os.sep)) or is_trash_path(f) or not os.path.isdir(f): return None
     return f
 
 def deep_request(body):
@@ -4591,7 +4657,7 @@ def _remux(done_id, issue_id, title, d):
             note = "An .mkv with that name appeared meanwhile, so nothing was changed."
         else:
             with MOVE_LOCK:
-                tdst = os.path.join(TRASH_DIR, datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
+                tdst = trash_dst(src, datetime.now().strftime("%Y%m%d-%H%M%S"), issue_id)
                 os.makedirs(os.path.dirname(tdst), exist_ok=True); size = os.path.getsize(src); move_file(src, tdst)
                 with db() as c:
                     tids.append(c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
@@ -5978,7 +6044,7 @@ def _trash_tree(src, reason, title):
     files = [src] if not os.path.isdir(src) else [os.path.join(d, f) for d, _, fs in os.walk(src) for f in fs]
     for f in files:
         if os.path.islink(f): continue
-        dst = os.path.join(TRASH_DIR, stamp, os.path.relpath(f, MEDIA_ROOT))
+        dst = trash_dst(f, stamp)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         size = os.path.getsize(f); move_file(f, dst)
         with db() as c: c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
@@ -6077,7 +6143,7 @@ def _trash_tree(src, title, reason, tag):
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + tag
     files = [src] if os.path.isfile(src) else [os.path.join(d, f) for d, _, fs in os.walk(src) for f in fs]
     for f in files:
-        dst = os.path.join(TRASH_DIR, stamp, os.path.relpath(f, MEDIA_ROOT))
+        dst = trash_dst(f, stamp)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         size = os.path.getsize(f); move_file(f, dst)
         with db() as c: c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
@@ -6134,7 +6200,7 @@ def _remove_leftover(it):
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-leftover-" + it["downloadId"][:8].lower()
     files = [src] if os.path.isfile(src) else [os.path.join(d, f) for d, _, fs in os.walk(src) for f in fs]
     for f in files:
-        dst = os.path.join(TRASH_DIR, stamp, os.path.relpath(f, MEDIA_ROOT))
+        dst = trash_dst(f, stamp)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         size = os.path.getsize(f); move_file(f, dst)
         with db() as c: c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
@@ -6670,12 +6736,15 @@ def settings_detect(kind, e):
     bases = _local_bases()
     for p in smp:
         if os.path.exists(p) and (p == MEDIA_ROOT or p.startswith(MEDIA_ROOT + "/")): votes[("", "")] = votes.get(("", ""), 0) + 1; continue
-        parts = p.strip("/").split("/"); hit = None
+        win = is_win_path(p)
+        unc = win and p.startswith("\\\\")
+        parts = (p.replace("\\", "/") if win else p).strip("/").split("/"); hit = None
         for k in range(1, len(parts)):
             tail = "/".join(parts[k:])
             if os.path.isfile(p) is False and len(parts) - k < 2 and "." in parts[-1]: break    # a bare file name is too weak a match
+            frm = (("\\\\" if unc else "") + "\\".join(parts[:k])) if win else "/" + "/".join(parts[:k])
             for b in bases:
-                if os.path.exists(os.path.join(b, tail)): hit = ("/" + "/".join(parts[:k]), b); break
+                if os.path.exists(os.path.join(b, tail)): hit = (frm, b); break
             if hit: break
         if hit: votes[hit] = votes.get(hit, 0) + 1
         else: miss.append(p)

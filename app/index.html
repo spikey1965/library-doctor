@@ -818,7 +818,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     $("expWarn").hidden = !soon.length;
     if (soon.length) { $("expWarn").innerHTML = `<b>${human(soonSz)} will be permanently deleted tomorrow</b> (${soon.length} item${soon.length === 1 ? "" : "s"} in the trash and recycle bins). <button class="b-line sm" id="expGo">Review now</button>`;
       $("expGo").onclick = () => { $("binSort").value = "expires"; setView("trash"); }; }
-    if (sp.length) $("splitWarn").innerHTML = `<b>Your media is on more than one disk.</b> ${sp.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")}${sp.length > 4 ? ` and ${sp.length - 4} more` : ""} ${sp.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. Scans work, but clean-up, Replace and Convert to MKV can't move files from there into the trash. Mount the folder that holds all your media as one volume instead (see Known limitations in the README).`;
+    if (sp.length) $("splitWarn").innerHTML = `<b>Your media is on more than one disk.</b> ${sp.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")}${sp.length > 4 ? ` and ${sp.length - 4} more` : ""} ${sp.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. That's fine: clean-up keeps a separate <code>.library-doctor-trash</code> folder at the top of each one, so files are only ever renamed, never copied. Each of those folders needs to be mounted read-write for clean-up to work there.`;
     $("nItems").textContent = scan ? scan.items.toLocaleString("en-GB") : "–";
     $("nFiles").textContent = scan ? scan.files.toLocaleString("en-GB") : "–";
     $("nOpen").textContent = open.length; $("nIgn").textContent = ign;
@@ -1617,7 +1617,6 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     const keepY = window.scrollY;
     const sec = (id, title, small, body, head) => `<section class="sec" id="sec-${id}" data-sec="${id}"><div class="sech"><h2>${title}${small ? ` <small>${small}</small>` : ""}</h2>${head || ""}</div>${body}</section>`;
     let top = `<h2>Settings</h2><p class="intro">Library Doctor only reads from these apps until you press a fix button. API keys stay on this server and are never shown again after saving.</p>`;
-    if (S && (S.split_mounts || []).length) top += `<div class="splitw" role="note" style="margin-top:0"><b>Your media is on more than one disk.</b> ${S.split_mounts.slice(0, 4).map(x => `<code>${esc(x)}</code>`).join(" ")} ${S.split_mounts.length === 1 ? "is" : "are"} on a different disk or dataset from <code>${esc(S.media_root || "/media")}</code>. Scans will work, but clean-up can't move files from there into the trash. Mount the one parent folder instead.</div>`;
     if (!SC._conf) top += `<div class="start"><b>Start here:</b> add your media server (Plex, Jellyfin or Emby), press Test, then Save. Radarr and Sonarr are optional but recommended: they let Library Doctor replace bad files and check more. The first scan runs when you press Scan now.</div>`;
     let body = "";
     body += sec("folders", "Folder check", "", fcHtml());

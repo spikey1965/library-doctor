@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 (beta)
+
+- **Plex, Jellyfin or Emby on Windows** ([#2](https://github.com/spikey1965/library-doctor/issues/2)). Folder mappings now work for Windows paths: `Q:\Plex` → `/media/Q` matches `Q:\Plex\Movies\…` whether you type the mapping with backslashes or forward slashes, and the drive letter and folder names ignore upper/lower case (as Windows does). Paths sent back to a Windows server are turned back into Windows paths. **Detect** in Settings → Folder check also finds the mapping for Windows paths now (it only understood `/` before, so it found 0 files).
+- **Clean-up works with separate mounts** ([#1](https://github.com/spikey1965/library-doctor/issues/1)). The trash used to be one folder, `/media/.library-doctor-trash`, so with `/mnt/movies:/media/movies` and `/mnt/tv:/media/tv` (or several network shares) every clean-up failed with "Nothing was moved". Now each mount gets its own `.library-doctor-trash` at its top, worked out from the container's mount table, so files are still only ever renamed (never copied, so nothing can be half-moved). Put back, Delete, Empty Trash and the automatic clear-out after N days work across all of them. Each trash folder gets a `.plexignore` (`*`) and an `.ignore` so Plex, Jellyfin and Emby skip it. Setups with everything in one mount keep using `/media/.library-doctor-trash` exactly as before. The "Your media is on more than one disk" warning is now just a note.
+
 ## 0.3.0 (beta)
 
 - **Lidarr (music), step 1.** Settings → Radarr, Sonarr, Lidarr & Sportarr → + Lidarr (address, API key, folder mapping; the Folder check includes it).
