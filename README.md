@@ -10,7 +10,7 @@
 
 > **Beta.** Built on the author's own home server and now being tested on others. Please [open an issue](../../issues) if something looks wrong.
 
-**[librarydoctor.uk](https://librarydoctor.uk)** · [Try the live demo](https://librarydoctor.uk/demo/) (made-up library, nothing real is changed) · [How it works](https://mymediabuild.uk/library-doctor-plex-library-health-check/)
+**[librarydoctor.uk](https://librarydoctor.uk)** · [Try the live demo](https://librarydoctor.uk/demo/) (made-up library, nothing real is changed) · [How it works](https://mymediabuild.uk/library-doctor-plex-library-health-check/) · ☕ [Buy me a coffee](https://buymeacoffee.com/bobgreggr)
 
 ⭐ Featured under **New Software** in the [selfh.st weekly newsletter](https://selfh.st/weekly/) (20 November 2026). Thanks for stopping by: a star helps others find it.
 
@@ -162,5 +162,7 @@ docker compose pull && docker compose up -d
 Library Doctor talks to Plex, Radarr, Sonarr, Bazarr, Tautulli, Tdarr, ClamAV, Gotify, Discord, Telegram and ntfy, and uses ffmpeg. It isn't connected to any of those projects.
 
 The app logos in Settings come from [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) (Apache-2.0). Each logo is a trademark of its owner.
+
+Library Doctor is free and always will be. If it saves you some time, a ⭐ helps other people find it, and you can [buy me a coffee](https://buymeacoffee.com/bobgreggr) ☕ (no pressure).
 
 Made by [My Media Build](https://mymediabuild.uk). MIT licence.
