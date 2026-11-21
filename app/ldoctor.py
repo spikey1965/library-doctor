@@ -33,7 +33,7 @@ import xml.etree.ElementTree as _ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.2.3"
+APP_VERSION = "0.3.0"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -65,7 +65,7 @@ def normalize(cfg):
         sp["paths"] = [{"from": sp.pop("container_root"), "to": sp.pop("media_root", None) or MEDIA_ROOT}]
     # optional fields the rest of the code relies on: the browser address falls back to the app's own address
     if isinstance(cfg.get("plex"), dict): cfg["plex"]["public"] = cfg["plex"].get("public") or "https://app.plex.tv"
-    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("prowlarr", "Prowlarr"), ("jackett", "Jackett"), ("seerr", "Seerr"), ("gotify", "Gotify")):
+    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("prowlarr", "Prowlarr"), ("jackett", "Jackett"), ("seerr", "Seerr"), ("lidarr", "Lidarr"), ("gotify", "Gotify")):
         e = cfg.get(k)
         if isinstance(e, dict): e["public"] = e.get("public") or e.get("url", ""); e.setdefault("name", name); e.setdefault("key", e.get("key", ""))
     for k in ("arrs", "bazarr"):
@@ -239,6 +239,9 @@ def init_db():
         c.execute("CREATE TABLE IF NOT EXISTS scores (at TEXT PRIMARY KEY, overall REAL, areas TEXT)")                       # v0.1.9 score history
         c.execute("CREATE TABLE IF NOT EXISTS appearances (id INTEGER PRIMARY KEY, issue_id TEXT, chk TEXT, kind TEXT, title TEXT, library TEXT, at TEXT)")
         c.execute("CREATE INDEX IF NOT EXISTS appearances_issue ON appearances (issue_id)")
+        # v0.3 deep check: one row per file played through (result), and files waiting to be checked
+        c.execute("CREATE TABLE IF NOT EXISTS deep (path TEXT PRIMARY KEY, size INTEGER, mtime REAL, at TEXT, status TEXT, errors INTEGER, got REAL, dur REAL, msg TEXT, how TEXT, first TEXT, secs INTEGER)")
+        c.execute("CREATE TABLE IF NOT EXISTS deep_queue (path TEXT PRIMARY KEY, at TEXT, why TEXT)")
         cols = [r[1] for r in c.execute("PRAGMA table_info(done)")]
         if "chk" not in cols:
             c.execute("ALTER TABLE done ADD COLUMN chk TEXT DEFAULT 'dupes'")
@@ -353,7 +356,7 @@ def ms_sid(rk):
     return r["sid"]
 
 _JF_FIELDS = "Path,MediaSources,ProviderIds,ProductionYear,ParentId,DateCreated"
-_JF_TYPES = {"1": "Movie", "2": "Series", "3": "Season", "4": "Episode"}
+_JF_TYPES = {"1": "Movie", "2": "Series", "3": "Season", "4": "Episode", "8": "MusicArtist", "9": "MusicAlbum", "10": "Audio"}   # 8-10: music (v0.3)
 
 def _jf_auth(p):
     tok = p.get("token", "")
@@ -397,8 +400,13 @@ def _jf_item(it):
                    parentRatingKey=ms_rk(it.get("SeasonId")), parentIndex=it.get("ParentIndexNumber"), index=it.get("IndexNumber"))
     elif t == "Season":
         out.update(index=it.get("IndexNumber"), parentRatingKey=ms_rk(it.get("SeriesId") or it.get("ParentId")))
+    elif t == "Audio":                   # v0.3 music: track -> album -> artist, like Plex
+        out.update(grandparentTitle=it.get("AlbumArtist") or ", ".join(it.get("Artists") or []) or "", parentTitle=it.get("Album") or "",
+                   parentRatingKey=ms_rk(it["AlbumId"]) if it.get("AlbumId") else None, index=it.get("IndexNumber"))
+    elif t == "MusicAlbum":
+        out.update(parentTitle=it.get("AlbumArtist") or ", ".join(it.get("Artists") or []) or "")
     if it.get("MediaSources") is not None or it.get("Path"):
-        srcs = it.get("MediaSources") or ([{"Path": it["Path"], "Size": 0}] if it.get("Path") and t in ("Movie", "Episode") else [])
+        srcs = it.get("MediaSources") or ([{"Path": it["Path"], "Size": 0}] if it.get("Path") and t in ("Movie", "Episode", "Audio") else [])
         if srcs: out["Media"] = [_jf_media(s) for s in srcs]
     return out
 
@@ -425,10 +433,10 @@ def jf_request(p, method, path, params, headers, timeout, raw):
     if path == "/library/sections" and method == "GET":
         dirs = []
         for f in _jf_folders(p):
-            typ = {"movies": "movie", "tvshows": "show"}.get((f.get("CollectionType") or "").lower())
+            typ = {"movies": "movie", "tvshows": "show", "music": "artist"}.get((f.get("CollectionType") or "").lower())
             if not typ: continue
             dirs.append({"key": str(ms_rk(f.get("ItemId") or f.get("Id"))), "type": typ, "title": f.get("Name") or "",
-                         "agent": "tv.plex.agents.movie" if typ == "movie" else "tv.plex.agents.series",
+                         "agent": {"movie": "tv.plex.agents.movie", "show": "tv.plex.agents.series", "artist": "tv.plex.agents.music"}[typ],
                          "Location": [{"path": x} for x in (f.get("Locations") or [])]})
         return {"MediaContainer": {"Directory": dirs}}
     m = re.match(r"^/library/sections/(\d+)/(all|search|refresh|emptyTrash)$", path)
@@ -456,6 +464,9 @@ def jf_request(p, method, path, params, headers, timeout, raw):
         if sub == "/refresh":
             return _jf_send(p, "POST", "/Items/%s/Refresh" % sid, {"Recursive": "true", "MetadataRefreshMode": "Default", "ImageRefreshMode": "Default"}, timeout=timeout)
         raise JFUnsupported({"/split": "Splitting merged items", "/posters": "Picking posters", "/poster": "Picking posters"}.get(sub, "That") + " isn't available on %s." % name)
+    if path == "/status/sessions":       # v0.3 deep check: pause while someone is watching
+        ss = _jf_get(p, "/Sessions", {"ActiveWithinSeconds": 300}, timeout=timeout)
+        return {"MediaContainer": {"size": sum(1 for s in (ss if isinstance(ss, list) else []) if s.get("NowPlayingItem"))}}
     if path == "/photo/:/transcode":     # the cheap poster check: fetch a tiny copy of the image
         img = params.get("url") or ""
         if not img.startswith("/Items/"): return (404, b"")
@@ -1161,6 +1172,10 @@ def scan():
             issues += sports_scan(sections, sport, sport_roots, trashed)
         except Exception as e:
             log("sportarr check failed: %r" % e)
+        try: issues += plex_music_scan(trashed)                           # v0.3: Plex music libraries
+        except Exception as e: log("plex music check failed: %r" % e)
+        try: issues += lidarr_scan(trashed)                               # v0.3: Lidarr step 1
+        except Exception as e: log("lidarr check failed: %r" % e)
         try: issues += seerr_scan(issues, sections, movies, series)      # v0.2.3: Seerr reports + "requested by"
         except Exception as e: log("seerr check failed: %r" % e)
         STATE.update(step="Checking Radarr files", progress=0.95)
@@ -1915,6 +1930,12 @@ def _meta_left(d):
         n = len(d["seasons"]) - len(left)
         return (not left, "Plex checked: all %d season posters show now." % len(d["seasons"]) if not left else
                 "%d of %d seasons have a poster now. The rest have no poster to pick from in Plex; try Refresh." % (n, len(d["seasons"])), left)
+    if k == "musicunmatched":                                  # v0.3 music
+        ok = not str(m.get("guid") or "").startswith(("local://", "com.plexapp.agents.none"))
+        return (ok, "%s checked: matched as %s." % (ms_name(), m.get("title")) if ok else "%s still can't match it. Use %s on the album's page." % (ms_name(), "Fix Match" if ms_kind() == "plex" else "Identify"), None)
+    if k == "musicnocover":
+        ok = bool(m.get("thumb"))
+        return (ok, "%s checked: it has cover art now." % ms_name() if ok else "Still no cover. Add one on the album's page in %s." % ms_name(), None)
     if k == "noposter":
         ok = bool(m.get("thumb"))
         return (ok, "Plex checked: it has a poster now." if ok else "Still no poster. Plex's info for it may not have one.", None)
@@ -2002,6 +2023,8 @@ BROKEN_BYTES = 5 * 1024 * 1024
 def health_scan(sections, movies, series, arr_files, trashed):
     out = []
     by_path = {p: (a, m) for a, m, p, _ in arr_files}
+    deep_bad = deep_findings()                                      # v0.3: files a deep check (or Tdarr) found damaged
+    lib_stats = {"files": 0, "files_4k": 0, "min": 0.0, "min_4k": 0.0}  # v0.3: for the deep check suggestion
     eps_cache = {}
     def sonarr_eps(a, sid):
         k = (a["name"], sid)
@@ -2032,6 +2055,11 @@ def health_scan(sections, movies, series, arr_files, trashed):
                 if f in trashed or not os.path.isfile(f): continue
                 size, dur = os.path.getsize(f), (md.get("duration") or 0) / 60000.0
                 broken = size < BROKEN_BYTES or dur < 1
+                k4 = int(md.get("height") or 0) > 1440 or str(md.get("videoResolution") or "").lower() in ("4k", "2160")
+                lib_stats["files"] += 1; lib_stats["min"] += dur
+                if k4: lib_stats["files_4k"] += 1; lib_stats["min_4k"] += dur
+                dz = deep_bad.get(f)
+                if dz and dz.get("size") not in (None, size): dz = None     # replaced since it was checked
                 # what should it be?
                 exp, ref, link = 0, None, None
                 if kind == "movie":
@@ -2047,14 +2075,16 @@ def health_scan(sections, movies, series, arr_files, trashed):
                     if h:
                         a, sr = h
                         avg = sr.get("runtime") or 0
-                        if broken or (dur and dur < max(avg, 15) * 0.5):   # only fetch episode runtimes when it might matter
+                        if broken or dz or (dur and dur < max(avg, 15) * 0.5):   # only fetch episode runtimes when it might matter
                             e = sonarr_eps(a, sr["id"]).get((sn, en))
                             if e:
                                 exp = e.get("runtime") or 0
                                 ref = {"arr": a["name"], "kind": "episode", "id": e["id"], "series": sr["id"]}
                         link = arr_link(a, sr, "series")
                 short = not broken and exp >= 15 and dur < exp * 0.5
-                if not (broken or short): continue
+                if not (broken or short):
+                    if dz: out.append(deep_card(dz, f, size, title, lib, key, ref, m, link))
+                    continue
                 if broken:
                     text = "This file is broken: %s and %s long, so it won't play." % (human(size), ("%d second%s" % (round(dur * 60), "" if round(dur * 60) == 1 else "s")) if dur < 1 else "%d minutes" % dur)
                 else:
@@ -2071,7 +2101,11 @@ def health_scan(sections, movies, series, arr_files, trashed):
                                         "dur": round(dur, 1), "exp": exp, "ref": ref, "section": key, "confidence": conf,
                                         "fixes": ["replace"] if ref else []},
                                 links=[plex_link(m["ratingKey"])] + ([link] if link else [])))
+    _save_lib_stats(lib_stats)
     return out
+
+def _save_lib_stats(s):
+    if s.get("files"): kv_set("deep_libstats", dict(s, min=round(s["min"]), min_4k=round(s["min_4k"]), at=now_iso()))
 
 def health_side_files(path):
     """.edl/.ffmeta (and empty .txt) left next to a broken video with the same name."""
@@ -2249,6 +2283,7 @@ def health_fix(issue_id):
             row = c.execute("SELECT * FROM issues WHERE id=? AND chk='health'", (issue_id,)).fetchone()
         if not row: return {"ok": False, "error": "That file isn't in the last scan any more. Scan again first."}
         d = json.loads(row["detail"]); src, ref = d["path"], d.get("ref")
+        if d.get("kind") == "track": return track_fix(issue_id, row, d)       # v0.3 music
         if not ref: return {"ok": False, "error": "Radarr/Sonarr doesn't manage this one, so there's nothing to fetch a new copy."}
         a_chk = arr_by_name(ref.get("arr")); why = arr_cannot_grab(a_chk)
         if why: return {"ok": False, "error": cant_grab_msg(a_chk, why)}
@@ -2256,7 +2291,8 @@ def health_fix(issue_id):
         if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where it was, so nothing was moved. Scan again."}
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         moved, tids = [], []
-        for p, reason in [(src, "Broken file (replaced)" if d["kind"] == "broken" else "Reported in Seerr (replaced)" if d["kind"] == "report" else "Too short (replaced)")] + [(x, "Leftover side file") for x in health_side_files(src)]:
+        why = {"broken": "Broken file (replaced)", "report": "Reported in Seerr (replaced)", "corrupt": "Damaged file (replaced)"}.get(d["kind"], "Too short (replaced)")
+        for p, reason in [(src, why)] + [(x, "Leftover side file") for x in health_side_files(src)]:
             dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(p), MEDIA_ROOT))
             try:
                 os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(p); move_file(p, dst)
@@ -2272,7 +2308,7 @@ def health_fix(issue_id):
                                 (issue_id, row["title"], row["library"], "", json.dumps(moved), json.dumps(tids), row["links"], now_iso(),
                                  "checking", "Asking %s for a new copy\u2026" % ref["arr"], "health", json.dumps(ref))).lastrowid
             c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
-    event("health", "%s: moved the %s file to the trash and asked %s for a new copy." % (row["title"], "reported" if d["kind"] == "report" else d["kind"], ref["arr"]))
+    event("health", "%s: moved the %s file to the trash and asked %s for a new copy." % (row["title"], {"report": "reported", "corrupt": "damaged"}.get(d["kind"], d["kind"]), ref["arr"]))
     threading.Thread(target=_health_search, args=(done_id, ref), daemon=True).start()
     threading.Thread(target=seerr_after_replace, args=(d, ref), daemon=True).start()
     return {"ok": True}
@@ -2428,11 +2464,347 @@ def gaps_scan(series):
                             links=[arr_link(a2, sr, "series")] if sr.get("titleSlug") else []))
     return out
 
+# ---------------- Lidarr (music, step 1, v0.3) ----------------
+# One Lidarr (API v1). Step 1: Settings + folder check, App Health, Downloads (read-only cards), albums Lidarr wants but
+# never got (Search), and tracks Lidarr lists that aren't on the disk (Rescan). Music libraries in the media server and
+# duplicates / broken tracks / mixed quality come in step 2.
+def lidarr(path, data=None, method=None, cfg=None):
+    L = cfg or S.get("lidarr") or {}
+    return map_in(http(L["url"].rstrip("/") + "/api/v1" + path, {"X-Api-Key": L.get("key", "")}, data=map_out(data, L), method=method, timeout=120), L)
+
+def lidarr_link(L, artist):
+    return {"label": "Open in %s" % (L.get("name") or "Lidarr"), "url": (L.get("public") or L["url"]).rstrip("/") + "/artist/%s" % artist.get("foreignArtistId", "")}
+
+def lidarr_cannot_grab(L):
+    hit = _GRAB_CACHE.get("lidarr:" + L["url"])
+    if hit and time.time() - hit[0] < 300: return hit[1]
+    try:
+        dc = [x for x in lidarr("/downloadclient", cfg=L) if x.get("enable")]
+        ix = [x for x in lidarr("/indexer", cfg=L) if x.get("enableAutomaticSearch")]
+        missing = ([] if dc else ["download client"]) + ([] if ix else ["indexer with searches turned on"])
+        why = "it has no %s" % " and no ".join(missing) if missing else None
+    except Exception as e:
+        log("lidarr grab check failed: %r" % e); return None
+    _GRAB_CACHE["lidarr:" + L["url"]] = (time.time(), why)
+    return why
+
+def lidarr_scan(trashed):
+    L = S.get("lidarr") or {}
+    if not L.get("url"): return []
+    name = L.get("name") or "Lidarr"
+    out, now = [], datetime.now(timezone.utc)
+    STATE["step"] = "Checking Lidarr"
+    try: artists = {a["id"]: a for a in lidarr("/artist")}
+    except Exception as e:
+        log("lidarr artists failed: %r" % e); return []
+    # --- albums Lidarr wants but never got (like Sonarr's season gaps)
+    searched = kv_get("gaps_searched") or {}
+    try:
+        recs = lidarr("/wanted/missing?" + urllib.parse.urlencode({"pageSize": 5000, "includeArtist": "true", "monitored": "true", "sortKey": "releaseDate", "sortDirection": "ascending"})).get("records", [])
+    except Exception as e: log("lidarr wanted failed: %r" % e); recs = []
+    by_artist = {}
+    for al in recs:
+        try:
+            if not al.get("releaseDate") or datetime.fromisoformat(al["releaseDate"].replace("Z", "+00:00")) > now - timedelta(days=1): continue
+        except ValueError: continue
+        by_artist.setdefault(al.get("artistId"), []).append(al)
+    for aid, als in by_artist.items():
+        ar = artists.get(aid) or als[0].get("artist") or {}
+        n = len(als)
+        def _al(x):
+            st = x.get("statistics") or {}; have, want = st.get("trackFileCount") or 0, st.get("trackCount") or 0
+            return "%s (%s%s)" % (x.get("title"), (x.get("releaseDate") or "")[:4], ", %d of %d tracks" % (have, want) if have and want else "")
+        names = [_al(x) for x in als]
+        part = sum(1 for x in als if (x.get("statistics") or {}).get("trackFileCount"))
+        what = ("%d album%s never downloaded" % (n, "" if n == 1 else "s")) if not part else ("%d album%s incomplete" % (n, " is" if n == 1 else "s are")) if part == n else ("%d albums missing or incomplete" % n)
+        cid = iid("albumgaps", name, aid)
+        note = "%s has %s on its wanted list but never found a copy. Search asks it to look again now; anything it finds downloads %s." % (name, "it" if n == 1 else "them", dl_when())
+        if searched.get(cid): note += " Last searched from here %s." % searched[cid][:10]
+        out.append(dict(id=cid, chk="missing", sev="att", title=ar.get("artistName") or "Artist %s" % aid, library=name,
+                        detail={"kind": "albumgaps", "text": "%s: %s." % (what, ", ".join(names[:10]) + (" and %d more" % (n - 10) if n > 10 else "")),
+                                "note": note, "count": n, "ref": {"arr": name, "artist": aid, "albums": [x["id"] for x in als]}, "fixes": ["albumsearch"]},
+                        links=[lidarr_link(L, ar)] if ar.get("foreignArtistId") else []))
+    # --- tracks Lidarr lists that aren't on the disk
+    for aid, ar in artists.items():
+        if not (ar.get("statistics") or {}).get("trackFileCount"): continue
+        try: files = lidarr("/trackfile?artistId=%d" % aid)
+        except Exception as e: log("lidarr trackfiles %s failed: %r" % (ar.get("artistName"), e)); continue
+        try: out += music_artist_checks(L, name, ar, files, trashed)        # step 2: broken/short, mixed quality, duplicate albums
+        except Exception as e: log("music checks %s failed: %r" % (ar.get("artistName"), e))
+        gone = [f for f in files if f.get("path") and f["path"] not in trashed and not os.path.exists(f["path"])]
+        if not gone: continue
+        n = len(gone)
+        out.append(dict(id=iid("lidarrmissing", name, aid), chk="missing", sev="bad", title=ar.get("artistName") or "Artist %s" % aid, library=name,
+                        detail={"kind": "lidarrmissing", "count": n, "path": gone[0]["path"],
+                                "text": "%s lists %d track%s that %s on the disk, e.g. %s." % (name, n, "" if n == 1 else "s", "isn't" if n == 1 else "aren't", ", ".join(os.path.basename(f["path"]) for f in gone[:3])),
+                                "note": "Usually moved or deleted outside %s. Rescan asks %s to look at the folder again; it then shows them as missing, and the next scan offers a search for the albums it wants." % (name, name),
+                                "ref": {"arr": name, "artist": aid}, "fixes": ["lidarrrescan"]},
+                        links=[lidarr_link(L, ar)] if ar.get("foreignArtistId") else []))
+    # --- Downloads: imports Lidarr won't do by itself, and failed downloads (read-only: open Lidarr's queue)
+    try: q = lidarr("/queue?pageSize=500&includeArtist=true&includeAlbum=true").get("records", [])
+    except Exception as e: log("lidarr queue failed: %r" % e); q = []
+    for r in q:
+        state, status, tstat, msgs = r.get("trackedDownloadState") or "", (r.get("status") or "").lower(), r.get("trackedDownloadStatus") or "", _q_msgs(r)
+        if state in ("importBlocked", "importPending") and tstat == "warning" and status == "completed": kind = "waiting to import"
+        elif state == "failedPending" or (status in ("failed", "warning") and "fail" in msgs.lower()): kind = "download failed"
+        else: continue
+        ar, al = r.get("artist") or {}, r.get("album") or {}
+        title = "%s%s: %s" % (ar.get("artistName") or r.get("title", "?"), (" – " + al["title"]) if al.get("title") else "", kind)
+        out.append(dict(id=iid("queue", name, r.get("downloadId") or r.get("id")), chk="queue", sev="att", title=title[:140], library=name,
+                        detail={"kind": "lidarrq", "text": "%s: %s" % (name, msgs or kind), "note": "Open %s's queue to import it by hand or remove it and search again." % name, "fixes": []},
+                        links=[{"label": "Open %s queue" % name, "url": (L.get("public") or L["url"]).rstrip("/") + "/activity/queue"}]))
+    return out
+
+# ---------------- Music checks, step 2 (v0.3) ----------------
+# From Lidarr + the disk (any media server): broken / cut-short tracks, albums of mixed quality, and a second copy of an
+# album in the artist's folder that Lidarr doesn't track. From Plex music libraries: tracks Plex lists that aren't on
+# the disk, albums Plex couldn't match, albums without cover art. (Jellyfin/Emby music libraries: not yet.)
+AUDIO_EXT = (".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".wv", ".ape", ".alac", ".aiff", ".aif", ".wma", ".dsf")
+LOSSLESS_RE = re.compile(r"flac|alac|wav|ape|wavpack|aiff|dsd|lossless|pcm", re.I)
+_FMT_TAG = re.compile(r"[\[\(][^\]\)]*\b(flac|mp3|aac|m4a|ogg|opus|320|256|192|128|v0|v2|24[ -]?bit|16[ -]?bit|hi-?res|lossless|web|cd|vinyl|khz)\b[^\]\)]*[\]\)]", re.I)
+
+def _album_key(name):
+    """Folder/album name without year and format tags, for spotting a second copy (editions like Deluxe stay apart)."""
+    n = _FMT_TAG.sub(" ", name or "")
+    n = re.sub(r"[\[\(]\s*(19|20)\d\d\s*[\]\)]|^\s*(19|20)\d\d\s*[-–. ]+", " ", n)
+    return re.sub(r"[^a-z0-9]+", " ", n.lower()).strip()
+
+def _kbps(f):
+    m = re.search(r"(\d+)", str((f.get("mediaInfo") or {}).get("audioBitRate") or ""))
+    return int(m.group(1)) if m else 0
+
+def _qname(f):
+    return (((f.get("quality") or {}).get("quality") or {}).get("name") or "?")
+
+def _decoded_seconds(path):
+    """Real playing time by decoding the file (VBR headers can claim the full length of a cut-off file). None = can't decode."""
+    try:
+        # audio only (-map 0:a:0): embedded cover art is a "video" stream and would be timed instead of the music
+        r = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-map", "0:a:0", "-f", "null", "-", "-progress", "pipe:1", "-nostats"], capture_output=True, text=True, timeout=180)
+        t = re.findall(r"out_time=(\d+):(\d+):(\d+(?:\.\d+)?)", r.stdout or "")
+        if not t: return None
+        h, m, sec = t[-1]; return int(h) * 3600 + int(m) * 60 + float(sec)
+    except Exception as e:
+        log("decode %s failed: %r" % (path, e)); return None
+
+def _audio_files(folder):
+    try: return [os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(AUDIO_EXT)]
+    except OSError: return []
+
+def music_artist_checks(L, lname, ar, files, trashed):
+    out, aid = [], ar["id"]
+    artist = ar.get("artistName") or "Artist %s" % aid
+    link = [lidarr_link(L, ar)] if ar.get("foreignArtistId") else []
+    files = [f for f in files if f.get("path") and f["path"] not in trashed and os.path.isfile(f["path"])]
+    if not files: return out
+    try:
+        tracks = lidarr("/track?artistId=%d" % aid)
+        albums = {a["id"]: a for a in lidarr("/album?artistId=%d" % aid)}
+    except Exception as e:
+        log("lidarr tracks %s failed: %r" % (artist, e)); return out
+    exp = {t["trackFileId"]: t for t in tracks if t.get("trackFileId")}
+    by_album = {}
+    for f in files: by_album.setdefault(f.get("albumId"), []).append(f)
+    for alid, fl in by_album.items():
+        al = albums.get(alid) or {}
+        atitle = "%s – %s" % (artist, al.get("title") or "album %s" % alid)
+        # --- broken / cut-short tracks: only files that look too small for their real length get decoded
+        rates = sorted(os.path.getsize(f["path"]) / (exp[f["id"]]["duration"] / 1000.0) for f in fl if exp.get(f["id"], {}).get("duration"))
+        med = rates[len(rates) // 2] if rates else 0
+        for f in fl:
+            t = exp.get(f["id"]) or {}
+            want = (t.get("duration") or 0) / 1000.0
+            size = os.path.getsize(f["path"])
+            if not (size < 64 * 1024 or (want >= 60 and med and size / want < 0.5 * med)): continue
+            got = _decoded_seconds(f["path"])
+            broken = got is None or got < 3
+            if not broken and not (want >= 60 and got < 0.5 * want): continue
+            text = ("This track is broken: %s and it won't play." % human(size)) if broken else ("Only %d:%02d long, but %s is %d:%02d." % (got // 60, got % 60, t.get("title") or "this track", want // 60, want % 60))
+            out.append(dict(id=iid("track", f["path"]), chk="health", sev="bad" if broken else "amb", title="%s: %s" % (atitle, t.get("title") or os.path.basename(f["path"])), library=lname,
+                            detail={"kind": "track", "text": text, "path": f["path"], "size": size, "confidence": "sure" if broken or got < 0.25 * want else "check",
+                                    "note": "Most likely a failed or cut-off download. Replace moves the track to the trash and asks %s to search for the album again." % lname,
+                                    "ref": {"arr": lname, "lidarr": True, "album": alid, "trackfile": f["id"]}, "links": _link_info(f["path"])["links"], "fixes": ["replace"]},
+                            links=link))
+        # --- mixed quality
+        if len(fl) >= 3:
+            lossless = [f for f in fl if LOSSLESS_RE.search(_qname(f))]
+            lossy = [f for f in fl if f not in lossless]
+            odd, why = [], ""
+            if lossless and lossy and len(lossless) >= len(lossy):
+                odd = lossy; why = "%d of %d tracks %s lossy (%s) while the rest are %s" % (len(lossy), len(fl), "is" if len(lossy) == 1 else "are", ", ".join(sorted({_qname(f) for f in lossy})), _qname(lossless[0]))
+            elif not lossless:
+                br = [_kbps(f) for f in fl if _kbps(f)]
+                if br:
+                    top = max(br); odd = [f for f in fl if _kbps(f) and _kbps(f) < 192 and _kbps(f) < 0.6 * top]
+                    if odd: why = "%d of %d tracks %s only %s kbps while the rest are up to %d kbps" % (len(odd), len(fl), "is" if len(odd) == 1 else "are", "/".join(str(x) for x in sorted({_kbps(f) for f in odd})), top)
+            if odd:
+                out.append(dict(id=iid("mixedalbum", lname, alid), chk="quality", sev="att", title=atitle, library=lname,
+                                detail={"kind": "mixedalbum", "text": why + ": usually a few tracks taken from a worse copy.", "count": len(odd),
+                                        "files": [{"path": f["path"], "size": f.get("size") or 0, "q": _qname(f)} for f in odd[:20]],
+                                        "note": "Search for a better copy asks %s to look for the whole album again; it only replaces tracks with better ones." % lname,
+                                        "ref": {"arr": lname, "artist": aid, "albums": [alid]}, "fixes": ["albumsearch"]},
+                                links=link))
+    # --- the same album in two folders (one may be a copy Lidarr doesn't track, or Lidarr may use files from both)
+    root = ar.get("path") or ""
+    tracked_n = {}
+    for f in files: tracked_n[os.path.dirname(f["path"])] = tracked_n.get(os.path.dirname(f["path"]), 0) + 1
+    try: subs = [os.path.join(root, n) for n in sorted(os.listdir(root)) if os.path.isdir(os.path.join(root, n)) and not n.startswith(".")]
+    except OSError: subs = []
+    groups = {}
+    for sd in subs:
+        if sd in trashed or not _audio_files(sd): continue
+        k = _album_key(os.path.basename(sd))
+        if k: groups.setdefault(k, []).append(sd)
+    for k, dirs in groups.items():
+        if len(dirs) < 2: continue
+        dirs.sort(key=lambda x: (-tracked_n.get(x, 0), -sum(os.path.getsize(y) for y in _audio_files(x))))
+        keep = dirs[0]
+        for sd in dirs[1:]:
+            def _copy(path, action, why):
+                af = _audio_files(path)
+                return {"path": path, "files": len(af), "size": sum(os.path.getsize(y) for y in af), "action": action, "why": why,
+                        "q": ", ".join(sorted({_qname(f) for f in files if os.path.dirname(f["path"]) == path})) or ", ".join(sorted({os.path.splitext(y)[1].lstrip(".").upper() for y in af})),
+                        "tracked": tracked_n.get(path, 0)}
+            both = tracked_n.get(sd, 0) > 0
+            ck = _copy(keep, "keep", "%s uses %d track%s from here" % (lname, tracked_n.get(keep, 0), "" if tracked_n.get(keep, 0) == 1 else "s") if tracked_n.get(keep) else "the bigger copy")
+            cx = _copy(sd, "remove" if not both else "check", ("%s also uses %d track%s from here" % (lname, tracked_n[sd], "" if tracked_n[sd] == 1 else "s")) if both else "%s doesn't use it, so it's just taking space" % lname)
+            out.append(dict(id=iid("albumdupe", sd), chk="dupes", sev="amb", title="%s – %s" % (artist, os.path.basename(keep)), library=lname,
+                            detail={"kind": "albumdupe", "copies": [ck, cx], "path": sd, "size": cx["size"], "fixes": [] if both else ["albumclean"],
+                                    "text": "Two copies of this album in the artist's folder.",
+                                    "note": ("%s uses files from both folders, so moving either would leave it with missing tracks. Pick one copy in %s (Wanted → Manual Import, or delete the album's files there and import the folder you want), then scan again." % (lname, lname)) if both else
+                                            "Clean up moves the extra folder to the trash (you can put it back). If the extra copy is the better one, import it in %s instead (Wanted → Manual Import) and clean up the other." % lname},
+                            links=link))
+    return out
+
+def album_clean(issue_id):
+    with MOVE_LOCK:
+        with db() as c: row = c.execute("SELECT * FROM issues WHERE id=? AND chk='dupes'", (issue_id,)).fetchone()
+        if not row: return {"ok": False, "error": "That card has gone; press Scan now to refresh."}
+        d = json.loads(row["detail"]); sd = d.get("path") or ""
+        if d.get("kind") != "albumdupe" or not safe_media_path(sd) or not os.path.isdir(sd): return {"ok": False, "error": "The folder isn't where it was, so nothing was moved. Scan again."}
+        if "albumclean" not in (d.get("fixes") or []): return {"ok": False, "error": "Lidarr uses files from both folders; sort it out in Lidarr first."}
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S"); moved, tids, size = [], [], 0
+        for dp, dirs, fs in os.walk(sd):
+            for n in fs:
+                p = os.path.join(dp, n); dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(p), MEDIA_ROOT))
+                try:
+                    os.makedirs(os.path.dirname(dst), exist_ok=True); sz = os.path.getsize(p); move_file(p, dst); size += sz
+                    with db() as c:
+                        tids.append(c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
+                                              (issue_id, row["title"], p, dst, sz, "Second copy of an album", now_iso())).lastrowid)
+                    moved.append(p)
+                except Exception as e:
+                    return {"ok": False, "error": "Couldn't move %s: %s (%d file%s already moved; Put back restores them)." % (n, e, len(moved), "" if len(moved) == 1 else "s")}
+        try:
+            for dp, dirs, fs in os.walk(sd, topdown=False):
+                if not os.listdir(dp): os.rmdir(dp)
+        except OSError: pass
+        with db() as c:
+            c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk, ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (issue_id, row["title"], row["library"], json.dumps([d["copies"][0]["path"]]), json.dumps(moved), json.dumps(tids), row["links"], now_iso(), "ok",
+                       "Moved the extra copy (%d files, %s) to the trash." % (len(moved), human(size)), "dupes", "{}"))
+            c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+    event("dupes", "%s: moved the second copy of the album (%d files, %s) to the trash." % (row["title"], len(moved), human(size)))
+    return {"ok": True, "text": "Moved the extra copy (%d files, %s) to the trash. Put back restores it." % (len(moved), human(size))}
+
+def track_fix(issue_id, row, d):
+    """Replace for a broken/short music track: trash it, then ask Lidarr to search for the album again."""
+    L = S.get("lidarr") or {}; lname = L.get("name") or "Lidarr"
+    if not L.get("url"): return {"ok": False, "error": "Lidarr isn't in Settings any more."}
+    why = lidarr_cannot_grab(L)
+    if why: return {"ok": False, "error": "%s can't fetch a new copy: %s. Nothing was moved. Add one in %s → Settings → Download Clients / Indexers, then try again." % (lname, why, lname)}
+    src = d["path"]
+    if not safe_media_path(src) or not os.path.isfile(src): return {"ok": False, "error": "The file isn't where it was, so nothing was moved. Scan again."}
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dst = os.path.join(TRASH_DIR, stamp + "-" + issue_id, os.path.relpath(os.path.realpath(src), MEDIA_ROOT))
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True); size = os.path.getsize(src); move_file(src, dst)
+    except Exception as e: return {"ok": False, "error": "Couldn't move it: %s" % e}
+    with db() as c:
+        tid = c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
+                        (issue_id, row["title"], src, dst, size, "Broken track (replaced)", now_iso())).lastrowid
+    try:
+        lidarr("/command", {"name": "RefreshArtist", "artistId": int(lidarr("/trackfile/%d" % int(d["ref"]["trackfile"])).get("artistId") or 0)}, "POST")
+    except Exception: pass
+    try: lidarr("/command", {"name": "AlbumSearch", "albumIds": [int(d["ref"]["album"])]}, "POST")
+    except Exception as e: log("lidarr album search failed: %r" % e)
+    with db() as c:
+        c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk, ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (issue_id, row["title"], row["library"], "", json.dumps([src]), json.dumps([tid]), row["links"], now_iso(), "ok",
+                   "Moved to the trash; %s is searching for the album again." % lname, "health", "{}"))
+        c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+    event("health", "%s: moved the broken track to the trash and asked %s to search for the album again." % (row["title"], lname))
+    return {"ok": True}
+
+def plex_music_scan(trashed):
+    """Music libraries in Plex, Jellyfin or Emby: tracks listed but not on disk, albums the server couldn't match, albums without cover art."""
+    out, sn = [], ms_name()
+    try: secs = [d for d in plex("/library/sections").get("Directory", []) if d.get("type") == "artist"]
+    except Exception as e: log("plex music sections failed: %r" % e); return []
+    for sec in secs:
+        lib, key = sec["title"], sec["key"]
+        STATE["step"] = "Checking music in " + lib
+        try: tracks = list(plex_paged("/library/sections/%s/all" % key, type=10))
+        except Exception as e: log("plex music %s failed: %r" % (lib, e)); continue
+        parts = [(t, p["file"]) for t in tracks for md in t.get("Media", []) for p in md.get("Part", []) if p.get("file")]
+        gone = [(t, f) for t, f in parts if f not in trashed and not os.path.exists(f)]
+        if parts and len(gone) > max(20, len(parts) * 0.5):        # can't see the music folder at all: say so once, don't list thousands
+            out.append(dict(id=iid("musicmount", key), chk="missing", sev="bad", title="Music library “%s”: files not found" % lib, library=lib,
+                            detail={"kind": "musicmount", "text": "Library Doctor can't find %d of %s's %d music files, e.g. %s." % (len(gone), sn, len(parts), gone[0][1]),
+                                    "note": "Usually the music folder isn't mounted in Library Doctor's container, or %s sees it under another path: add a folder mapping for %s in Settings (Folder check)." % (sn, sn), "fixes": []},
+                            links=[]))
+        else:
+            albums = {}
+            for t, f in gone: albums.setdefault(t.get("parentRatingKey"), []).append((t, f))
+            for prk, lst in albums.items():
+                t0 = lst[0][0]
+                out.append(dict(id=iid("musicmissing", key, prk), chk="missing", sev="bad", title="%s – %s" % (t0.get("grandparentTitle") or "?", t0.get("parentTitle") or "?"), library=lib,
+                                detail={"kind": "musicmissing", "text": "%s lists %d track%s that %s on the disk, e.g. %s." % (sn, len(lst), "" if len(lst) == 1 else "s", "isn't" if len(lst) == 1 else "aren't", os.path.basename(lst[0][1])),
+                                        "path": lst[0][1], "note": ("Moved or deleted outside %s. A library scan in Plex (or Empty Trash) clears them." % sn) if ms_kind() == "plex" else "Moved or deleted outside %s. Its next library scan drops them." % sn, "fixes": []},
+                                links=[plex_link(prk)]))
+        try: albums9 = list(plex_paged("/library/sections/%s/all" % key, type=9))
+        except Exception as e: log("plex albums %s failed: %r" % (lib, e)); albums9 = []
+        unmatched = [a for a in albums9 if str(a.get("guid") or "").startswith(("local://", "com.plexapp.agents.none"))]
+        nocover = [a for a in albums9 if not a.get("thumb")]
+        for a in unmatched:
+            out.append(_meta("musicunmatched", lib, a["ratingKey"], "%s – %s" % (a.get("parentTitle") or "?", a.get("title") or "?"), "att",
+                             "%s couldn't match this album, so it has no proper title, year or cover." % sn,
+                             ("Usually the folder or tags don't match MusicBrainz. Fix Match in Plex lets you pick the right album; Refresh tries again." if ms_kind() == "plex" else
+                              "Usually the folder or tags don't match MusicBrainz. Identify on the album's page in %s lets you pick the right one; Refresh tries again." % sn),
+                             ["refresh"], [plex_link(a["ratingKey"])], section=key))
+        for a in nocover:
+            if a in unmatched: continue
+            out.append(_meta("musicnocover", lib, a["ratingKey"], "%s – %s" % (a.get("parentTitle") or "?", a.get("title") or "?"), "att",
+                             "This album has no cover art in %s." % sn, "Refresh asks %s to look for a cover again; if none turns up, add one on the album's page (%s)." % (sn, "Edit \u2192 Poster" if ms_kind() == "plex" else "Edit images"),
+                             ["refresh"], [plex_link(a["ratingKey"])], section=key))
+    return out
+
+def lidarr_fix(row, d):
+    L = S.get("lidarr") or {}
+    if not L.get("url"): return {"ok": False, "error": "Lidarr isn't in Settings any more."}
+    name = L.get("name") or "Lidarr"
+    if d.get("kind") in ("albumgaps", "mixedalbum"):
+        why = lidarr_cannot_grab(L)
+        if why: return {"ok": False, "error": "%s can't fetch the albums: %s. Nothing was changed. Add one in %s → Settings → Download Clients / Indexers, then try again." % (name, why, name)}
+        try: lidarr("/command", {"name": "AlbumSearch", "albumIds": [int(x) for x in d["ref"]["albums"]]}, "POST")
+        except Exception as e: return {"ok": False, "error": "Couldn't ask %s to search (%s)." % (name, getattr(e, "reason", e))}
+        sk = kv_get("gaps_searched") or {}; sk[row["id"]] = now_iso(); kv_set("gaps_searched", sk)
+        event("missing", "%s: asked %s to search for %d missing album%s." % (row["title"], name, d.get("count") or 0, "" if d.get("count") == 1 else "s"))
+        return {"ok": True, "text": "%s is searching for the %d missing album%s by %s. Anything it finds downloads %s; the card goes when they've arrived." % (name, d.get("count") or 0, "" if d.get("count") == 1 else "s", row["title"], dl_when())}
+    if d.get("kind") == "lidarrmissing":
+        try: lidarr("/command", {"name": "RefreshArtist", "artistId": int(d["ref"]["artist"])}, "POST")
+        except Exception as e: return {"ok": False, "error": "Couldn't reach %s (%s)." % (name, getattr(e, "reason", e))}
+        with db() as c: c.execute("DELETE FROM issues WHERE id=?", (row["id"],))
+        event("missing", "%s: asked %s to rescan the artist folder." % (row["title"], name))
+        return {"ok": True, "text": "%s is rescanning %s. The missing tracks then show as wanted there." % (name, row["title"])}
+    return {"ok": False, "error": "Nothing to do here."}
+
 def gaps_fix(issue_id):
     with db() as c:
         row = c.execute("SELECT * FROM issues WHERE id=? AND chk='missing'", (issue_id,)).fetchone()
     if not row: return {"ok": False, "error": "That card has gone; scan again."}
     d = json.loads(row["detail"])
+    if d.get("kind") in ("albumgaps", "lidarrmissing"): return lidarr_fix(row, d)      # v0.3 Lidarr
     if d.get("kind") != "gaps": return {"ok": False, "error": "Nothing to search here."}
     a = arr_by_name(d["ref"]["arr"]); sid = int(d["ref"]["series"]); n = 0
     why = arr_cannot_grab(a)
@@ -3068,6 +3440,434 @@ def virus_fix(issue_id):
 
 VIRUS_LOCK = threading.Lock()
 
+# ---------------- Deep check (v0.3) ----------------
+# Plays a video all the way through with ffmpeg (decode only, nothing is written) to find files that are damaged in the
+# middle: the nightly scan only sees size and length. Three ways in: a button (one file or a folder), new imports
+# (optional), and a slow nightly crawl inside a time window (optional) that works through the whole library over a few
+# weeks. One file at a time, at low priority, and it stops while someone is watching. Results live in the deep table;
+# health_scan turns bad ones into File Health cards (kind "corrupt") with the usual Replace. Tdarr's own health-check
+# errors become the same cards. Nothing here ever moves or deletes a file.
+DEEP_DEFAULT = {"crawl": False, "start": 1, "end": 6, "imports": False, "recheck": 12, "pause": True}
+DEEP_BAD_ERRS, DEEP_MINOR_ERRS = 100, 2
+def _cpu_limit():
+    """CPUs this container may use: the cgroup quota (compose "cpus:") when there is one, else all of them."""
+    try:
+        q, per = open("/sys/fs/cgroup/cpu.max").read().split()[:2]
+        if q != "max": return max(1.0, int(q) / int(per))
+    except Exception: pass
+    return float(os.cpu_count() or 4)
+DEEP_THREADS = max(1, min((os.cpu_count() or 4) // 2, int(_cpu_limit() + 0.5)))   # half the CPUs, never more than the limit
+# warnings every normal file can print (odd but valid containers, guessed audio layouts): not damage
+DEEP_HARMLESS = re.compile(r"timescale not set|UDTA parsing failed|Guessed Channel Layout|Estimating duration|non monotonically increasing dts|"
+                           r"Could not find codec parameters|deprecated|Unknown cover type|matches no streams|max_analyze_duration|"
+                           r"Thread message queue blocking|Discarding ID3 tags|Referenced QT chapter track not found|"
+                           r"Starting new cluster due to timestamp|unknown tag|unsupported|Ignoring", re.I)
+DEEP = {"cur": None, "pct": 0.0, "started": None, "cancel": False, "paused": "", "list": None, "list_day": None,
+        "found_new": False, "crawl_done": 0, "skip_night": None}
+
+def deep_cfg():
+    c = dict(DEEP_DEFAULT)
+    c.update({k: v for k, v in (S.get("deep") or {}).items() if k in DEEP_DEFAULT})
+    return c
+
+def deep_in_window(c, h=None):
+    h = datetime.now().hour if h is None else h
+    s, e = int(c["start"]), int(c["end"])
+    return (s <= h < e) if s < e else (h >= s or h < e)
+
+def deep_playing():
+    """How many people are playing something on the media server right now (0 when it can't tell)."""
+    try:
+        mc = ms_request("GET", "/status/sessions", timeout=15).get("MediaContainer") or {}
+        return int(mc.get("size") or len(mc.get("Metadata") or []))
+    except Exception:
+        return 0
+
+def _hms(sec):
+    sec = int(sec or 0)
+    if sec < 60: return "%d s" % sec
+    h, m = sec // 3600, (sec % 3600) // 60
+    return "%d h %d min" % (h, m) if h else "%d min" % m
+
+def _deep_probe(path):
+    """(duration seconds, video height) from ffprobe; (0.0, 0) when it can't tell."""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height:format=duration",
+                            "-of", "json", path], capture_output=True, text=True, timeout=60)
+        j = json.loads(r.stdout or "{}")
+        h = int(((j.get("streams") or [{}])[0] or {}).get("height") or 0)
+        return float((j.get("format") or {}).get("duration") or 0), h
+    except Exception:
+        return 0.0, 0
+
+def _mem_free():
+    """Bytes this container can still use under its memory limit (compose "mem_limit:"), or None when there's no limit."""
+    try:
+        mx = open("/sys/fs/cgroup/memory.max").read().strip()
+        if mx == "max": return None
+        return int(mx) - int(open("/sys/fs/cgroup/memory.current").read().strip())
+    except Exception:
+        return None
+
+def _deep_videos(root):
+    """Every video under root, the same files the scans look at (no extras, trailers, hidden folders or the trash)."""
+    for dp, dn, fn in os.walk(root):
+        dn[:] = sorted(d for d in dn if not d.startswith(".") and d != "Plex Versions" and d.lower() not in EXTRA_DIRS)
+        for f in sorted(fn):
+            if f.startswith(".") or not f.lower().endswith(VIDEO_EXT) or EXTRA_RE2.search(f): continue
+            p = os.path.join(dp, f)
+            if safe_media_path(p): yield p
+
+def deep_check_file(path, how):
+    """Play one file through. Returns the result, or None when it was stopped (Cancel, or someone started watching)."""
+    try: st = os.stat(path)
+    except OSError: return None
+    dur, height = _deep_probe(path)
+    need = ((250 + 40 * DEEP_THREADS) if height > 1440 else (100 + 15 * DEEP_THREADS)) * 1024 * 1024   # measured 4K HEVC: 245 MB on 1 thread, 349 MB on 4
+    free = _mem_free()
+    if free is not None and free < need:
+        res = {"path": path, "size": st.st_size, "mtime": st.st_mtime, "at": now_iso(), "status": "skip", "errors": 0, "got": 0, "dur": round(dur, 1),
+               "msg": "Skipped: Library Doctor's container has only %d MB of memory free and a %s file needs about %d MB to play through. Raise its memory limit (mem_limit) to check it." % (
+                   free // 1048576, "4K" if height > 1440 else "video", need // 1048576), "how": how, "first": [], "secs": 0}
+        with db() as c:
+            c.execute("INSERT OR REPLACE INTO deep (path, size, mtime, at, status, errors, got, dur, msg, how, first, secs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (path, st.st_size, st.st_mtime, res["at"], "skip", 0, 0, res["dur"], res["msg"], how, "[]", 0))
+        log("deep check %s: %s" % (path, res["msg"])); return res
+    # -v warning: light damage only shows as "corrupt decoded frame", which ffmpeg prints as a warning, not an error.
+    # Half the CPU threads, at the lowest priority, so anything else on the server goes first.
+    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-v", "warning", "-threads", str(DEEP_THREADS), "-i", path,
+           "-map", "0:v:0?", "-map", "0:a:0?", "-f", "null", "-", "-progress", "pipe:1", "-nostats"]
+    def low():
+        try: os.nice(19)
+        except Exception: pass
+    errs, first = [0], []
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", preexec_fn=low)
+    def read_err():
+        counted = False
+        for line in p.stderr:
+            line = line.strip()
+            if not line: continue
+            m = re.match(r"Last message repeated (\d+) times?", line)
+            if m:
+                if counted: errs[0] += int(m.group(1))
+                continue
+            counted = not DEEP_HARMLESS.search(line)
+            if not counted: continue
+            errs[0] += 1
+            clean = re.sub(r"^(\[[^\]]*\]\s*)+", "", line)[:160]          # drop ffmpeg's "[h264 @ 0x7f…]" prefixes
+            if len(first) < 5 and clean not in first: first.append(clean)
+    t = threading.Thread(target=read_err, daemon=True); t.start()
+    got, t0, last_look, stopped = 0.0, time.time(), time.time(), ""
+    limit = max(900, dur * 3)
+    DEEP.update(cur=path, pct=0.0, started=now_iso())
+    try:
+        for line in p.stdout:
+            if line.startswith("out_time_us="):
+                try: got = max(got, int(line.split("=", 1)[1]) / 1e6)
+                except ValueError: pass
+                if dur: DEEP["pct"] = min(99.0, got * 100 / dur)
+            if DEEP["cancel"]: stopped = "cancel"
+            elif time.time() - t0 > limit: stopped = "slow"
+            elif deep_cfg()["pause"] and time.time() - last_look > 60:
+                last_look = time.time()
+                if deep_playing(): stopped = "playing"
+            if stopped:
+                p.kill(); break
+        try: p.wait(timeout=30)
+        except Exception: p.kill()
+        t.join(5)
+    finally:
+        DEEP.update(cur=None, pct=0.0)
+    if stopped in ("cancel", "playing"):
+        log("deep check %s: stopped (%s)" % (path, stopped)); return None
+    n, rc = errs[0], p.returncode
+    if not stopped and rc is not None and rc < 0:                          # killed by the system (usually out of memory): not the file's fault
+        status, msg = "skip", "The check was stopped by the system before it finished (often not enough memory for the container). Not a fault in the file."
+    elif stopped == "slow":
+        status, msg = "skip", "It took longer than %s to play through, so the check was stopped. That's the computer being slow, not a fault in the file." % _hms(limit)
+    elif got < 1 and (rc or n):
+        status, msg = "bad", "None of it plays: it isn't a working video file."
+    elif dur >= 60 and got < dur - max(30, dur * 0.03):
+        status, msg = "bad", "It stops playing at %s of %s." % (_hms(got), _hms(dur))
+    elif n >= DEEP_BAD_ERRS or (n >= 20 and dur and n / (dur / 60.0) >= 1):      # many, or at least one a minute
+        status, msg = "bad", "%d errors when it was played through." % n
+    elif n >= DEEP_MINOR_ERRS:
+        status, msg = "minor", "%d errors when it was played through." % n
+    else:
+        status, msg = "ok", "Plays through cleanly." if not n else "Plays through (%d small error%s)." % (n, "" if n == 1 else "s")
+    res = {"path": path, "size": st.st_size, "mtime": st.st_mtime, "at": now_iso(), "status": status, "errors": n,
+           "got": round(got, 1), "dur": round(dur, 1), "msg": msg, "how": how, "first": first[:3], "secs": int(time.time() - t0)}
+    with db() as c:
+        c.execute("INSERT OR REPLACE INTO deep (path, size, mtime, at, status, errors, got, dur, msg, how, first, secs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (path, st.st_size, st.st_mtime, res["at"], status, n, res["got"], res["dur"], msg, how, json.dumps(first[:3]), res["secs"]))
+    if status == "bad":
+        DEEP["found_new"] = True
+        event("health", "Deep check: %s is damaged. %s" % (os.path.basename(path), msg))
+    log("deep check %s (%s): %s %s [%d s]" % (path, how, status, msg, res["secs"]))
+    return res
+
+def deep_enqueue(paths, why):
+    n = 0
+    with db() as c:
+        for p in paths:
+            if not isinstance(p, str) or not safe_media_path(p) or not os.path.isfile(p) or not p.lower().endswith(VIDEO_EXT): continue
+            c.execute("INSERT OR IGNORE INTO deep_queue (path, at, why) VALUES (?,?,?)", (p, now_iso(), why)); n += 1
+    return n
+
+def _deep_folder(rel):
+    f = os.path.realpath(os.path.join(MEDIA_ROOT, str(rel or "").lstrip("/")))
+    if not (f == MEDIA_ROOT or f.startswith(MEDIA_ROOT + os.sep)) or f == TRASH_DIR or f.startswith(TRASH_DIR + os.sep) or not os.path.isdir(f): return None
+    return f
+
+def deep_request(body):
+    """Button: check these files, or every video in a folder (relative to the media folder)."""
+    if "folder" in body:
+        f = _deep_folder(body.get("folder"))
+        if not f: return {"ok": False, "error": "That folder isn't inside your media folder."}
+        paths = []
+        for p in _deep_videos(f):
+            paths.append(p)
+            if len(paths) >= 5000: break
+    else:
+        paths = [p for p in (body.get("paths") or []) if isinstance(p, str)][:200]
+    n = deep_enqueue(paths, "manual")
+    if not n: return {"ok": False, "error": "No video files to check there."}
+    return {"ok": True, "queued": n, "text": "%d file%s added to the deep check. Each one is played all the way through, so a film takes a few minutes." % (n, "" if n == 1 else "s")}
+
+def deep_browse(rel):
+    f = _deep_folder(rel)
+    if not f: return {"ok": False, "error": "That folder isn't inside your media folder."}
+    try: dirs = sorted((d for d in os.listdir(f) if not d.startswith(".") and os.path.isdir(os.path.join(f, d))), key=str.lower)
+    except OSError as e: return {"ok": False, "error": "Couldn't read that folder: %s" % e}
+    here = "" if f == MEDIA_ROOT else os.path.relpath(f, MEDIA_ROOT)
+    return {"ok": True, "path": here, "dirs": dirs[:1000], "more": max(0, len(dirs) - 1000)}
+
+def deep_cancel():
+    with db() as c: n = c.execute("DELETE FROM deep_queue").rowcount
+    DEEP["cancel"] = bool(DEEP["cur"])
+    if deep_cfg()["crawl"] and deep_in_window(deep_cfg()): DEEP["skip_night"] = DEEP["list_day"]   # and no more crawling tonight
+    return {"ok": True, "text": "Stopped." + (" %d waiting file%s taken off the list." % (n, "" if n == 1 else "s") if n else "")}
+
+def _deep_night():
+    return (datetime.now() - timedelta(hours=12)).date().isoformat()       # one crawl list per night, even past midnight
+
+def deep_crawl_list(c):
+    """Files still to check: never checked, changed since, or checked longer ago than the re-check setting. Newest first."""
+    with db() as d: known = {r["path"]: (r["size"], r["mtime"] or 0, r["at"] or "") for r in d.execute("SELECT path, size, mtime, at FROM deep")}
+    months = int(c.get("recheck") or 0)
+    cutoff = (datetime.now() - timedelta(days=30 * months)).isoformat(timespec="seconds") if months else ""
+    todo, total, done = [], 0, 0
+    for p in _deep_videos(MEDIA_ROOT):
+        try: st = os.stat(p)
+        except OSError: continue
+        total += 1
+        k = known.get(p)
+        if k and k[0] == st.st_size and abs(k[1] - st.st_mtime) < 2 and (not cutoff or k[2] >= cutoff): done += 1
+        elif time.time() - st.st_mtime > 3600: todo.append((st.st_mtime, p))   # still being written: leave it for now
+    todo.sort(reverse=True)
+    kv_set("deep_progress", {"total": total, "done": done, "at": now_iso()})
+    DEEP["crawl_done"] = 0
+    return [p for _, p in todo]
+
+def deep_next_crawl(c):
+    night = _deep_night()
+    if DEEP["skip_night"] == night: return None
+    if DEEP["list_day"] != night or DEEP["list"] is None:
+        DEEP["list"], DEEP["list_day"] = deep_crawl_list(c), night
+    while DEEP["list"]:
+        p = DEEP["list"].pop(0)
+        if os.path.isfile(p): return p
+    return None
+
+def deep_worker():
+    while True:
+        time.sleep(3)
+        try:
+            if not configured(): time.sleep(30); continue
+            c = deep_cfg()
+            with db() as d:
+                job = d.execute("SELECT path, why FROM deep_queue ORDER BY CASE why WHEN 'manual' THEN 0 ELSE 1 END, at LIMIT 1").fetchone()
+            path, how = (job["path"], job["why"]) if job else (None, None)
+            if not path and c["crawl"] and deep_in_window(c) and not STATE["running"]:
+                path, how = deep_next_crawl(c), "crawl"
+            if not path:
+                DEEP["paused"] = ""
+                if DEEP["found_new"] and not STATE["running"]:       # list what was found without waiting for the nightly scan
+                    DEEP["found_new"] = False; threading.Thread(target=scan, daemon=True).start()
+                time.sleep(30); continue
+            if c["pause"] and deep_playing():
+                if how == "crawl": DEEP["list"].insert(0, path)
+                DEEP["paused"] = "Waiting: someone is watching something."; time.sleep(60); continue
+            DEEP["paused"] = ""; DEEP["cancel"] = False
+            res = deep_check_file(path, how) if os.path.isfile(path) else None
+            if res is not None or not os.path.isfile(path) or DEEP["cancel"]:
+                with db() as d: d.execute("DELETE FROM deep_queue WHERE path=?", (path,))
+                if how == "crawl" and res is not None: DEEP["crawl_done"] += 1
+            elif how == "crawl":
+                DEEP["list"].insert(0, path)                       # stopped because someone started watching: same file next time
+            DEEP["cancel"] = False
+        except Exception as e:
+            log("deep check worker: %r" % e); time.sleep(60)
+
+def deep_findings():
+    """path -> what's wrong, for health_scan: our own bad/minor results, plus Tdarr health-check errors (when Tdarr is set up)."""
+    out, ok_at = {}, {}
+    try:
+        with db() as c:
+            for r in c.execute("SELECT * FROM deep WHERE status IN ('bad','minor')"):
+                x = dict(r); x["src"] = "deep"
+                try: x["first"] = json.loads(x.get("first") or "[]")
+                except ValueError: x["first"] = []
+                out[r["path"]] = x
+            ok_at = {r["path"]: r["at"] or "" for r in c.execute("SELECT path, at FROM deep WHERE status='ok'")}
+    except Exception as e:
+        log("deep findings failed: %r" % e)
+    if S.get("tdarr"):
+        try:
+            for f in tdarr_records():
+                if str(f.get("HealthCheck")) != "Error" or f["_id"] in out: continue
+                when = ""
+                try:
+                    v = f.get("lastHealthCheckDate")
+                    when = datetime.fromtimestamp(float(v) / (1000 if float(v) > 1e11 else 1)).isoformat(timespec="seconds") if v else ""
+                except (TypeError, ValueError): pass
+                if ok_at.get(f["_id"], "") > when: continue            # our own deep check passed it after Tdarr's check
+                out[f["_id"]] = {"src": "tdarr", "status": "bad", "at": when, "size": None,
+                                 "msg": "Tdarr's health check found errors when it played this file through."}
+        except Exception as e:
+            log("tdarr health errors failed: %r" % e)
+    DEEP["found_new"] = False
+    return out
+
+def deep_card(dz, f, size, title, lib, key, ref, m, link):
+    bad = dz.get("status") == "bad"
+    when = ""
+    try: when = datetime.fromisoformat(dz["at"]).strftime("%-d %b %Y") if dz.get("at") else ""
+    except ValueError: pass
+    if dz.get("src") == "tdarr":
+        text = dz["msg"]
+        note = "Checked by Tdarr%s. Most likely a damaged or badly finished download." % (" on " + when if when else "")
+    else:
+        text = ("Damaged: " if bad else "Some errors: ") + dz.get("msg", "")
+        note = ("Found by a deep check%s: the whole file was played through. Most likely a damaged or badly finished download." if bad else
+                "Found by a deep check%s. A few errors are often harmless (for example a glitch at the start of a TV recording). Play the part you care about; if it stutters or shows blocks, replace it.") % (" on " + when if when else "")
+    if ref: note += " Replace moves it to the trash and asks %s to download a good copy." % ref["arr"]
+    elif not has_arrs(): note += " Without Radarr or Sonarr, Library Doctor can't fetch a new copy: get one yourself, then delete this file."
+    else: note += " Neither Radarr nor Sonarr manages it, so there's nothing to fetch a new copy."
+    return dict(id=iid("health", f), chk="health", sev="bad" if bad else "amb", title=title, library=lib,
+                detail={"kind": "corrupt", "text": text, "note": note, "path": f, "size": size, "links": _link_info(f)["links"],
+                        "ref": ref, "section": key, "confidence": "sure" if bad else "check",
+                        "deep": {k: dz.get(k) for k in ("status", "msg", "at", "src", "errors", "first")},
+                        "fixes": ["replace"] if ref else []},
+                links=[plex_link(m["ratingKey"])] + ([link] if link else []))
+
+DEEP_RATE = {"hd": (9.0, 0.6), "4k": (62.0, 0.85)}    # seconds per minute of video on 1 thread, and how well extra threads help
+                                                     # (measured: 1080p H.264 9 s -> 4 s on 4 threads; 4K HEVC 62 s -> 19 s)
+def _fs_type(path):
+    """Filesystem of the media folder (zfs, btrfs, ext4, xfs, fuse.shfs on Unraid...), '' if unknown."""
+    best, typ = "", ""
+    try:
+        for line in open("/proc/mounts"):
+            parts = line.split()
+            if len(parts) > 2:
+                mp = parts[1].replace("\\040", " ")
+                if (path == mp or path.startswith(mp.rstrip("/") + "/")) and len(mp) > len(best): best, typ = mp, parts[2]
+    except Exception: pass
+    return typ
+
+def _tdarr_health():
+    """What Tdarr's own health check is set to: libraries with Thorough on, and its CPU/GPU health-check workers."""
+    if not S.get("tdarr"): return None
+    try:
+        libs = tdarr_call("/api/v2/cruddb", {"collection": "LibrarySettingsJSONDB", "mode": "getAll"}, timeout=30)
+        req = urllib.request.Request(S["tdarr"]["url"].rstrip("/") + "/api/v2/get-nodes", headers={"x-api-key": S["tdarr"].get("key", "")})
+        with urllib.request.urlopen(req, timeout=20) as r: nodes = json.loads(r.read().decode() or "{}")
+    except Exception as e:
+        log("tdarr health settings failed: %r" % e); return {"error": True}
+    on = [l.get("name", "?") for l in libs if l.get("processHealthChecks") and l.get("ffmpegscan")]
+    gpu = sum(int((n.get("workerLimits") or {}).get("healthcheckgpu") or 0) for n in nodes.values())
+    cpu = sum(int((n.get("workerLimits") or {}).get("healthcheckcpu") or 0) for n in nodes.values())
+    has_gpu = any(int((n.get("workerLimits") or {}).get("transcodegpu") or 0) > 0 for n in nodes.values()) or gpu > 0
+    return {"libs": len(libs), "thorough": on, "gpu_workers": gpu, "cpu_workers": cpu, "has_gpu": has_gpu}
+
+def deep_advice():
+    """Facts about this server and a suggested deep check setup (Settings -> Deep check -> Suggested for your server)."""
+    c = deep_cfg(); st = kv_get("deep_libstats") or {}
+    cpus, threads, free = _cpu_limit(), DEEP_THREADS, _mem_free()
+    fs = _fs_type(MEDIA_ROOT)
+    td = _tdarr_health()
+    # speed: our own measurements when there are enough of them, else the measured defaults above
+    rate_hd = DEEP_RATE["hd"][0] / threads ** DEEP_RATE["hd"][1]
+    rate_4k = DEEP_RATE["4k"][0] / threads ** DEEP_RATE["4k"][1]
+    try:
+        with db() as d:
+            rows = d.execute("SELECT secs, dur FROM deep WHERE status IN ('ok','minor','bad') AND dur > 600 AND secs > 0 ORDER BY at DESC LIMIT 200").fetchall()
+        if len(rows) >= 20: rate_hd = sum(r[0] for r in rows) / (sum(r[1] for r in rows) / 60.0)
+        measured = len(rows)
+    except Exception: measured = 0
+    mins_hd = max(0.0, (st.get("min") or 0) - (st.get("min_4k") or 0)); mins_4k = st.get("min_4k") or 0
+    hours = (mins_hd * rate_hd + mins_4k * rate_4k) / 3600.0
+    win = (int(c["end"]) - int(c["start"])) % 24 or 24
+    need4k = (250 + 40 * threads) * 1048576
+    k4_ok = free is None or free >= need4k or not mins_4k
+    rot_safe = fs in ("zfs", "btrfs")
+    tdarr_on = bool(td and td.get("thorough"))
+    facts, why = [], []
+    if st.get("files"):
+        facts.append("Your library: %s files, about %s hours of video%s." % (format(st["files"], ","), format(int((st.get("min") or 0) / 60), ","),
+                     " (%s of them 4K)" % format(st["files_4k"], ",") if st.get("files_4k") else ""))
+        facts.append("A full deep check here would take about %s hours of checking: roughly %d nights with a %d-hour window, or %d with 8 hours." % (
+                     format(int(hours), ","), -(-hours // win), win, -(-hours // 8)))
+    else:
+        facts.append("Run a scan first: then this can say how long a full check of your library would take.")
+    facts.append("Library Doctor may use %s CPU%s here, so it checks with %d thread%s%s." % (
+        ("%g" % cpus), "" if cpus == 1 else "s", threads, "" if threads == 1 else "s", " (measured from %d checks)" % measured if measured >= 20 else ""))
+    if not k4_ok:
+        facts.append("Only %d MB of memory is free in its container; a 4K file needs about %d MB, so 4K files would be skipped." % (free // 1048576, need4k // 1048576))
+    if fs: facts.append("Your media is on %s%s." % ({"zfs": "ZFS", "btrfs": "Btrfs", "fuse.shfs": "Unraid's array", "ext4": "ext4", "xfs": "XFS"}.get(fs, fs), ", which already catches files that go bad on the disk" if rot_safe else ", which doesn't check files for rot by itself"))
+    if td:
+        if td.get("error"): facts.append("Tdarr is set up, but its health check settings couldn't be read.")
+        elif tdarr_on: facts.append("Tdarr already runs the Thorough health check in %d of %d libraries (%d GPU and %d CPU workers), and Library Doctor shows what it finds." % (
+            len(td["thorough"]), td["libs"], td["gpu_workers"], td["cpu_workers"]))
+        else: facts.append("Tdarr's health check is off%s." % (", and Tdarr has a GPU it could use for it" if td.get("has_gpu") else ""))
+    sug = {"imports": True, "pause": True, "start": int(c["start"]), "end": int(c["end"]), "recheck": 12 if rot_safe else 6, "crawl": False}
+    why.append("Check new downloads: on. Most damaged files arrive damaged, and one new file at a time is cheap.")
+    if tdarr_on:
+        why.append("Whole library: leave off, Tdarr is already checking it" + (" on the GPU" if td.get("gpu_workers") else "") + ".")
+    elif td and td.get("has_gpu") and not td.get("error"):
+        why.append("Whole library: leave off here and let Tdarr do it on its GPU instead (much faster): in Tdarr, set Health check GPU workers to 1 and CPU to 0, then turn on Health check → Thorough in each library. Its findings show up here with Replace.")
+    elif st.get("files") and hours / 8 <= 90:
+        sug.update(crawl=True, start=0, end=8) if hours / win > 60 else sug.update(crawl=True)
+        why.append("Whole library: on, %s. The first pass takes about %d nights, then only new and changed files." % (
+            "00:00 to 08:00" if sug["start"] == 0 and sug["end"] == 8 else "in your current window", -(-hours // ((sug["end"] - sug["start"]) % 24 or 24))))
+    elif st.get("files"):
+        why.append("Whole library: probably not worth it on this server (more than 90 nights for one pass)." + (" Giving the container more CPUs (cpus: in compose) makes it much faster." if cpus < 4 else ""))
+    if not k4_ok: why.append("Raise the container's memory limit (mem_limit: 1g) if you want 4K files checked.")
+    why.append("Check a file again after %s: %s" % ("12 months" if rot_safe else "6 months", "ZFS/Btrfs already catches rot, so a yearly look is plenty." if rot_safe else "your filesystem doesn't catch rot by itself, so look twice a year."))
+    return {"ok": True, "facts": facts, "why": why, "suggest": sug, "hours": int(hours), "stats": st}
+
+def deep_status():
+    c = deep_cfg()
+    try:
+        with db() as d:
+            q = d.execute("SELECT COUNT(*) FROM deep_queue").fetchone()[0]
+            counts = {r[0]: r[1] for r in d.execute("SELECT status, COUNT(*) FROM deep GROUP BY status")}
+            recent = [dict(r) for r in d.execute("SELECT path, at, status, msg, how, secs FROM deep ORDER BY at DESC LIMIT 12")]
+            avg = d.execute("SELECT AVG(secs) FROM (SELECT secs FROM deep WHERE how='crawl' AND status!='skip' ORDER BY at DESC LIMIT 200)").fetchone()[0]
+    except Exception as e:
+        log("deep status failed: %r" % e); q, counts, recent, avg = 0, {}, [], None
+    rel = lambda p: os.path.relpath(p, MEDIA_ROOT) if p and p.startswith(MEDIA_ROOT + os.sep) else p
+    pr = kv_get("deep_progress") or {}
+    done = (pr.get("done") or 0) + DEEP["crawl_done"]
+    left = max(0, (pr.get("total") or 0) - done)
+    hours = (int(c["end"]) - int(c["start"])) % 24 or 24
+    nights = int(-(-left * avg // (hours * 3600))) if avg and left and c["crawl"] else None
+    for r in recent: r["name"] = rel(r.pop("path"))
+    return {"cfg": c, "cur": rel(DEEP["cur"]), "pct": round(DEEP["pct"]), "paused": DEEP["paused"], "queue": q, "counts": counts,
+            "recent": recent, "total": pr.get("total"), "done": done, "listed_at": pr.get("at"), "nights": nights,
+            "avg_secs": int(avg) if avg else None, "in_window": bool(c["crawl"] and deep_in_window(c)),
+            "skip_tonight": DEEP["skip_night"] == _deep_night()}
+
 # ---------------- follow-up after Replace: did a good copy arrive? ----------------
 FOLLOW_DAYS = int(os.environ.get("LD_FOLLOW_DAYS", "3"))
 
@@ -3434,6 +4234,7 @@ def import_check():
                     runtime = e.get("runtime") or sr.get("runtime") or 0; orig = (sr.get("originalLanguage") or {}).get("name")
                 p = f.get("path") or ""
                 if not p: continue
+                if deep_cfg()["imports"]: deep_enqueue([p], "import")       # v0.3: played through when the worker is free
                 mi = f.get("mediaInfo") or {}
                 why = None
                 if os.path.splitext(p)[1].lower() in _FAKE_EXT: why = "it's a %s file, not a video" % os.path.splitext(p)[1]
@@ -3731,6 +4532,7 @@ def quality_fix(issue_id, how):
     if not row: return {"ok": False, "error": "That one isn't in the last scan any more. Scan again first."}
     d = json.loads(row["detail"])
     if how not in d.get("fixes", []): return {"ok": False, "error": "That fix doesn't apply here."}
+    if how == "albumsearch": return lidarr_fix(row, d)                     # v0.3 music: mixed-quality album
     if how == "tdarr": return tdarr_fix(issue_id, row, d)
     if how == "monitor": return monitor_fix(issue_id, row, d)
     if how == "blockgroup": return group_block(issue_id, row, d)
@@ -4353,11 +5155,19 @@ def tdarr_failed_cards(recs, trashed, pending):
                         links=[{"label": "Open Tdarr", "url": S["tdarr"]["public"]}] if S["tdarr"].get("public") else []))
     return out
 
+_TDARR_RECS = {"t": 0, "recs": []}
+def tdarr_records(max_age=900):
+    """All of Tdarr's file records, fetched at most every 15 minutes (it's one big request)."""
+    if time.time() - _TDARR_RECS["t"] > max_age:
+        _TDARR_RECS["recs"] = [f for f in tdarr_call("/api/v2/cruddb", {"collection": "FileJSONDB", "mode": "getAll"}, timeout=300) if f.get("_id")]
+        _TDARR_RECS["t"] = time.time()
+    return _TDARR_RECS["recs"]
+
 def tdarr_missed_scan(trashed, skip):
     if not S.get("tdarr"): return []
     STATE["step"] = "Checking what Tdarr has seen"
     try:
-        recs = [f for f in tdarr_call("/api/v2/cruddb", {"collection": "FileJSONDB", "mode": "getAll"}, timeout=300) if f.get("_id")]
+        recs = tdarr_records()
     except Exception as e:
         log("tdarr missed check failed: %r" % e); return []
     known = {f["_id"] for f in recs}
@@ -4584,6 +5394,8 @@ def apps_cards():
         arr_like(a["name"], a["url"], a.get("key", ""), a.get("public") or a["url"], "v3")
     pr = S.get("prowlarr") or {}
     if pr.get("url"): arr_like(pr.get("name") or "Prowlarr", pr["url"], pr.get("key", ""), pr.get("public") or pr["url"], "v1", kind="prowlarr")
+    ld_ = S.get("lidarr") or {}
+    if ld_.get("url"): arr_like(ld_.get("name") or "Lidarr", ld_["url"], ld_.get("key", ""), ld_.get("public") or ld_["url"], "v1", kind="lidarr")
     jk = S.get("jackett") or {}
     if jk.get("url"):                                             # v0.2.3
         try:
@@ -4895,8 +5707,46 @@ def _q_label(r):
     ep = r.get("episode")
     return "S%02dE%02d" % (ep["seasonNumber"], ep["episodeNumber"]) if ep else ""
 
+# v0.3.0: a finished download the arr won't import because it already has a copy that's as good or better (e.g. a second
+# release grabbed as an upgrade, then a third, better one imported first). The arr never cleans these up; they sit in the
+# queue and the download folder for ever. Shown as "download not needed" with Delete download (to LD's trash, NOT blocklisted,
+# so no new search). LD's own "smaller copy" downloads are left out: smaller_followup() imports those itself.
+NOT_NEEDED_RE = re.compile(r"not an upgrade|not a custom format upgrade|not a quality revision upgrade|equal or higher preference", re.I)
+_CF_SCORES = re.compile(r"\((-?\d+)\)\s*do not improve on Existing:.*\((-?\d+)\)", re.I | re.S)
+
+def _ld_smaller_movie_ids():
+    out = set()
+    try:
+        with db() as c:
+            for (x,) in c.execute("SELECT ref FROM done WHERE chk='quality' AND status='waiting' AND cleared=0 AND ref IS NOT NULL"):
+                try:
+                    j = json.loads(x)
+                    if j.get("kind") == "smaller": out.add((j.get("arr"), int(j["id"])))
+                except Exception: pass
+    except Exception: pass
+    return out
+
+def _q_has_file(r):
+    return bool((r.get("episode") or r.get("movie") or {}).get("hasFile"))
+
+def _existing_file(a, r):
+    """The copy the arr already has for this queue item: {name, size, quality, score} or {}."""
+    try:
+        if a["kind"] == "radarr" and r.get("movieId"):
+            fs = arr(a, "/moviefile?movieId=%d" % int(r["movieId"])) or []
+            f = fs[0] if fs else {}
+        else:
+            fid = (r.get("episode") or {}).get("episodeFileId")
+            f = arr(a, "/episodefile/%d" % int(fid)) if fid else {}
+        if not f: return {}
+        return {"name": os.path.basename(f.get("relativePath") or f.get("path") or ""), "size": f.get("size") or 0,
+                "quality": ((f.get("quality") or {}).get("quality") or {}).get("name", ""), "score": f.get("customFormatScore")}
+    except Exception as e:
+        log("existing file lookup failed: %r" % e); return {}
+
 def queue_cards():
     out, qop = [], None
+    smaller_ids = _ld_smaller_movie_ids()
     for a in S.get("arrs", []):
         try: recs = _arr_queue(a)
         except Exception as e:
@@ -4909,7 +5759,17 @@ def queue_cards():
             known = bool(r.get("movieId") or r.get("seriesId"))
             size, left = r.get("size") or 0, r.get("sizeleft") or 0
             kind = None
-            if known and state in ("importBlocked", "importPending") and tstat == "warning" and status == "completed":
+            if (known and state in ("importBlocked", "importPending") and tstat == "warning" and status == "completed"
+                    and NOT_NEEDED_RE.search(msgs) and _q_has_file(r) and (a["name"], r.get("movieId")) not in smaller_ids):
+                kind = "notneeded"
+                if r.get("protocol") == "torrent" and r.get("downloadId"):
+                    if qop is None:
+                        try: qop = _qbit() or False
+                        except Exception as e: log("qbit login failed: %r" % e); qop = False
+                    info = _qbit_info(qop, r["downloadId"]) if qop else None
+                    r["_qb"] = ({"private": bool(info.get("private")), "tags": info.get("tags", ""), "path": info.get("content_path", ""),
+                                 "ratio": round(info.get("ratio", 0), 2), "state": info.get("state")} if info else {"unknown": True})
+            elif known and state in ("importBlocked", "importPending") and tstat == "warning" and status == "completed":
                 kind = "blocked"
             elif known and (state == "failedPending" or status in ("failed", "warning") and "fail" in msgs.lower()):
                 kind = "stalled"
@@ -4934,15 +5794,40 @@ def queue_cards():
                   "protocol": r.get("protocol"), "client": r.get("downloadClient"), "size": size, "left": left,
                   "added": r.get("added"), "msg": msgs, "path": r.get("outputPath") or ""}
             if r.get("_qb"): it["qb"] = r["_qb"]
+            if kind == "notneeded":
+                it["have"] = _existing_file(a, r)
+                m = _CF_SCORES.search(msgs)
+                if m: it["scores"] = [int(m.group(1)), int(m.group(2))]
             g["items"].append(it)
         for (kind, oid), g in groups.items():
             items, owner = g["items"], g["owner"]
             n = len(items)
             name = (owner.get("title") or items[0]["title"]) if kind != "leftover" else items[0]["title"]
-            eps = ", ".join(x["ep"] for x in items if x["ep"])
+            eps = ", ".join(dict.fromkeys(x["ep"] for x in items if x["ep"]))
             links = [arr_link(a, owner, "movie" if a["kind"] == "radarr" else "series")] if owner.get("titleSlug") else []
             links.append({"label": "Open %s queue" % a["name"], "url": a["public"].rstrip("/") + "/activity/queue"})
-            if kind == "blocked":
+            if kind == "notneeded":
+                one = n == 1
+                what = ("this film" if a["kind"] == "radarr" else ("this episode" if one else "these episodes"))
+                title = "%s%s: download not needed (already in your library)" % (name, " " + eps if eps and n <= 4 else "")
+                h, x0 = items[0].get("have") or {}, items[0]
+                cmp_ = ""
+                if x0.get("scores"): cmp_ = " (custom format score %s against your copy's %s)" % (x0["scores"][0], x0["scores"][1])
+                text = "%s already has %s, and %s better%s, so %s won't import %s. " % (
+                    a["name"], what, "the download isn't" if one else "the downloads aren't", cmp_, a["name"], "it" if one else "them")
+                if h.get("name"): text += "You have: %s (%s%s). " % (h["name"], human(h.get("size")), ", " + h["quality"] if h.get("quality") else "")
+                text += "Downloaded: %s (%s)." % (x0["title"][:120], human(x0["size"])) if one else "%d downloads, %s." % (n, human(sum(x["size"] for x in items)))
+                prot = [x for x in items if x.get("protocol") == "torrent" and (_protected(x.get("qb") or {}) or (x.get("qb") or {}).get("unknown"))]
+                if prot and len(prot) == n:
+                    note = ("It's a private or protected torrent (or Library Doctor can't ask the torrent client), so Remove from queue only takes it out of %s's queue: "
+                            "the torrent keeps seeding and its files stay until your seeding rules remove them." % a["name"])
+                    fixes = ["unqueue"]
+                else:
+                    note = ("Delete download moves the downloaded files to Library Doctor's trash (deleted after %d days) and removes it from the download client "
+                            "and %s's queue. It isn't blocklisted, so %s won't go looking for another copy. Your copy in the library isn't touched." % (TRASH_DAYS, a["name"], a["name"]))
+                    if prot: note += " Private or protected torrents among them are only taken out of the queue and keep seeding."
+                    fixes = ["delete"]
+            elif kind == "blocked":
                 title = "%s%s: %s waiting to import" % (name, " " + eps if eps and n <= 4 else "", "1 download" if n == 1 else "%d downloads" % n)
                 text = "%s downloaded %s but won't import %s by itself: %s" % (a["name"], "it" if n == 1 else "them", "it" if n == 1 else "them", items[0]["msg"] or "import blocked")
                 note = "Import asks %s to import %s now, checking first that %s has no objection to the file. The old copy goes to its recycle bin." % (a["name"], "it" if n == 1 else "them", a["name"])
@@ -5186,6 +6071,56 @@ def _retry(a, it):
     elif it.get("episodeId"):
         arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": [int(it["episodeId"])]}, "POST")
 
+def _trash_tree(src, title, reason, tag):
+    """Move a download (file or folder) under /media/downloads into LD's trash, recording each file for Put back."""
+    if not src.startswith(MEDIA_ROOT + "/downloads/") or not os.path.exists(src): return "its files aren't under /media/downloads (or are already gone)"
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + tag
+    files = [src] if os.path.isfile(src) else [os.path.join(d, f) for d, _, fs in os.walk(src) for f in fs]
+    for f in files:
+        dst = os.path.join(TRASH_DIR, stamp, os.path.relpath(f, MEDIA_ROOT))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        size = os.path.getsize(f); move_file(f, dst)
+        with db() as c: c.execute("INSERT INTO trash (issue_id, title, src, dst, size, reason, moved_at) VALUES (?,?,?,?,?,?,?)",
+                                  ("queue", title[:200], f, dst, size, reason, now_iso()))
+    if os.path.isdir(src):
+        for d, dn, fn in sorted(os.walk(src, topdown=False), key=lambda x: -len(x[0])):
+            try: os.rmdir(d)
+            except OSError: pass
+    return ""
+
+def _still_has_file(a, it):
+    if a["kind"] == "radarr": return bool(arr(a, "/movie/%d" % int(it["movieId"])).get("hasFile"))
+    return bool(arr(a, "/episode/%d" % int(it["episodeId"])).get("hasFile")) if it.get("episodeId") else False
+
+def _remove_unneeded(a, it, how):
+    """Delete download / Remove from queue for a 'download not needed' item. Returns a problem or ''. Never blocklists."""
+    if not _still_has_file(a, it):
+        return "%s doesn't have a copy any more, so this download may be needed: refresh and import it instead" % a["name"]
+    qb = it.get("qb") or {}
+    keep = it.get("protocol") == "torrent" and (how == "unqueue" or _protected(qb) or qb.get("unknown"))
+    rm = lambda client: arr(a, "/queue/%d?removeFromClient=%s&blocklist=false&skipRedownload=true" % (it["qid"], "true" if client else "false"), None, "DELETE")
+    reason = "Download not needed (%s already had a copy as good or better)" % a["name"]
+    if keep:
+        rm(False); it["_kept"] = True; return ""
+    if it.get("protocol") == "torrent":
+        op = _qbit()
+        if not op: return "qBittorrent isn't set up in Library Doctor"
+        info = _qbit_info(op, it["downloadId"])
+        if info and _protected({"private": info.get("private"), "tags": info.get("tags", "")}):
+            rm(False); it["_kept"] = True; return ""
+        src = (info or {}).get("content_path") or it.get("path") or ""
+        if info:
+            op.open(S["qbit"]["url"].rstrip("/") + "/api/v2/torrents/delete", data=urllib.parse.urlencode({"hashes": it["downloadId"].lower(), "deleteFiles": "false"}).encode(), timeout=20).read()
+        why = _trash_tree(src.rstrip("/"), it["title"], reason, "notneeded-" + (it.get("downloadId") or "")[:8].lower())
+        try: rm(False)
+        except Exception: pass          # removing the torrent usually drops it from the queue already
+        return why
+    src = (it.get("path") or "").rstrip("/")
+    why = _trash_tree(src, it["title"], reason, "notneeded-" + (it.get("downloadId") or "x")[:8].lower())
+    if why: return why
+    rm(True)                             # usenet: clears the job from SABnzbd/NZBGet history too (its files are already in the trash)
+    return ""
+
 def _remove_leftover(it):
     qb = it.get("qb") or {}
     if _protected(qb): return "private or protected torrent: left to its seeding rules"
@@ -5238,6 +6173,10 @@ def queue_fix(issue_id, how, only=None):
                         if not op: raise
                 if not op and not (S.get("transmission") or {}).get("url"): raise RuntimeError("No torrent client is set up in Settings")
                 okn += 1
+            elif how in ("delete", "unqueue"):
+                why = _remove_unneeded(a, it, how)
+                if why: probs.append("%s: %s" % (it["ep"] or it["title"][:50], why))
+                else: okn += 1
             elif how == "remove":
                 why = _remove_leftover(it)
                 if why: probs.append(why)
@@ -5245,8 +6184,11 @@ def queue_fix(issue_id, how, only=None):
         except Exception as e:
             probs.append("%s: %s" % (it["ep"] or it["title"][:50], e))
     n = len(d["items"])
-    verb = {"import": "Imported", "retry": "Removed and searching again for", "remove": "Moved to the trash:"}[how]
+    verb = {"import": "Imported", "retry": "Removed and searching again for", "remove": "Moved to the trash:",
+            "delete": "Deleted (to the trash, not blocklisted)", "unqueue": "Took out of the queue (left seeding)"}[how]
     note = "%s %d of %d%s." % (verb, okn, n, (". Not done: " + "; ".join(probs)) if probs else "")
+    kept = sum(1 for it in d["items"] if it.get("_kept"))
+    if how == "delete" and kept: note += " %d private/protected torrent%s only taken out of the queue (still seeding)." % (kept, "" if kept == 1 else "s")
     if how == "retry" and okn: note += " Anything it finds downloads " + dl_when() + "."
     st = "ok" if okn == n else "warn"
     with db() as c:
@@ -5434,7 +6376,7 @@ def session_end(tok, everyone=False):
 
 # ---------------- settings page ----------------
 SECRET_FIELDS = ("token", "key", "password")
-SINGLE = ("plex", "tautulli", "tdarr", "sportarr", "prowlarr", "jackett", "seerr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
+SINGLE = ("plex", "lidarr", "tautulli", "tdarr", "sportarr", "prowlarr", "jackett", "seerr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
 LISTS = ("arrs", "bazarr")
 
 def settings_public():
@@ -5451,6 +6393,7 @@ def settings_public():
     out["schedule"] = {"hour": h, "minute": mi, "days": days}
     out["language"] = pref_language()
     out["trash_days"] = TRASH_DAYS; out["digest"] = S.get("digest") or "news"
+    out["deep"] = deep_cfg()
     tz = os.environ.get("TZ", "").strip()
     if not tz:
         try: tz = os.path.relpath(os.path.realpath("/etc/localtime"), "/usr/share/zoneinfo")
@@ -5517,6 +6460,10 @@ def settings_test(kind, e):
             except JackettLogin:
                 if e.get("password"): return {"ok": False, "msg": "The API key works (%s), but Jackett refused the admin password." % n}
                 return {"ok": True, "msg": "Connected to Jackett: %s. Add Jackett's admin password to also see which indexers fail." % n}
+        if kind == "lidarr":
+            r = http(u + "/api/v1/system/status", {"X-Api-Key": e.get("key", "")}, timeout=15)
+            if (r.get("appName") or "Lidarr").lower() != "lidarr": return {"ok": False, "msg": "That's %s, not Lidarr. Check the address." % r.get("appName")}
+            return {"ok": True, "msg": "Connected to Lidarr %s." % r.get("version", "")}
         if kind == "seerr":
             st = http(u + "/api/v1/status", timeout=15)
             try: n = seerr_api("/issue/count", cfg=e)
@@ -5572,7 +6519,7 @@ def _samples(kind, e):
     raw = dict(e, paths=[]); u = e["url"]; out = []
     if kind == "plex":
         for sec in ms_request("GET", "/library/sections", timeout=20, server=e)["MediaContainer"].get("Directory", []):
-            typ = {"movie": 1, "show": 4}.get(sec.get("type"))
+            typ = {"movie": 1, "show": 4}.get(sec.get("type"))        # music left out on purpose: an unmounted music folder must never block a scan (it gets its own card)
             if not typ: continue
             for m in ms_request("GET", "/library/sections/%s/all" % sec["key"], {"type": typ, "X-Plex-Container-Start": 0, "X-Plex-Container-Size": 4},
                                 timeout=30, server=e)["MediaContainer"].get("Metadata", []):
@@ -5582,6 +6529,8 @@ def _samples(kind, e):
             out = [x["path"] for x in arr(raw, "/series") if x.get("path") and (x.get("statistics") or {}).get("episodeFileCount")][:8]
         else:
             out = [x["movieFile"]["path"] for x in arr(raw, "/movie") if x.get("hasFile") and (x.get("movieFile") or {}).get("path")][:8]
+    elif kind == "lidarr":
+        out = [x["path"] for x in lidarr("/artist", cfg=raw) if x.get("path") and (x.get("statistics") or {}).get("trackFileCount")][:8]
     elif kind == "bazarr":
         for what in ("movies", "series"):
             try: out += [x["path"] for x in (baz(raw, "/" + what, length=5).get("data") or []) if x.get("path")]
@@ -5608,11 +6557,12 @@ def apply_trash_days():
 
 def _fc_apps():
     out = []
-    if (S.get("plex") or {}).get("url"): out.append(("plex", None, S["plex"], "Plex", True))
+    if (S.get("plex") or {}).get("url"): out.append(("plex", None, S["plex"], ms_name(S["plex"]), True))
     for i, a in enumerate(S.get("arrs") or []):
         if a.get("url"): out.append(("arrs", i, a, a.get("name") or a.get("kind", "").title(), True))
     for i, b in enumerate(S.get("bazarr") or []):
         if b.get("url"): out.append(("bazarr", i, b, b.get("name") or "Bazarr", False))
+    if (S.get("lidarr") or {}).get("url"): out.append(("lidarr", None, S["lidarr"], S["lidarr"].get("name") or "Lidarr", True))
     for k, n in (("tdarr", "Tdarr"), ("sportarr", "Sportarr")):
         if (S.get(k) or {}).get("url"): out.append((k, None, S[k], n, False))
     return out
@@ -5693,7 +6643,7 @@ def settings_import(data, passphrase=None):
     cfg = (data or {}).get("settings") if isinstance(data, dict) else None
     if not isinstance(cfg, dict) or not (data or {}).get("library_doctor_settings"):
         return {"ok": False, "msg": "That isn't a Library Doctor settings file."}
-    known = set(SINGLE) | set(LISTS) | {"schedule", "language", "trash_days", "digest"}
+    known = set(SINGLE) | set(LISTS) | {"schedule", "language", "trash_days", "digest", "deep"}
     for k, v in cfg.items():                                  # settings this page doesn't edit (e.g. qbit) come along too
         if k not in known: S[k] = v
     new = {k: cfg[k] for k in known if k in cfg}
@@ -5762,6 +6712,17 @@ def settings_save(new):
         dg = str(new.get("digest") or "news")
         cfg["digest"] = dg if dg in ("news", "weekly", "both") else "news"
     elif "digest" in S: cfg["digest"] = S["digest"]
+    if isinstance((new or {}).get("deep"), dict):            # v0.3 deep check
+        dp = new["deep"]
+        try:
+            cd = {"crawl": bool(dp.get("crawl")), "start": int(dp.get("start", 1)) % 24, "end": int(dp.get("end", 6)) % 24,
+                  "imports": bool(dp.get("imports")), "recheck": int(dp.get("recheck", 12)), "pause": bool(dp.get("pause", True))}
+        except (TypeError, ValueError):
+            return {"ok": False, "msg": "The deep check settings aren't valid."}
+        if cd["recheck"] not in (0, 1, 3, 6, 12): return {"ok": False, "msg": "Pick how often the deep check looks at a file again."}
+        if cd["crawl"] and cd["start"] == cd["end"]: return {"ok": False, "msg": "Pick different start and end times for the nightly deep check."}
+        cfg["deep"] = cd
+    elif "deep" in S: cfg["deep"] = S["deep"]
     if "language" in (new or {}):                            # v0.1.6: audio language check ("" = off)
         lg = str(new.get("language") or "")
         if lg and lg not in LANGS: return {"ok": False, "msg": "Pick a language from the list."}
@@ -5776,7 +6737,7 @@ def settings_save(new):
         cfg[k] = [_with_secrets(k, e) for e in (new or {}).get(k) or [] if isinstance(e, dict) and e.get("url")]
     # v0.1.4: keep settings this page doesn't edit (e.g. "qbit" from an older secrets.json) instead of dropping them
     for k, v in S.items():
-        if k not in cfg and k not in SINGLE and k not in LISTS and k not in ("schedule", "language", "trash_days", "digest"): cfg[k] = v
+        if k not in cfg and k not in SINGLE and k not in LISTS and k not in ("schedule", "language", "trash_days", "digest", "deep"): cfg[k] = v
     names = [a.get("name", "") for a in cfg["arrs"]]
     if any(not n for n in names) or len(set(names)) != len(names): return {"ok": False, "msg": "Each Radarr/Sonarr needs its own name."}
     for a in cfg["arrs"]:
@@ -6106,9 +7067,9 @@ def state():
              "full_running": VIRUS_LOCK.locked(), "full_started": (kv_get("virus_full_running") or {}).get("at")}
     try: space = space_forecast()
     except Exception as e: space = None; log("space forecast failed: %r" % e)
-    return {"ms_kind": ms_kind(), "ms_name": ms_name(), "space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
+    return {"ms_kind": ms_kind(), "ms_name": ms_name(), "space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "deep": deep_status(), "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
             "scan_hour": sched()[0], "scan_minute": sched()[1], "scan_days": sched()[2], "keep_days": KEEP_DAYS, "stats": stats(), "score": library_score(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
-            "configured": configured(), "has_arrs": has_arrs(), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT, "security_blocked": security_info()["blocked"],
+            "configured": configured(), "has_arrs": has_arrs(), "has_lidarr": bool((S.get("lidarr") or {}).get("url")), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT, "security_blocked": security_info()["blocked"],
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
 
 class H(BaseHTTPRequestHandler):
@@ -6294,6 +7255,7 @@ class H(BaseHTTPRequestHandler):
                 res = [dict(queue_fix(str(i)[:32], how, only), id=i) for i in ids if i][:50]
                 return self.send(200, {"ok": any(r.get("ok") for r in res), "errors": [r["error"] for r in res if not r.get("ok") and r.get("error")]})
             if path == "/api/seerrok": return self.send(200, seerr_ok(str(body.get("id", ""))[:32]))
+            if path == "/api/albumclean": return self.send(200, album_clean(str(body.get("id", ""))[:32]))
             if path == "/api/appsfix":
                 return self.send(200, apps_fix(str(body.get("id", ""))[:32], str(body.get("how", ""))))
             if path == "/api/plextidy":
@@ -6307,6 +7269,10 @@ class H(BaseHTTPRequestHandler):
             if path == "/api/followup":
                 threading.Thread(target=followup, daemon=True).start()
                 return self.send(200, {"ok": True})
+            if path == "/api/deep": return self.send(200, deep_request(body))
+            if path == "/api/deep/browse": return self.send(200, deep_browse(body.get("path")))
+            if path == "/api/deep/cancel": return self.send(200, deep_cancel())
+            if path == "/api/deep/advice": return self.send(200, deep_advice())
             if path == "/api/virusfull":
                 return self.send(200, virus_full())
             if path == "/api/settings/import":
@@ -6370,6 +7336,7 @@ if __name__ == "__main__":
     except Exception as e:
         log("startup: couldn't tidy unfinished checks: %r" % e)
     threading.Thread(target=nightly, daemon=True).start()
+    threading.Thread(target=deep_worker, daemon=True).start()      # v0.3 deep check (idle unless asked or switched on)
     apply_trash_days()
     log("Library Doctor listening on %s:%d (nightly scan at %02d:00, trash kept %d days)" % (LISTEN, PORT, SCAN_HOUR, TRASH_DAYS))
     ThreadingHTTPServer((LISTEN, PORT), H).serve_forever()

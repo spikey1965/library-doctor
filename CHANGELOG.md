@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 (beta)
+
+- **Lidarr (music), step 1.** Settings → Radarr, Sonarr, Lidarr & Sportarr → + Lidarr (address, API key, folder mapping; the Folder check includes it).
+- **Missing Files: albums Lidarr wants but never got**, one card per artist, saying which albums are missing and which are incomplete ("8 of 10 tracks"), with **Search** (refused with a clear message when Lidarr has no download client or indexer).
+- **Missing Files: tracks Lidarr lists that aren't on the disk**, with **Rescan** (Lidarr looks at the artist's folder again and marks them as wanted).
+- **App Health and Downloads for Lidarr:** its own warnings and update notices, and downloads it won't import by itself or that failed (open its queue to deal with them).
+- **Music step 2 (works with any media server, from Lidarr and the disk):**
+  - **Broken or cut-short tracks** in File Health. Only tracks that look too small for their real length (from MusicBrainz) are played through to measure them, because a cut-off MP3's header often still claims the full length. Replace moves the track to the trash and asks Lidarr to search for the album again.
+  - **Mixed quality** in Quality & Space: an album with a few lossy tracks among lossless ones, or a few low-bitrate MP3s among good ones, with Search for a better copy.
+  - **The same album in two folders** in Duplicates (year and format tags like [FLAC] or (320) are ignored, editions like Deluxe stay apart). Clean up moves the extra folder to the trash, but only when Lidarr doesn't use any of its files; when it uses files from both, the card says to sort it out in Lidarr first.
+- **Music libraries in your media server:** tracks it lists that aren't on the disk, albums Plex couldn't match, albums without cover art (Refresh). If most of a music library can't be found, one card says so instead of listing every track (usually a missing folder mapping).
+- **Jellyfin and Emby music libraries too:** the same three checks (missing tracks, unmatched albums with Refresh, albums without cover art) on all three media servers.
+- The Folder check now names your media server (it said "Plex" for Jellyfin and Emby too).
+- **Downloads: "download not needed".** A finished download that Radarr/Sonarr won't import because you already have a copy that's as good or better (for example a second release grabbed as an upgrade, then a better one imported first) used to show as "waiting to import" with an Import button. Now it gets its own card that says what you have against what was downloaded (with custom format scores) and offers **Delete download**: the files go to the trash (Put back works), it leaves the download client and the queue, and it is **not** blocklisted, so no new search starts. Private or protected torrents are only taken out of the queue and keep seeding. Library Doctor checks again that your copy is still there before it deletes anything.
+
+- **Deep check (new).** The nightly scan only sees a file's size and length; a deep check plays the whole file through with ffmpeg (nothing is written or changed) and finds damage in the middle. Files that stop early, won't play at all, or throw lots of decode errors get a **File Health card ("Damaged") with Replace**, which works like any other Replace (trash first, then Radarr/Sonarr search, and it counts towards "release groups to avoid"). A few errors give a softer "Some errors" card to check by eye. Three ways to use it:
+  - **Deep check** button on every File Health card, and **Check a folder…** at the top of File Health (pick any folder inside your media folder).
+  - **Settings → Deep check → Check new downloads when they're imported** (off by default).
+  - **Settings → Deep check → Check the whole library, a bit each night**, inside a time window you pick (off by default). It carries on where it stopped the next night, newest files first, and shows how many are done and roughly how many nights are left. Files are checked again after 1, 3, 6 or 12 months (or never); changed files always are.
+  - One file at a time, at the lowest priority, half the CPU cores at most (and never more than the container's `cpus:` limit). **Waits while someone is watching** on Plex, Jellyfin or Emby. A file that needs more memory than the container has free is skipped with a note instead of failing, and a check the system stops is never counted as damage.
+- **Tdarr health-check errors in File Health.** If Tdarr is set up and its own health check (Library settings → Health check) finds an error, the file gets the same Damaged card with Replace. When Library Doctor's own deep check later finds the file fine, Tdarr's older error is dropped.
+
 ## 0.2.3 (beta)
 
 - **Jackett support.** Settings → Indexers → Jackett: address, API key and (only if you set one in Jackett) its admin password. Test says how many indexers are set up.

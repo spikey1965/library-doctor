@@ -4,7 +4,7 @@
 
 **A nightly health check for Plex, Jellyfin and Emby, with Radarr and Sonarr.** Library Doctor compares what your media server shows with what's really on the disk and what Radarr and Sonarr think they have. Every morning you get one page with everything that needs fixing, and a button to fix most of it.
 
-> **New in 0.2: Jellyfin and Emby** (pick your media server in Settings), and in 0.2.3 **Jackett and Seerr**: failing Jackett indexers, and problem reports from Seerr/Overseerr/Jellyseerr on the right file. Plex is the most tested; please report anything that looks wrong.
+> **New in 0.3: music (Lidarr) and the deep check.** Missing albums and tracks, broken or cut-short tracks, mixed-quality albums and the same album twice, on Plex, Jellyfin or Emby. The optional **deep check** plays files all the way through to find damage in the middle (new downloads, a folder on demand, or the whole library a bit each night), and Tdarr's own health-check errors show up too. Also new: "download not needed" for finished downloads Radarr/Sonarr will never import. Plex is the most tested; please report anything that looks wrong.
 
 > **Beta.** Built on the author's own home server and now being tested on others. Please [open an issue](../../issues) if something looks wrong.
 
@@ -29,6 +29,8 @@
 | Duplicates | Two copies of the same film or episode, with which one to keep and why (different Plex editions, like Theatrical and Director's Cut, are never counted as duplicates, and neither are different films with the same title, like The Fly 1958 and 1986: if Plex mixed them up you get Split in Plex instead) (with Seerr: who requested it) | Media server |
 | Metadata gaps | "Episode 5" titles Sonarr knows the name of, wrong years, things not in Radarr/Sonarr | Media server + Radarr/Sonarr |
 | File health | Broken files, files much shorter than they should be, and **the wrong audio language** (also checked within 10 minutes of each import) (an English film with only Russian audio, a dubbed season). Replace asks Radarr/Sonarr for a new copy and checks it when it arrives. **Seerr reports:** problems people report in Seerr/Overseerr/Jellyseerr (won't play, wrong audio, subtitles) show on the card for that file, or on their own card when Library Doctor found nothing; Replace closes the report with a note, Mark resolved closes it as fine | Media server + Radarr/Sonarr |
+| Music (optional) | Albums Lidarr wants but never got (Search), tracks it lists that aren't on the disk (Rescan), broken or cut-short tracks (Replace), albums with a few low-quality tracks, the same album in two folders, and music your media server can't match or has no cover art for | Lidarr, and/or a music library in Plex, Jellyfin or Emby |
+| Deep check (optional) | Damage in the middle of a file: plays the whole file through with ffmpeg (nothing is changed). On demand for a file or folder, for new downloads, or a bit each night through the whole library; waits while someone is watching. Damaged files get a File Health card with Replace. Tdarr's own health-check errors show up the same way | Nothing extra (ffmpeg is built in) |
 | Quality & space | Files far bigger than usual, old .ts/.avi files (Convert to MKV, no re-encoding), episodes much worse than their season, Find a smaller copy, and release groups whose files keep having to be replaced (Block it) | Media server + Radarr/Sonarr |
 | Subtitles | Subtitle files that are only adverts, names that no longer match the video, what Bazarr is still looking for | Bazarr |
 | Unwatched | What nobody has played in a year, biggest first (never deletes anything) (with Seerr: who requested it) | Tautulli |
@@ -96,7 +98,8 @@ Before every scan Library Doctor checks again: if it can't find Plex's or Radarr
 No dates, just the order things are likely to happen. Ideas and offers to test are welcome in [Issues](https://github.com/spikey1965/library-doctor/issues).
 
 - **Done in 0.2:** Jellyfin and Emby support (new: reports welcome), report-only mode without Radarr/Sonarr (0.2.2), Jackett and Seerr (0.2.3).
-- **Being considered:** music libraries; a Home Assistant card.
+- **Done in 0.3:** music libraries with Lidarr, the deep check (with Tdarr health-check errors), "download not needed".
+- **Being considered:** Unmanic support (like Tdarr's); a Home Assistant card.
 
 ## Known limitations
 
@@ -106,6 +109,7 @@ This is a beta, so a few things are worth knowing before you start:
 - **Jellyfin and Emby are new (0.2).** Every check works on all three servers, but a few fixes only exist in Plex and are hidden on Jellyfin/Emby: Split (films Plex put together), Pick posters, Use Sonarr's titles, Fix Plex's listing, Plex tidy-up and the Plex database backup reminder. Jellyfin and Emby take a minute or two to notice moved files, so the check after a clean-up waits longer there. Emby needs its libraries' metadata downloaders on (the default when you add a library in Emby), or every item shows as not matched.
 - **Tested on TrueNAS, a Debian server and Synology DSM 7.2** (Container Manager, in a test setup). Unraid, Raspberry Pi (ARM) and Docker Desktop haven't been tried by anyone yet. If you run one of those, or a real Synology, an issue saying how it went (good or bad) really helps.
 - **Hardlinks.** A file that's also hardlinked elsewhere (typically a torrent that's still seeding) frees no space when it's moved. Library Doctor marks these as Hardlinked, never offers two links to the same file as duplicates, and doesn't count them in the space totals. Replacements made by Radarr itself (Find a smaller copy) can't be checked this way yet.
+- **Deep check is slow on purpose.** It plays every file through, one at a time, at the lowest priority. A 2-hour 1080p film takes a few minutes with a few CPU cores, and 4K HEVC can take as long as the film itself on one core. With `cpus: 1` a whole big library would take months of nights, so give the container more cores if you switch on the nightly check, or just use it for new downloads and on demand. A 4K file needs about 330 MB of free memory to play through; with a lower `mem_limit` those files are skipped (and say so) instead of failing.
 - **Sleeping disks.** The scan never reads your video files; it only checks they exist and their size (and reads small subtitle files). On a NAS whose disks spin down, that can still wake them, so pick fewer days under Settings → Automatic scan (once a week is fine).
 - **Radarr/Sonarr v3 API.** It talks to the current Radarr and Sonarr (including Sonarr 5). Very old versions may not work.
 - **English and the author's library.** The checks were tuned on one real library of about 7,500 films and episodes. If a check flags something that's actually fine, press Ignore and please open an issue.
