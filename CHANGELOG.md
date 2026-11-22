@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3 (beta)
+
+- Small footer at the bottom of every page: a GitHub ⭐ link, Buy me a coffee and Report a problem. Nothing else changes.
+- **Quick test: fewer false "damaged" results, especially on 4K.**
+  - **Memory:** when a file's sound track stops a few seconds before the picture (common near the end), ffmpeg held every decoded 4K frame while waiting for the sound: up to 2.7 GB for a 6-second sample. With a 1 GB container limit the system stopped it, and the quick test reported "won't start playing" or "the last few minutes won't play" for files that were fine. Picture and sound are now decoded separately (about 200 MB for a 4K sample), 4K uses one thread, the test waits up to 30 s for memory before a sample, and if the system still stops ffmpeg the result is "skipped", never "damaged".
+  - **Short sound track:** the same files were also counted as "nothing played" even when memory was fine, because the picture time came from the combined output. The picture is now timed on its own (frames ÷ frame rate).
+- **"Ends early" is measured and graded** (quick test and deep check). Instead of "the last few minutes won't play", Library Doctor reads where the video data really stops (no decoding) and says how much is missing. Up to 2 minutes (or 2 %) is fine and only noted ("normally just the end of the credits"), up to 5 minutes (or 5 %) is Minor, more is Damaged.
+- **Checked against the real runtime:** before an "ends early" card is shown, the playable length is compared with the runtime Radarr/Sonarr have (TMDB/TVDB) and with your other copy of the same film (e.g. the 1080p one). Within 3 minutes of either = complete, no card.
+
 ## 0.3.2 (beta)
 
 - **Quick test (new).** A light version of the deep check: ffprobe opens the file, then ffmpeg plays 6 seconds at the start, at 25, 50 and 75 % and near the end, seeking straight to each one. A few seconds a file (a 44-minute 1080p episode took 3 s, a 2-hour 4K HEVC film 14 s). It finds downloads that were cut off ("it stops playing somewhere between 1 h 5 min and 1 h 38 min"), files that won't open or won't start, and parts with lots of errors. It can't see damage between the samples, so the card offers Deep check to be sure. Damaged files get the same File Health card with Replace.

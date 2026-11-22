@@ -33,7 +33,7 @@ import xml.etree.ElementTree as _ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.3.2"
+APP_VERSION = "0.3.3"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -329,6 +329,9 @@ def init_db():
             c.execute("ALTER TABLE done ADD COLUMN ref TEXT")
         if "until" not in [r[1] for r in c.execute("PRAGMA table_info(ignored)")]:
             c.execute("ALTER TABLE ignored ADD COLUMN until TEXT")      # Unwatched "Keep": back on the list after this date; NULL = for good
+        for t in ("quick", "deep"):                                     # v0.3.3: where the file really stops (seconds), when it ends early
+            if "ends" not in [r[1] for r in c.execute("PRAGMA table_info(%s)" % t)]:
+                c.execute("ALTER TABLE %s ADD COLUMN ends REAL" % t)
 
 SNOOZE_DAYS = int(os.environ.get("LD_SNOOZE_DAYS", "30"))
 
@@ -2151,6 +2154,10 @@ def health_scan(sections, movies, series, arr_files, trashed):
                         link = arr_link(a, sr, "series")
                 short = not broken and exp >= 15 and dur < exp * 0.5
                 if not (broken or short):
+                    if dz and dz.get("ends") and kind == "movie":
+                        dz = dz if not ends_complete(dz["ends"], exp, movies.get(str(guids(m).get("tmdb")), []), f) else None
+                    elif dz and dz.get("ends"):
+                        dz = dz if not ends_complete(dz["ends"], exp, [], f) else None
                     if dz: out.append(deep_card(dz, f, size, title, lib, key, ref, m, link))
                     continue
                 if broken:
@@ -3531,7 +3538,8 @@ DEEP_HARMLESS = re.compile(r"timescale not set|UDTA parsing failed|Guessed Chann
                            r"Could not find codec parameters|deprecated|Unknown cover type|matches no streams|max_analyze_duration|"
                            r"Thread message queue blocking|Discarding ID3 tags|Referenced QT chapter track not found|"
                            r"Starting new cluster due to timestamp|unknown tag|unsupported|Ignoring|"
-                           r"not enough frames to estimate rate|increasing the value for the 'analyzeduration'|consider increasing probesize", re.I)
+                           r"not enough frames to estimate rate|increasing the value for the 'analyzeduration'|consider increasing probesize|"
+                           r"No filtered frames for output stream|Output file is empty, nothing was encoded", re.I)
 DEEP = {"cur": None, "pct": 0.0, "started": None, "cancel": False, "paused": "", "list": None, "list_day": None,
         "found_new": False, "crawl_done": 0, "skip_night": None, "mode": "deep", "qlist": None, "qlist_day": None, "qdone": 0}
 
@@ -3651,30 +3659,79 @@ def deep_check_file(path, how):
     if stopped in ("cancel", "playing"):
         log("deep check %s: stopped (%s)" % (path, stopped)); return None
     n, rc = errs[0], p.returncode
+    ends, egrade = None, ("ok", "")
+    if dur >= 60 and got < dur - 5 and not stopped and not (rc is not None and rc < 0):
+        egrade, ends = ends_grade(got, dur), round(got, 1)                 # v0.3.3: a minute short = credits, not damage
     if not stopped and rc is not None and rc < 0:                          # killed by the system (usually out of memory): not the file's fault
         status, msg = "skip", "The check was stopped by the system before it finished (often not enough memory for the container). Not a fault in the file."
     elif stopped == "slow":
         status, msg = "skip", "It took longer than %s to play through, so the check was stopped. That's the computer being slow, not a fault in the file." % _hms(limit)
     elif got < 1 and (rc or n):
         status, msg = "bad", "None of it plays: it isn't a working video file."
-    elif dur >= 60 and got < dur - max(30, dur * 0.03):
-        status, msg = "bad", "It stops playing at %s of %s." % (_hms(got), _hms(dur))
+    elif egrade[0] != "ok":
+        status, msg = egrade
     elif n >= DEEP_BAD_ERRS or (n >= 20 and dur and n / (dur / 60.0) >= 1):      # many, or at least one a minute
         status, msg = "bad", "%d errors when it was played through." % n
     elif n >= DEEP_MINOR_ERRS:
         status, msg = "minor", "%d errors when it was played through." % n
     else:
         status, msg = "ok", "Plays through cleanly." if not n else "Plays through (%d small error%s)." % (n, "" if n == 1 else "s")
+        if ends and egrade[1]: msg = egrade[1] if not n else egrade[1] + " (%d small error%s)" % (n, "" if n == 1 else "s")
     res = {"path": path, "size": st.st_size, "mtime": st.st_mtime, "at": now_iso(), "status": status, "errors": n,
-           "got": round(got, 1), "dur": round(dur, 1), "msg": msg, "how": how, "first": first[:3], "secs": int(time.time() - t0)}
+           "got": round(got, 1), "dur": round(dur, 1), "msg": msg, "how": how, "first": first[:3], "secs": int(time.time() - t0), "ends": ends}
     with db() as c:
-        c.execute("INSERT OR REPLACE INTO deep (path, size, mtime, at, status, errors, got, dur, msg, how, first, secs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (path, st.st_size, st.st_mtime, res["at"], status, n, res["got"], res["dur"], msg, how, json.dumps(first[:3]), res["secs"]))
+        c.execute("INSERT OR REPLACE INTO deep (path, size, mtime, at, status, errors, got, dur, msg, how, first, secs, ends) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (path, st.st_size, st.st_mtime, res["at"], status, n, res["got"], res["dur"], msg, how, json.dumps(first[:3]), res["secs"], ends))
     if status == "bad":
         DEEP["found_new"] = True
         event("health", "Deep check: %s is damaged. %s" % (os.path.basename(path), msg))
     log("deep check %s (%s): %s %s [%d s]" % (path, how, status, msg, res["secs"]))
     return res
+
+# ---------------- Ends early (v0.3.3) ----------------
+# A file that stops a minute before its stated length has nearly always just lost the end of the credits (some
+# encoders and release groups trim them, and the stated length can include a little padding). Only a real gap is
+# worth a replacement, so: up to 2 min (or 2 %) = fine, just noted; up to 5 min (or 5 %) = minor; more = damaged.
+ENDS_OK_SECS, ENDS_OK_PCT, ENDS_MINOR_SECS, ENDS_MINOR_PCT = 120, 0.02, 300, 0.05
+
+def _ms(sec):
+    """'56 s', '1 min 20 s', '16 min': how much is missing, a bit more exact than _hms."""
+    sec = int(round(sec or 0))
+    if sec < 60: return "%d s" % sec
+    if sec < 600 and sec % 60: return "%d min %d s" % (sec // 60, sec % 60)
+    return _hms(sec)
+
+def ends_grade(ends, dur):
+    """(status, message) for a file whose data stops at `ends` seconds of a stated `dur`."""
+    miss = max(0.0, dur - ends)
+    if miss <= max(ENDS_OK_SECS, dur * ENDS_OK_PCT):
+        return "ok", ("Plays fine. It ends %s before its stated length (%s), which is normally just the end of the credits." % (_ms(miss), _hms(dur))
+                      if miss >= 5 else "The samples play cleanly.")
+    if miss <= max(ENDS_MINOR_SECS, dur * ENDS_MINOR_PCT):
+        return "minor", "It ends %s early (stops at %s of %s): you may lose the end credits or the last scene." % (_ms(miss), _hms(ends), _hms(dur))
+    return "bad", "It ends %s early (stops at %s of %s): most likely a download that was cut off." % (_ms(miss), _hms(ends), _hms(dur))
+
+def _data_end(path, dur):
+    """Where the video data really stops (seconds), read from the packets near the end without decoding anything.
+    None when it can't tell. Reads the last 3 minutes first, and the last 20 only when those are empty."""
+    for back in (180, 1200):
+        try:
+            r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-read_intervals", "%.1f%%" % max(0.0, dur - back),
+                                "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", path],
+                               capture_output=True, text=True, errors="replace", timeout=240)
+        except Exception:
+            return None
+        best = None
+        for line in r.stdout.splitlines():
+            a = line.split(",")
+            try:
+                t = float(a[0]) + (float(a[1]) if len(a) > 1 and a[1] not in ("", "N/A") else 0.0)
+            except ValueError:
+                continue
+            if best is None or t > best: best = t
+        if best is not None and best >= max(0.0, dur - back) - 1: return min(best, dur)
+        if back >= dur: break
+    return None
 
 # ---------------- Quick test (v0.3.2) ----------------
 # A few seconds per file instead of minutes: ffprobe opens it, then ffmpeg decodes 6 s at the start, at 25/50/75 % and
@@ -3688,10 +3745,19 @@ QUICK_SEEK = re.compile(r"Could not find ref with POC|co located POCs unavailabl
                         r"decode_slice_header error|no frame!|mmco: unref short failure|exceeds max", re.I)   # normal right after a seek
 QUICK_BAD_ERRS, QUICK_MINOR_ERRS = 10, 2
 
+QUICK_FPS = {}         # path -> frames per second of the video, for _quick_sample (v0.3.3)
+
+def _fps(v):
+    try:
+        a, b = str(v or "0/1").split("/") if "/" in str(v) else (v, 1)
+        return float(a) / float(b) if float(b) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
 def _quick_probe(path):
     """(duration, video height or -1 when there's no video stream, ffprobe's complaint)."""
     try:
-        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,height", "-of", "json", path],
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,height,avg_frame_rate,r_frame_rate", "-of", "json", path],
                            capture_output=True, text=True, errors="replace", timeout=60)
         j = json.loads(r.stdout or "{}")
     except Exception as e:
@@ -3700,22 +3766,41 @@ def _quick_probe(path):
     try: dur = float((j.get("format") or {}).get("duration") or 0)
     except (TypeError, ValueError): dur = 0.0
     err = re.sub(r"^(\[[^\]]*\]\s*)+", "", (r.stderr or "").strip().splitlines()[-1] if (r.stderr or "").strip() else "")[:160]
+    if v:
+        f = _fps(v[0].get("avg_frame_rate")) or _fps(v[0].get("r_frame_rate"))
+        if 1 <= f <= 300: QUICK_FPS[path] = f
     return dur, (int(v[0].get("height") or 0) if v else -1), err
 
-def _quick_sample(path, at):
-    """Decode QUICK_SECS seconds from `at`: (seconds that played, counted error lines)."""
-    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-v", "warning", "-threads", "2", "-ss", "%.2f" % at, "-i", path, "-t", str(QUICK_SECS),
-           "-map", "0:v:0?", "-map", "0:a:0?", "-f", "null", "-", "-progress", "pipe:1", "-nostats"]
+QUICK_KILLED = "killed"          # _quick_sample's got when the system stopped ffmpeg (nearly always: out of memory)
+
+def _quick_need(height, threads):
+    """Bytes one sample needs (measured: 4K HEVC about 245 MB on 1 thread, +40 MB a thread; 1080p about 100 MB)."""
+    return ((250 + 40 * threads) if height > 1440 else (100 + 15 * threads)) * 1024 * 1024
+
+def _quick_sample(path, at, threads=2):
+    """Decode QUICK_SECS seconds from `at`: (seconds that played, counted error lines).
+    got is None when it took too long, QUICK_KILLED when the system stopped ffmpeg (that's memory, not the file)."""
+    # v0.3.3: picture and sound go to two separate null outputs. In one output ffmpeg lines the tracks up and, when the
+    # sound runs out a few seconds before the picture (common at the very end), it held every decoded 4K frame waiting
+    # for it (measured 2.7 GB for 6 s) and never counted the picture as played. Picture time = frames / frame rate.
+    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-v", "warning", "-threads", str(threads), "-ss", "%.2f" % at, "-i", path,
+           "-map", "0:v:0?", "-t", str(QUICK_SECS), "-f", "null", "-", "-map", "0:a:0?", "-t", str(QUICK_SECS), "-f", "null", "-",
+           "-progress", "pipe:1", "-nostats"]
     def low():
         try: os.nice(19)
         except Exception: pass
     try: r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=180, preexec_fn=low)
     except subprocess.TimeoutExpired: return None, []
-    got = 0.0
+    if r.returncode is not None and r.returncode < 0: return QUICK_KILLED, []
+    got, frames, fps = 0.0, 0, QUICK_FPS.get(path) or 0
     for line in r.stdout.splitlines():
         if line.startswith("out_time_us="):
             try: got = max(got, int(line.split("=", 1)[1]) / 1e6)
             except ValueError: pass
+        elif line.startswith("frame="):
+            try: frames = max(frames, int(line.split("=", 1)[1]))
+            except ValueError: pass
+    if fps and frames: got = max(got, frames / fps)
     errs = []
     for line in r.stderr.splitlines():
         line = line.strip()
@@ -3729,41 +3814,65 @@ def quick_check_file(path, how):
     except OSError: return None
     t0 = time.time()
     dur, height, perr = _quick_probe(path)
-    got_total, n, first, status, msg = 0.0, 0, [], "ok", ""
+    got_total, n, first, status, msg, ends, note = 0.0, 0, [], "ok", "", None, ""
+    threads = 1 if height > 1440 else 2                       # v0.3.3: 4K on one thread (about 290 MB instead of 500+)
     if height < 0:
         status, msg = "bad", "It won't open as a video file." + (" ffprobe: " + perr if perr else "")
         if perr: first.append(perr)
     else:
+        need, free = _quick_need(height, threads), _mem_free()
+        for _ in range(6):                                    # v0.3.3: wait up to 30 s for memory instead of getting killed
+            if free is None or free >= need: break
+            time.sleep(5); free = _mem_free()
+        if free is not None and free < need:
+            status, msg = "skip", "Skipped: Library Doctor's container has only %d MB of memory free and a %s sample needs about %d MB. Raise its memory limit (mem_limit) to test it." % (
+                free // 1048576, "4K" if height > 1440 else "video", need // 1048576)
+    if status == "ok":
         pts = [0.0] + ([dur * f for f in (0.25, 0.5, 0.75)] + [max(0.0, dur - QUICK_SECS - 14)] if dur >= 120 else [])
         DEEP.update(cur=path, pct=0.0, started=now_iso(), mode="quick")
         try:
             for i, at in enumerate(pts):
                 if DEEP["cancel"]: return None
-                got, errs = _quick_sample(path, at)
+                got, errs = _quick_sample(path, at, threads)
+                if got == QUICK_KILLED:                       # v0.3.3: stopped by the system: try once more, gently, then give up without blaming the file
+                    time.sleep(5); got, errs = _quick_sample(path, at, 1)
                 DEEP["pct"] = round((i + 1) * 100 / len(pts))
                 if got is None:
                     status, msg = "skip", "One of the samples took more than 3 minutes to play, so the test was stopped. That's the computer being slow, not a fault in the file."; break
+                if got == QUICK_KILLED:
+                    status, msg = "skip", "The test was stopped by the system before it finished (usually not enough memory for Library Doctor's container). Not a fault in the file."; break
                 got_total += got; n += len(errs)
                 for e in errs:
                     if len(first) < 3 and e not in first: first.append(e)
                 if got < 1:
-                    if at == 0: status, msg = "bad", "It won't start playing."
-                    else:
+                    if at == 0:
+                        status, msg = "bad", "It won't start playing."; break
+                    end = _data_end(path, dur)                # v0.3.3: measure where the data really stops instead of guessing
+                    last = i == len(pts) - 1
+                    if end is not None and end < at + 1:
+                        ends = round(end, 1)
+                        status, msg = ends_grade(end, dur)
+                        if status == "ok": note = msg            # only the credits are missing: carry on, it's the last sample anyway
+                        if status != "ok" or not last: break
+                    elif end is None:
                         prev = pts[i - 1] if i else 0
                         status, msg = "bad", ("It stops playing somewhere between %s and %s (of %s): most likely a download that was cut off." % (_hms(prev), _hms(at), _hms(dur))
-                                              if i < len(pts) - 1 else "The last few minutes won't play (of %s): most likely a download that was cut off." % _hms(dur))
-                    break
+                                              if not last else "The last few minutes won't play (of %s): most likely a download that was cut off." % _hms(dur))
+                        break
+                    else:
+                        status, msg = "bad", "The picture won't play at %s (of %s), although the file goes on to %s." % (_hms(at), _hms(dur), _hms(end)); break
         finally:
             DEEP.update(cur=None, pct=0.0, mode="deep")
         if status == "ok":
             if n >= QUICK_BAD_ERRS: status, msg = "bad", "%d errors in %d short samples." % (n, len(pts))
             elif n >= QUICK_MINOR_ERRS: status, msg = "minor", "%d errors in %d short samples." % (n, len(pts))
-            else: msg = "The samples play cleanly." if not n else "The samples play (%d small error%s)." % (n, "" if n == 1 else "s")
+            else: msg = note or ("The samples play cleanly." if not n else "The samples play (%d small error%s)." % (n, "" if n == 1 else "s"))
+    QUICK_FPS.pop(path, None)
     res = {"path": path, "size": st.st_size, "mtime": st.st_mtime, "at": now_iso(), "status": status, "errors": n, "got": round(got_total, 1),
-           "dur": round(dur, 1), "msg": msg, "how": how, "first": first[:3], "secs": int(time.time() - t0)}
+           "dur": round(dur, 1), "msg": msg, "how": how, "first": first[:3], "secs": int(time.time() - t0), "ends": ends}
     with db() as c:
-        c.execute("INSERT OR REPLACE INTO quick (path, size, mtime, at, status, errors, got, dur, msg, how, first, secs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (path, st.st_size, st.st_mtime, res["at"], status, n, res["got"], res["dur"], msg, how, json.dumps(first[:3]), res["secs"]))
+        c.execute("INSERT OR REPLACE INTO quick (path, size, mtime, at, status, errors, got, dur, msg, how, first, secs, ends) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (path, st.st_size, st.st_mtime, res["at"], status, n, res["got"], res["dur"], msg, how, json.dumps(first[:3]), res["secs"], ends))
     if status == "bad":
         DEEP["found_new"] = True
         event("health", "Quick test: %s looks damaged. %s" % (os.path.basename(path), msg))
@@ -3974,6 +4083,33 @@ def deep_findings():
             log("tdarr health errors failed: %r" % e)
     DEEP["found_new"] = False
     return out
+
+def _runtime_secs(v):
+    """Radarr/Sonarr mediaInfo.runTime ("1:57:27", "57:12") -> seconds, 0 when unknown."""
+    try:
+        p = [float(x) for x in str(v or "").split(":")]
+        return p[0] * 3600 + p[1] * 60 + p[2] if len(p) == 3 else (p[0] * 60 + p[1] if len(p) == 2 else 0)
+    except ValueError:
+        return 0
+
+ENDS_REF_SLACK = 180       # within 3 min of what it should be = complete
+
+def ends_complete(ends, exp_min, copies, path):
+    """v0.3.3: a file that 'ends early' compared with its own stated length may still be complete: the stated length can be
+    padded. It counts as complete when it plays to within 3 min of the runtime Radarr/Sonarr have (from TMDB/TVDB), or as
+    far as your other copy of the same film (e.g. the 1080p one when this is the 4K one)."""
+    refs = []
+    if exp_min and exp_min >= 15: refs.append(("runtime", exp_min * 60.0))
+    for a, it in copies or []:
+        mf = it.get("movieFile") or {}
+        if not mf or (mf.get("path") or "") == path: continue
+        r = _runtime_secs((mf.get("mediaInfo") or {}).get("runTime"))
+        if r >= 600: refs.append(("copy", r))
+    for why, r in refs:
+        if ends >= r - ENDS_REF_SLACK:
+            log("ends early but complete (%s %s, plays to %s): %s" % (why, _hms(r), _hms(ends), path))
+            return True
+    return False
 
 def deep_card(dz, f, size, title, lib, key, ref, m, link):
     bad = dz.get("status") == "bad"

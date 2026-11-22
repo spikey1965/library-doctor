@@ -25,6 +25,7 @@ body { padding:0 max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe
 .logo { display:flex; align-items:center; gap:9px; font:700 20px var(--head); }
 .logo svg { width:28px; height:28px; }
 .tabs { display:flex; gap:16px; font-size:14px; } .tabs span { color:var(--mut); padding:4px 0; } .tabs span.on { color:var(--fg); box-shadow:inset 0 -2px 0 var(--teal); }
+.ldfoot { margin:28px 0 8px; text-align:center; font-size:12.5px; color:var(--mut); } .ldfoot a { color:var(--mut); text-decoration:underline; text-underline-offset:2px; } .ldfoot a:hover { color:var(--fg); }
 .ro { margin-left:auto; font:700 11px var(--font); letter-spacing:.07em; text-transform:uppercase; color:var(--teal); border:1px solid var(--teal); border-radius:999px; padding:3px 9px; }
 .grid { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:16px; }
 @media (max-width:860px) { .grid { grid-template-columns:minmax(0,1fr); } }
@@ -479,6 +480,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
         <p class="note"><b>Clean up</b> never deletes. It moves the copies marked Remove into this trash, then asks <span class="msn">Plex</span> and Radarr/Sonarr to rescan, so they don't go looking for them. <b>Put Back</b> returns a file to where it was. The trash empties itself after <span id="tdays">7</span> days. Plex's own converted copies are left alone: remove those in Plex.</p></div>
     </div>
   </section>
+  <footer class="ldfoot">Library Doctor is free. If it saves you time, a <a href="https://github.com/spikey1965/library-doctor" target="_blank" rel="noopener">⭐ on GitHub</a> helps others find it, or <a href="https://buymeacoffee.com/bobgreggr" target="_blank" rel="noopener">☕ buy me a coffee</a> · <a href="https://github.com/spikey1965/library-doctor/issues" target="_blank" rel="noopener">Report a problem</a></footer>
 </div>
 <script>
 (function () {
