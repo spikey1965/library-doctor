@@ -102,6 +102,8 @@ No dates, just the order things are likely to happen. Ideas and offers to test a
 
 - **Done in 0.2:** Jellyfin and Emby support (new: reports welcome), report-only mode without Radarr/Sonarr (0.2.2), Jackett and Seerr (0.2.3).
 - **Done in 0.3:** music libraries with Lidarr, the deep check (with Tdarr health-check errors), "download not needed", and the quick test (0.3.2).
+- **Latest fixes (0.3.1 to 0.3.3):** the quick test (0.3.2); far fewer false "damaged" results on 4K, and a file that ends a minute early (usually just the credits) is only noted, checked against the TMDB/TVDB runtime (0.3.3); Plex on Windows folder mappings and clean-up across several disks or shares (0.3.1).
+- **Coming soon (0.3.4, in testing):** a **naming check**. It finds file names that no longer match your Radarr/Sonarr naming format (a title or year that changed, episodes still called "Episode 1", a temporary name Tdarr left behind) and **Rename** asks Radarr/Sonarr to fix them with your own format. When a season's episode names have all moved along by one, it warns that the episodes may be out of order instead of renaming. Out-of-date tags are summed up in one card.
 - **Being considered:** Unmanic support (like Tdarr's); a Home Assistant card.
 
 ## Known limitations
