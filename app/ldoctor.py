@@ -26,6 +26,7 @@ Safety: the page only sends an issue id. The server takes the file list from its
 is inside MEDIA_ROOT, never moves the kept file, and never leaves an item with no copy at all.
 Standard library only.
 """
+import calendar
 import errno, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, threading, time, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 import http.cookiejar as _cookiejar
@@ -33,7 +34,7 @@ import xml.etree.ElementTree as _ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.3.3"
+APP_VERSION = "0.3.4"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
@@ -65,8 +66,10 @@ def normalize(cfg):
     if isinstance(sp, dict) and sp.get("container_root") and not sp.get("paths"):
         sp["paths"] = [{"from": sp.pop("container_root"), "to": sp.pop("media_root", None) or MEDIA_ROOT}]
     # optional fields the rest of the code relies on: the browser address falls back to the app's own address
-    if isinstance(cfg.get("plex"), dict): cfg["plex"]["public"] = cfg["plex"].get("public") or "https://app.plex.tv"
-    for k, name in (("tautulli", "Tautulli"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("prowlarr", "Prowlarr"), ("jackett", "Jackett"), ("seerr", "Seerr"), ("lidarr", "Lidarr"), ("gotify", "Gotify")):
+    # v0.3.4: only Plex has a fixed web app; for Jellyfin/Emby an empty box means "use the server address" (plex_link falls back to url)
+    if isinstance(cfg.get("plex"), dict) and (cfg["plex"].get("kind") or "plex") == "plex": cfg["plex"]["public"] = cfg["plex"].get("public") or "https://app.plex.tv"
+    elif isinstance(cfg.get("plex"), dict) and cfg["plex"].get("public") == "https://app.plex.tv": cfg["plex"]["public"] = ""   # left over from before the fix
+    for k, name in (("tautulli", "Tautulli"), ("tracearr", "Tracearr"), ("tdarr", "Tdarr"), ("sportarr", "Sportarr"), ("prowlarr", "Prowlarr"), ("jackett", "Jackett"), ("seerr", "Seerr"), ("lidarr", "Lidarr"), ("gotify", "Gotify")):
         e = cfg.get(k)
         if isinstance(e, dict): e["public"] = e.get("public") or e.get("url", ""); e.setdefault("name", name); e.setdefault("key", e.get("key", ""))
     for k in ("arrs", "bazarr"):
@@ -477,6 +480,9 @@ def _jf_item(it):
            "guid": ("plex://%s/%s" % (ms_kind(), it["Id"])) if ids else "local://%s" % it["Id"],
            "thumb": "/Items/%s/Images/Primary" % it["Id"] if (it.get("ImageTags") or {}).get("Primary") else None}
     if it.get("ProductionYear"): out["year"] = it["ProductionYear"]
+    if it.get("DateCreated"):            # v0.3.4: when it was added (Plex's addedAt), for the Unwatched check's "in the library at least N days"
+        try: out["addedAt"] = int(calendar.timegm(time.strptime(it["DateCreated"][:19], "%Y-%m-%dT%H:%M:%S")))
+        except (ValueError, TypeError): pass
     t = it.get("Type")
     if t == "Episode":
         out.update(grandparentTitle=it.get("SeriesName") or "", grandparentRatingKey=ms_rk(it.get("SeriesId")),
@@ -1231,6 +1237,10 @@ def scan():
             issues += meta_scan(sections, movies, series, arr_files)
         except Exception as e:
             log("metadata check failed: %r" % e)
+        try:
+            issues += naming_scan(sections)                  # v0.3.4: file names that don't follow your Radarr/Sonarr naming
+        except Exception as e:
+            log("naming check failed: %r" % e)
         sizes = {}
         try:
             q, sizes = quality_scan(sections, movies, series, trashed); issues += q
@@ -1929,7 +1939,12 @@ def movie_meta(m, lib, sec, std, owners, movies, by_path):
                             links + ([arr_add_link(owners[0], "movie", g["tmdb"])] if g.get("tmdb") else []), section=sec)]
     if mine:
         a, it = mine[0]
-        if m.get("year") and it.get("year") and abs(int(m["year"]) - int(it["year"])) > 1:
+        # v0.3.4: `mine` is found by Plex's own TMDB id, so Plex and Radarr already agree it's the same film. A different year is then
+        # only which date each one shows (festival premiere, one-off screening, cinema or streaming release; e.g. Kill Bill: The Whole
+        # Bloody Affair is 2011 on TMDB and 2025 in Plex). Refresh can't change it, so the card was noise. Only say something when the
+        # IMDb ids disagree too, i.e. there may really be two different films behind one TMDB id.
+        same_film = not (g.get("imdb") and it.get("imdbId") and g["imdb"] != it["imdbId"])
+        if not same_film and m.get("year") and it.get("year") and abs(int(m["year"]) - int(it["year"])) > 1:
             out.append(_meta("year", lib, rk, title, "att", "Plex says %s, %s says %s." % (m["year"], a["name"], it["year"]),
                              "Often just a re-release date. Refresh if the Plex page looks wrong, otherwise Ignore.", ["refresh"],
                              links + [arr_link(a, it, "movie")], section=sec, arr_year=int(it["year"])))
@@ -2015,12 +2030,179 @@ def _meta_left(d):
         return (ok, "Plex checked: the year is %s now." % m.get("year") if ok else "Plex still says %s. That's what Plex's own info has; Ignore it if the film is right." % m.get("year"), None)
     return (False, "Nothing to check.", None)
 
+# ---------------- Naming (v0.3.4) ----------------
+# Radarr and Sonarr already know your naming format and can list every file whose name doesn't follow it (their
+# "Preview Rename"). Most of that list is cosmetic: tags that went out of date (Tdarr turned h264 into h265, the format
+# stopped including [AMZN], accents). Those are summed up in one card you can rename in one go or ignore. A file whose
+# title, year or episode name is different gets its own card. When the episode names of a season have all moved along
+# by one, the episodes were probably renumbered (TVDB), so that card says "check first" and has no Rename button.
+import unicodedata as _ud
+
+def _name_core(path):
+    """The part of a file name that says WHAT it is: no [tags], no -GROUP, no accents, punctuation or case."""
+    b = os.path.splitext(os.path.basename(path or ""))[0]
+    if "]" in b: b = re.sub(r"\][^\[\]]*$", "]", b)                    # release group after the last tag, even "-1-1"
+    else: b = re.sub(r"-[A-Za-z0-9.]+$", "", b.strip())
+    b = re.sub(r"\[[^\]]*\]", "", b)
+    b = "".join(ch for ch in _ud.normalize("NFKD", b) if not _ud.combining(ch))
+    return re.sub(r"[\W_]+", "", b.lower())
+
+_PLACEHOLDER_RE = re.compile(r" - (Episode \d+|TBA|TBD)(?: \[|\.[A-Za-z0-9]+$)")
+
+def _naming_worse(r):
+    """The new name would lose information: a real episode title would become 'Episode 20' / 'TBA' (TVDB lost it)."""
+    return bool(_PLACEHOLDER_RE.search(os.path.basename(r.get("newPath") or ""))) and not _PLACEHOLDER_RE.search(os.path.basename(r.get("existingPath") or ""))
+
+_EP_TITLE_RE = re.compile(r" - S(\d+)E(\d+)(?:-?E\d+)* - (.*?)(?: \[|$)")
+
+def _ep_title(path):
+    m = _EP_TITLE_RE.search(os.path.splitext(os.path.basename(path or ""))[0])
+    return (int(m.group(1)), int(m.group(2)), re.sub(r"[\W_]+", "", m.group(3).lower())) if m else None
+
+def _naming_shifted(rows):
+    """True when, in one season, the new names are the old names moved along by one episode (2+ times)."""
+    old, new = {}, {}
+    for r in rows:
+        a, b = _ep_title(r.get("existingPath")), _ep_title(r.get("newPath"))
+        if a and b and a[2] and b[2]: old[(a[0], a[1])] = a[2]; new[(b[0], b[1])] = b[2]
+    hits = sum(1 for (sn, en), t in new.items() if t and (old.get((sn, en + 1)) == t or old.get((sn, en - 1)) == t))
+    return hits >= 2
+
+def _naming_section(sections, path):
+    for sec in sections or []:
+        for l in sec.get("Location", []):
+            r = l["path"].rstrip("/")
+            if path == r or path.startswith(r + "/"): return sec["key"]
+    return None
+
+def naming_scan(sections):
+    out, tags = [], {"files": 0, "titles": [], "why": {}}
+    for a in S.get("arrs", []):
+        if a.get("kind") not in ("radarr", "sonarr"): continue
+        STATE["step"] = "Checking file names in " + a["name"]
+        movie = a["kind"] == "radarr"
+        try:
+            items = arr(a, "/movie" if movie else "/series")
+        except Exception as e:
+            log("naming: %s list failed: %r" % (a["name"], e)); continue
+        byid = {i["id"]: i for i in items}
+        ids = [i["id"] for i in items if (i.get("hasFile") if movie else (i.get("statistics") or {}).get("episodeFileCount"))]
+        rows = []
+        try:
+            if movie:
+                for k in range(0, len(ids), 100):
+                    rows += arr(a, "/rename?" + "&".join("movieId=%d" % i for i in ids[k:k + 100]))
+            else:
+                for i in ids: rows += arr(a, "/rename?seriesId=%d" % i)
+        except Exception as e:
+            log("naming: %s rename preview failed: %r" % (a["name"], e)); continue
+        groups = {}
+        for r in rows:
+            groups.setdefault(r.get("movieId") if movie else r.get("seriesId"), []).append(r)
+        for oid, rs in groups.items():
+            it = byid.get(oid) or {}
+            real = [r for r in rs if (_name_core(r.get("existingPath")) != _name_core(r.get("newPath")) or "TdarrCacheFile" in os.path.basename(r.get("existingPath") or ""))
+                    and not _naming_worse(r)]
+            cosm = [r for r in rs if r not in real and not _naming_worse(r)]
+            fid = "movieFileId" if movie else "episodeFileId"
+            if cosm:
+                tags["files"] += len(cosm)
+                tags["titles"].append({"arr": a["name"], "id": oid, "files": [r[fid] for r in cosm if r.get(fid)]})
+            if not real: continue
+            title = "%s (%s)" % (it.get("title", "?"), it.get("year", "?")) if movie else it.get("title", "?")
+            ex = [{"old": os.path.basename(r["existingPath"]), "new": os.path.basename(r["newPath"])} for r in real[:6]]
+            sec = _naming_section(sections, it.get("path") or "")
+            ref = {"arr": a["name"], "kind": "movie" if movie else "series", "id": oid, "files": [r[fid] for r in real if r.get(fid)]}
+            links = [arr_link(a, it, "movie" if movie else "series")]
+            n = len(real)
+            if not movie and _naming_shifted(real):
+                out.append(dict(id=iid("naming", "shift", a["name"], oid), chk="meta", sev="amb", title=title, library=a["name"], links=links,
+                                detail=dict(kind="namingshift", rk="0", fixes=[], ref=ref, section=sec, examples=ex, count=n,
+                                            text="%d episode name%s don't match %s, and the names have moved along by one episode." % (n, "" if n == 1 else "s", a["name"]),
+                                            note="The episodes were probably renumbered (TVDB changed the order), so these files may hold different episodes "
+                                                 "than their numbers say. Play one to check before renaming. Renaming would only change the names, not fix the order.")))
+                continue
+            placeholder = sum(1 for r in real if _PLACEHOLDER_RE.search(os.path.basename(r["existingPath"])))
+            tdcache = sum(1 for r in real if "TdarrCacheFile" in os.path.basename(r["existingPath"]))
+            why = ("Tdarr left its temporary name on %s." % ("this file" if n == 1 else "these files")) if tdcache == n else \
+                  ("%s now knows the real episode title%s." % (a["name"], "" if placeholder == 1 else "s")) if placeholder == n else \
+                  ("The title or year changed on TMDB since it was downloaded." if movie else "The episode name%s changed on TVDB since %s downloaded." % ("" if n == 1 else "s", "it was" if n == 1 else "they were"))
+            out.append(dict(id=iid("naming", a["name"], oid), chk="meta", sev="att", title=title, library=a["name"], links=links,
+                            detail=dict(kind="naming", rk="0", fixes=["rename"], ref=ref, section=sec, examples=ex, count=n,
+                                        text="%d file name%s say%s something different from %s: %s" % (n, "" if n == 1 else "s", "s" if n == 1 else "", a["name"], why),
+                                        note="Rename asks %s to rename %s with your own naming format (subtitles move with them). Plex is told to look at the folder again." % (
+                                            a["name"], "it" if n == 1 else "them"))))
+    if tags["files"]:
+        n = tags["files"]
+        out.append(dict(id=iid("naming", "tags"), chk="meta", sev="att", title=("{:,} file names with out-of-date tags".format(n) if n != 1 else "1 file name with out-of-date tags"), library="Radarr/Sonarr", links=[],
+                        detail=dict(kind="namingtags", rk="0", fixes=["rename"], count=n, titles=tags["titles"], examples=[],
+                                    text="{:,} file names in {:,} titles have tags".format(n, len(tags["titles"])) + " that no longer match the file or your naming format (for example h264 after Tdarr made it h265, or a streaming tag your format dropped). Only the tags differ, the titles are right.",
+                                    note="Harmless. Rename all asks Radarr/Sonarr to rename them in one go; Plex and Tdarr then rescan those folders, which can take a while on a big library. Or Ignore this card.")))
+    return out
+
+def _naming_rename(a, ref):
+    """Run Radarr/Sonarr's RenameFiles for one title and wait for it. Returns (ok, message)."""
+    body = {"name": "RenameFiles", "files": [int(x) for x in ref.get("files", [])]}
+    body["movieId" if ref["kind"] == "movie" else "seriesId"] = int(ref["id"])
+    cmd = arr(a, "/command", body, "POST")
+    st = {}
+    for _ in range(60):
+        time.sleep(2)
+        st = arr(a, "/command/%d" % cmd["id"])
+        if st.get("status") in ("completed", "failed", "aborted"): break
+    if st.get("status") != "completed":
+        return False, "%s's rename %s: %s" % (a["name"], st.get("status", "timed out"), (st.get("exception") or st.get("message") or "")[:160])
+    return True, ""
+
+def naming_fix(issue_id, row, d):
+    titles = d.get("titles") if d["kind"] == "namingtags" else [dict(d["ref"], arr=d["ref"]["arr"])]
+    for t in titles or []:
+        if not arr_by_name(t.get("arr")): return {"ok": False, "error": "%s isn't set up any more." % t.get("arr")}
+        if not str(t.get("id", "")).isdigit() or not all(str(x).isdigit() for x in t.get("files", [])): return {"ok": False, "error": "Bad item id."}
+    n = sum(len(t.get("files", [])) for t in titles)
+    with db() as c:
+        c.execute("DELETE FROM done WHERE issue_id=? AND status='checking'", (issue_id,))
+        done_id = c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            (issue_id, row["title"], row["library"], "", "[]", "[]", row["links"], now_iso(), "checking",
+                             "Renaming %d file%s\u2026" % (n, "" if n == 1 else "s"), "meta")).lastrowid
+    threading.Thread(target=_naming_fix, args=(done_id, issue_id, row["title"], d, titles), daemon=True).start()
+    return {"ok": True, "started": True}
+
+def _naming_fix(done_id, issue_id, title, d, titles):
+    done, errs, folders = 0, [], set()
+    for t in titles:
+        a = arr_by_name(t["arr"])
+        try:
+            kind = "movie" if (t.get("kind") or ("movie" if a["kind"] == "radarr" else "series")) == "movie" else "series"
+            ok, msg = _naming_rename(a, dict(t, kind=kind))
+            if ok:
+                done += len(t.get("files", []))
+                try: folders.add((arr(a, "/%s/%d" % (kind, int(t["id"]))) or {}).get("path") or "")
+                except Exception: pass
+            else: errs.append(msg)
+        except Exception as e:
+            errs.append("%s: %s" % (t.get("arr"), e))
+    if S.get("plex") and ms_kind() == "plex":
+        try: secs = plex("/library/sections").get("Directory", [])
+        except Exception: secs = []
+        for f in [x for x in folders if x][:200]:
+            k = _naming_section(secs, f)
+            if k: plex_refresh_folder(k, f)
+    status = "ok" if done and not errs else ("warn" if done else "bad")
+    note = "Renamed %d file%s." % (done, "" if done == 1 else "s") + ((" Problems: " + "; ".join(errs[:3])) if errs else "")
+    with db() as c:
+        c.execute("UPDATE done SET status=?, note=?, checked_at=? WHERE id=?", (status, note, now_iso(), done_id))
+        if status == "ok": c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+    event("metadata", "%s: %s" % (title, note))
+    log("naming fix %s: %s" % (issue_id, note))
+
 def meta_fix(issue_id, how):
     with db() as c:
         row = c.execute("SELECT * FROM issues WHERE id=? AND chk='meta'", (issue_id,)).fetchone()
     if not row: return {"ok": False, "error": "That item isn't in the last scan any more. Scan again first."}
     d = json.loads(row["detail"])
     if how not in d.get("fixes", []): return {"ok": False, "error": "That fix doesn't apply here."}
+    if how == "rename" and d.get("kind") in ("naming", "namingtags"): return naming_fix(issue_id, row, d)     # v0.3.4
     if not str(d.get("rk", "")).isdigit() or not all(e["rk"].isdigit() for e in d.get("eps", []) + d.get("seasons", [])):
         return {"ok": False, "error": "Bad item id."}
     note = "Copying %d titles from Sonarr\u2026" % len(d["eps"]) if how == "titles" else "Picking %d season posters\u2026" % len(d["seasons"]) if how == "posters" else "Asking Plex to refresh\u2026"
@@ -2384,14 +2566,15 @@ def health_fix(issue_id):
                                  "checking", "Asking %s for a new copy\u2026" % ref["arr"], "health", json.dumps(ref))).lastrowid
             c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
     event("health", "%s: moved the %s file to the trash and asked %s for a new copy." % (row["title"], {"report": "reported", "corrupt": "damaged"}.get(d["kind"], d["kind"]), ref["arr"]))
-    threading.Thread(target=_health_search, args=(done_id, ref), daemon=True).start()
+    threading.Thread(target=_health_search, args=(done_id, ref, moved[:1]), daemon=True).start()
     threading.Thread(target=seerr_after_replace, args=(d, ref), daemon=True).start()
     return {"ok": True}
 
-def _health_search(done_id, ref):
-    status, note = "warn", ""
+def _health_search(done_id, ref, moved=None):
+    status, note, blocked = "warn", "", 0
     try:
         a = arr_by_name(ref["arr"])
+        blocked = _block_release(a, ref, moved or []) if moved else 0     # v0.3.4: first, so the same bad release isn't fetched again
         if ref["kind"] == "movie":
             arr(a, "/command", {"name": "RescanMovie", "movieId": int(ref["id"])}, "POST")
         else:
@@ -2407,8 +2590,9 @@ def _health_search(done_id, ref):
         else:
             arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": [int(ref["id"])]}, "POST")
         status = "waiting"
-        note = "%s is searching for a new copy. If it finds one, it downloads %s and shows up in Plex by itself." % (a["name"], dl_when()) if not has else \
-               "Asked %s to search, but it still thinks it has the old file. Its next disk scan will catch up." % a["name"]
+        note = ("Blocked the release it came from, so it won't be downloaded again. " if blocked else "") + (
+               "%s is searching for a new copy. If it finds one, it downloads %s and shows up in Plex by itself." % (a["name"], dl_when()) if not has else
+               "Asked %s to search, but it still thinks it has the old file. Its next disk scan will catch up." % a["name"])
     except Exception as e:
         note = "Moved to the trash, but couldn't ask %s to search: %s" % (ref.get("arr"), e)
     with db() as c:
@@ -3042,24 +3226,35 @@ def lang_fix(issue_id, row, d):
     threading.Thread(target=seerr_after_replace, args=(d, ref), daemon=True).start()
     return {"ok": True}
 
-def _lang_block(a, ref, moved):
-    """Block the release(s) the wrong file came from: find the import in the arr's history, then mark its grab failed
-    (that's how Radarr/Sonarr blocklist a release). Best effort: returns how many were blocked."""
+IMPORT_EVENTS = ("downloadFolderImported", "episodeFileImported", "movieFileImported")
+
+def _block_release(a, ref, moved):
+    """Block the release(s) a bad file came from, so Radarr/Sonarr don't download the same one again: find its import in the
+    arr's history, then mark that grab failed (that's how Radarr/Sonarr blocklist a release). v0.3.4: used by every Replace,
+    not only wrong language, and when the file was renamed since it was imported (Tdarr conversion, naming fix) it falls back
+    to the last release imported for that film/episode, which is where the current file came from. Best effort: how many."""
     try:
         if ref["kind"] == "movie": hist = arr(a, "/history/movie?movieId=%d" % int(ref["id"]))
         else: hist = arr(a, "/history/series?seriesId=%d" % int(ref["series"]))
     except Exception as e:
-        log("lang history failed: %r" % e); return 0
+        log("blocklist history failed: %r" % e); return 0
     hist = hist if isinstance(hist, list) else hist.get("records", [])
+    if ref["kind"] != "movie":                                  # only this episode's events
+        hist = [h for h in hist if int(h.get("episodeId") or 0) == int(ref["id"])]
     names = {os.path.basename(p) for p in moved}
-    dl = {h.get("downloadId") for h in hist if h.get("eventType") in ("downloadFolderImported", "episodeFileImported", "movieFileImported")
+    dl = {h.get("downloadId") for h in hist if h.get("eventType") in IMPORT_EVENTS
           and h.get("downloadId") and os.path.basename(((h.get("data") or {}).get("importedPath") or "").replace("\\", "/")) in names}
+    if not dl:
+        imp = sorted((h for h in hist if h.get("eventType") in IMPORT_EVENTS and h.get("downloadId")), key=lambda h: h.get("date") or "")
+        if imp: dl = {imp[-1]["downloadId"]}
     n = 0
     for h in hist:
         if h.get("eventType") == "grabbed" and h.get("downloadId") in dl:
             try: arr(a, "/history/failed/%d" % h["id"], {}, "POST"); n += 1; dl.discard(h["downloadId"])
-            except Exception as e: log("lang blocklist failed: %r" % e)
+            except Exception as e: log("blocklist failed: %r" % e)
     return n
+
+_lang_block = _block_release
 
 def _lang_search(done_id, ref, moved):
     status, note = "warn", ""
@@ -3243,7 +3438,7 @@ def subs_scan(movies, series, trashed):
         hint = "" if "opensubtitlescom" in provs else " A free OpenSubtitles.com account (Bazarr \u203a Settings \u203a Providers) usually fills most of these gaps."
         out.append(dict(id=iid("subs-wanted", b["name"]), chk="subs", sev="att", title="Missing English subtitles", library=b["name"],
             links=[{"label": "Open " + b["name"] + " Wanted", "url": b["public"].rstrip("/") + "/wanted/series"}],
-            detail=dict(kind="wanted", text="%s have no English subtitles." % " and ".join(parts),
+            detail=dict(kind="wanted", text="%s %s no English subtitles." % (" and ".join(parts), "has" if len(eps) + len(mvs) == 1 else "have"),
                         note="%s already searches for these every 6 hours with %d free source%s (%s), which don't have them.%s" % (b["name"], len(provs), "" if len(provs) == 1 else "s", ", ".join(provs) or "none", hint),
                         top=[{"t": t, "n": n} for t, n in top], films=[m["title"] for m in mvs[:8]], fixes=["searchall"], ref={"bazarr": b["name"]})))
     return out
@@ -3539,7 +3734,8 @@ DEEP_HARMLESS = re.compile(r"timescale not set|UDTA parsing failed|Guessed Chann
                            r"Thread message queue blocking|Discarding ID3 tags|Referenced QT chapter track not found|"
                            r"Starting new cluster due to timestamp|unknown tag|unsupported|Ignoring|"
                            r"not enough frames to estimate rate|increasing the value for the 'analyzeduration'|consider increasing probesize|"
-                           r"No filtered frames for output stream|Output file is empty, nothing was encoded", re.I)
+                           r"No filtered frames for output stream|Output file is empty, nothing was encoded|"
+                           r"Dolby Vision RPU", re.I)      # v0.3.4: "Multiple Dolby Vision RPUs found in one AU" is a notice, not damage
 DEEP = {"cur": None, "pct": 0.0, "started": None, "cancel": False, "paused": "", "list": None, "list_day": None,
         "found_new": False, "crawl_done": 0, "skip_night": None, "mode": "deep", "qlist": None, "qlist_day": None, "qdone": 0}
 
@@ -3746,6 +3942,24 @@ QUICK_SEEK = re.compile(r"Could not find ref with POC|co located POCs unavailabl
 QUICK_BAD_ERRS, QUICK_MINOR_ERRS = 10, 2
 
 QUICK_FPS = {}         # path -> frames per second of the video, for _quick_sample (v0.3.3)
+# v0.3.4: sound decoders. Jumping into the middle of a sound track often gives one bad frame (EAC3 "exponent out-of-range",
+# MP3 "Header missing"), so sound-only errors are checked by playing the whole sound track before they count.
+QUICK_AUDIO_DEC = re.compile(r"\[(?:aist#[^\]/]*/)?(?:aac|ac3|eac3|mp3|mp3float|mp2|mp2float|dca|dts|truehd|mlp|opus|libopus|flac|vorbis|alac|pcm_\w+|wmav2|wmapro)\b[^\]]*\]", re.I)
+QUICK_AUD = {}         # path -> how many of its sample errors came from the sound decoder
+QUICK_AUDIO_OK = 3     # a whole sound track with this many errors or fewer plays fine (a blip at the start or end)
+
+def _audio_full(path):
+    """Play only the first sound track all the way through (seconds for most files). Error lines, or None if it couldn't run."""
+    def low():
+        try: os.nice(19)
+        except Exception: pass
+    try:
+        r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-threads", "1", "-i", path, "-map", "0:a:0", "-f", "null", "-"],
+                           capture_output=True, text=True, errors="replace", timeout=900, preexec_fn=low)
+    except subprocess.TimeoutExpired:
+        return None
+    if r.returncode is not None and r.returncode < 0: return None
+    return [l.strip() for l in r.stderr.splitlines() if l.strip() and not DEEP_HARMLESS.search(l) and not l.startswith("Last message repeated")]
 
 def _fps(v):
     try:
@@ -3805,7 +4019,9 @@ def _quick_sample(path, at, threads=2):
     for line in r.stderr.splitlines():
         line = line.strip()
         if not line or DEEP_HARMLESS.search(line) or (at > 0 and QUICK_SEEK.search(line)) or line.startswith("Last message repeated"): continue
-        errs.append(re.sub(r"^(\[[^\]]*\]\s*)+", "", line)[:160])
+        txt = re.sub(r"^(\[[^\]]*\]\s*)+", "", line)[:160]
+        errs.append(txt)
+        if QUICK_AUDIO_DEC.match(line): QUICK_AUD[path] = QUICK_AUD.get(path, 0) + 1   # v0.3.4: came from the sound decoder
     return got, errs
 
 def quick_check_file(path, how):
@@ -3863,11 +4079,24 @@ def quick_check_file(path, how):
                         status, msg = "bad", "The picture won't play at %s (of %s), although the file goes on to %s." % (_hms(at), _hms(dur), _hms(end)); break
         finally:
             DEEP.update(cur=None, pct=0.0, mode="deep")
+        aud = QUICK_AUD.pop(path, 0)
+        if status == "ok" and n >= QUICK_MINOR_ERRS and aud >= n:      # v0.3.4: only the sound complained: play the whole sound track
+            DEEP.update(cur=path, mode="quick")
+            try: full = _audio_full(path)
+            finally: DEEP.update(cur=None, pct=0.0, mode="deep")
+            if full is not None and len(full) <= QUICK_AUDIO_OK:
+                note, n = ("The picture samples play cleanly, and the sound plays cleanly all the way through" +
+                           (" (%d tiny blip%s)." % (len(full), "" if len(full) == 1 else "s") if full else ".")), 0
+            elif full is not None:
+                # the whole track is the real measure: a sample that lands on a glitch repeats it, so 13 sample errors can be 4 in the file
+                n = len(full); first = ([re.sub(r"^(\[[^\]]*\]\s*)+", "", x)[:160] for x in full] + first)[:3]
+                note = "The sound has %d error%s when it plays all the way through%s." % (len(full), "" if len(full) == 1 else "s",
+                        " (short blips: often in the episode itself, so another download of the same release may have them too)" if len(full) < QUICK_BAD_ERRS else "")
         if status == "ok":
-            if n >= QUICK_BAD_ERRS: status, msg = "bad", "%d errors in %d short samples." % (n, len(pts))
-            elif n >= QUICK_MINOR_ERRS: status, msg = "minor", "%d errors in %d short samples." % (n, len(pts))
+            if n >= QUICK_BAD_ERRS: status, msg = "bad", (note if note.startswith("The sound has") else "%d errors in %d short samples." % (n, len(pts)))
+            elif n >= QUICK_MINOR_ERRS: status, msg = "minor", (note if note.startswith("The sound has") else "%d errors in %d short samples." % (n, len(pts)))
             else: msg = note or ("The samples play cleanly." if not n else "The samples play (%d small error%s)." % (n, "" if n == 1 else "s"))
-    QUICK_FPS.pop(path, None)
+    QUICK_FPS.pop(path, None); QUICK_AUD.pop(path, None)
     res = {"path": path, "size": st.st_size, "mtime": st.st_mtime, "at": now_iso(), "status": status, "errors": n, "got": round(got_total, 1),
            "dur": round(dur, 1), "msg": msg, "how": how, "first": first[:3], "secs": int(time.time() - t0), "ends": ends}
     with db() as c:
@@ -4053,6 +4282,7 @@ def deep_findings():
                 except ValueError: x["first"] = []
                 out[r["path"]] = x
             ok_at = {r["path"]: r["at"] or "" for r in c.execute("SELECT path, at FROM deep WHERE status='ok'")}
+            quick_ok = {r["path"]: (r["size"], r["mtime"] or 0) for r in c.execute("SELECT path, size, mtime FROM quick WHERE status='ok'")}   # v0.3.4
             deep_seen = {r["path"]: (r["size"], r["mtime"] or 0) for r in c.execute("SELECT path, size, mtime FROM deep WHERE status != 'skip'")}
             for r in c.execute("SELECT * FROM quick WHERE status IN ('bad','minor')"):       # v0.3.2
                 if r["path"] in out: continue
@@ -4077,8 +4307,20 @@ def deep_findings():
                     when = datetime.fromtimestamp(float(v) / (1000 if float(v) > 1e11 else 1)).isoformat(timespec="seconds") if v else ""
                 except (TypeError, ValueError): pass
                 if ok_at.get(f["_id"], "") > when: continue            # our own deep check passed it after Tdarr's check
-                out[f["_id"]] = {"src": "tdarr", "status": "bad", "at": when, "size": None,
-                                 "msg": "Tdarr's health check found errors when it played this file through."}
+                x = {"src": "tdarr", "status": "bad", "at": when, "size": None,
+                     "msg": "Tdarr's health check found errors when it played this file through."}
+                # v0.3.4: Tdarr's check can fail on a good file, e.g. AV1 checked on a graphics card that can't decode AV1
+                # (NVIDIA before the RTX 30 series). Then it's "check first", with a Deep check to settle it, not straight to Replace.
+                av1 = "av1" in str(f.get("video_codec_name") or "").lower()
+                q = quick_ok.get(f["_id"])
+                try: qok = bool(q) and (lambda st: st.st_size == q[0] and abs(st.st_mtime - q[1]) < 2)(os.stat(f["_id"]))
+                except OSError: qok = False
+                if av1 or qok:
+                    x["status"] = "minor"
+                    x["msg"] = ("Tdarr's health check reported errors" + (", but Library Doctor's own quick test of this file plays cleanly" if qok else "") + "." +
+                                (" The video is AV1: if Tdarr checks with an NVIDIA graphics card older than the RTX 30 series, the card can't decode AV1 and the check fails on good files." if av1 else "") +
+                                " Run a Deep check before replacing it.")
+                out[f["_id"]] = x
         except Exception as e:
             log("tdarr health errors failed: %r" % e)
     DEEP["found_new"] = False
@@ -4118,7 +4360,7 @@ def deep_card(dz, f, size, title, lib, key, ref, m, link):
     except ValueError: pass
     if dz.get("src") == "tdarr":
         text = dz["msg"]
-        note = "Checked by Tdarr%s. Most likely a damaged or badly finished download." % (" on " + when if when else "")
+        note = "Checked by Tdarr%s." % (" on " + when if when else "") + (" Most likely a damaged or badly finished download." if bad else "")
     elif dz.get("src") == "quick":
         text = ("Damaged: " if bad else "Some errors: ") + dz.get("msg", "")
         note = ("Found by a quick test%s: short parts at the start, middle and end were played." % (" on " + when if when else "")) + (
@@ -5026,7 +5268,10 @@ def uw_move(item_id, until=None, show=False):
 
 def unwatched_scan(sections, sizes):
     t = S.get("tautulli")
-    if not t: return []
+    if S.get("tracearr"):                                   # v0.3.4: Tracearr first when both are set (it covers Plex, Jellyfin and Emby)
+        return tracearr_unwatched_scan(sections, sizes)
+    if not t:
+        return []
     STATE["step"] = "Checking what nobody watches"
     def tt(cmd, **q):
         return http(t["url"].rstrip("/") + "/api/v2?" + urllib.parse.urlencode(dict(q, apikey=t["key"], cmd=cmd)), timeout=180)["response"]["data"]
@@ -5071,6 +5316,91 @@ def unwatched_scan(sections, sizes):
                                     human(total), "in the last year" if full_year else "since %s (when Tautulli started keeping history)" % since_txt, UNWATCHED_MIN_AGE),
                                 "note": "Nothing is ever deleted from here. Keep hides one for %s (or for good, from the Kept list). To free space, delete in Radarr/Sonarr so they don't download it again." % ("about 6 months" if KEEP_DAYS == 182 else "%d days" % KEEP_DAYS)},
                         links=[{"label": "Open Tautulli", "url": t.get("public", "")}] if t.get("public") else []))
+    return out
+
+# v0.3.4: the Unwatched check from Tracearr instead of Tautulli: works with Plex, Jellyfin and Emby. Tracearr's
+# /watched-media lists everything anyone has played (with play count, last day and IMDb/TMDB/TVDB ids); a library
+# item nobody has played since the cut-off is unwatched. Items are matched by those ids, so it works on every server.
+def tracearr_get(path, **q):
+    tr = S["tracearr"]
+    url = tr["url"].rstrip("/") + "/api/v2/public" + path + ("?" + urllib.parse.urlencode(q) if q else "")
+    return http(url, {"Authorization": "Bearer " + tr.get("key", "")}, timeout=120)
+
+def tracearr_watched(kind):
+    """{('imdb'|'tmdb'|'tvdb', id): (plays, last played as a timestamp)} for movies or shows anyone has played."""
+    out, cursor = {}, None
+    for _ in range(200):                                  # 200 pages of 1000 = far more than any library
+        q = {"media_type": kind, "min_state": "partial", "pageSize": 1000}
+        if cursor: q["cursor"] = cursor
+        r = tracearr_get("/watched-media", **q)
+        for m in r.get("data") or []:
+            try: last = datetime.strptime(m.get("last_watched_day") or "", "%Y-%m-%d").timestamp() + 86399
+            except ValueError: last = 0
+            v = (int(m.get("plays") or 0), last)
+            for k in ("imdb", "tmdb", "tvdb"):
+                if m.get(k + "_id"):
+                    key = (k, str(m[k + "_id"]))
+                    old = out.get(key)
+                    out[key] = (v[0] + (old[0] if old else 0), max(v[1], old[1] if old else 0))
+        cursor = (r.get("meta") or {}).get("nextCursor")
+        if not cursor: break
+    return out
+
+def tracearr_unwatched_scan(sections, sizes):
+    tr = S.get("tracearr")
+    STATE["step"] = "Checking what nobody watches (Tracearr)"
+    try:
+        watched = {"movie": tracearr_watched("movie"), "show": tracearr_watched("show")}
+        cutoff = time.time() - UNWATCHED_DAYS * 86400
+        # does Tracearr's history reach back past the cut-off? If not, say so on the card, as with Tautulli
+        older = tracearr_get("/history", until=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff)), pageSize=1).get("data") or []
+    except Exception as e:
+        log("tracearr unwatched failed: %r" % e); return []
+    full_year = bool(older)
+    added_before = time.time() - UNWATCHED_MIN_AGE * 86400
+    nowi = now_iso()
+    with db() as c:
+        keep = {r["id"]: r["until"] for r in c.execute("SELECT id, until FROM ignored")}
+        expired = [k for k, u in keep.items() if u and u <= nowi]
+        for k in expired: c.execute("DELETE FROM ignored WHERE id=?", (k,))
+    for k in expired: keep.pop(k, None)
+    out = []
+    for sec in sections:
+        if sec["type"] not in ("movie", "show"): continue
+        try: rows = list(plex_paged("/library/sections/%s/all" % sec["key"], type=1 if sec["type"] == "movie" else 2, includeGuids=1))
+        except Exception as e:
+            log("tracearr unwatched: library %s failed: %r" % (sec["title"], e)); continue
+        W = watched[sec["type"]]
+        items, kept = [], []
+        for r in rows:
+            rk = str(r.get("ratingKey")); added = float(r.get("addedAt") or 0)
+            if not added or added > added_before: continue
+            ids = []
+            for g in r.get("Guid") or []:
+                gid = str(g.get("id") or "")
+                if "://" in gid: ids.append(tuple(gid.split("://", 1)))
+            if not ids: continue                          # can't match it to Tracearr without an id; don't guess
+            plays, last = 0, 0
+            for key in ids:
+                if key in W: plays, last = max(plays, W[key][0]), max(last, W[key][1])
+            if last and last >= cutoff: continue
+            k = iid("unwatched", rk); size = sizes.get(rk, 0)
+            if not size: continue
+            it = {"id": k, "rk": rk, "t": "%s (%s)" % (r.get("title"), r.get("year") or "?"), "size": size,
+                  "plays": plays, "last": int(last) or None, "url": plex_link(rk)["url"]}
+            if k in keep: it["until"] = keep[k]; kept.append(it)
+            else: items.append(it)
+        if not items and not kept: continue
+        kept.sort(key=lambda x: x["t"].lower())
+        items.sort(key=lambda x: -x["size"]); total = sum(x["size"] for x in items)
+        what = "film" if sec["type"] == "movie" else "show"
+        out.append(dict(id=iid("unwatched", "lib", sec["key"]), chk="unwatched", sev="att", library=sec["title"],
+                        title="%d %s%s nobody has watched" % (len(items), what, "" if len(items) == 1 else "s"),
+                        detail={"kind": "unwatched", "count": len(items), "total": total, "items": items[:60], "kept": kept, "what": what, "fixes": [],
+                                "text": "Together %s. Not played %s, and in the library for at least %d days." % (
+                                    human(total), "in the last year" if full_year else "since Tracearr started keeping history", UNWATCHED_MIN_AGE),
+                                "note": "Nothing is ever deleted from here. Keep hides one for %s (or for good, from the Kept list). To free space, delete in Radarr/Sonarr so they don't download it again." % ("about 6 months" if KEEP_DAYS == 182 else "%d days" % KEEP_DAYS)},
+                        links=[{"label": "Open Tracearr", "url": tr.get("public", "")}] if tr.get("public") else []))
     return out
 
 def sportarr_files():
@@ -6763,7 +7093,7 @@ def session_end(tok, everyone=False):
 
 # ---------------- settings page ----------------
 SECRET_FIELDS = ("token", "key", "password")
-SINGLE = ("plex", "lidarr", "tautulli", "tdarr", "sportarr", "prowlarr", "jackett", "seerr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
+SINGLE = ("plex", "lidarr", "tautulli", "tracearr", "tdarr", "sportarr", "prowlarr", "jackett", "seerr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
 LISTS = ("arrs", "bazarr")
 
 def settings_public():
@@ -6827,6 +7157,18 @@ def settings_test(kind, e):
         if kind == "bazarr":
             r = http(u + "/api/system/status", {"X-API-KEY": e.get("key", "")}, timeout=15)
             return {"ok": True, "msg": "Connected to Bazarr %s." % ((r.get("data") or {}).get("bazarr_version", ""))}
+        if kind == "tracearr":
+            try: r = http(u + "/api/v2/public/servers", {"Authorization": "Bearer " + e.get("key", "")}, timeout=15)
+            except urllib.error.HTTPError as x:
+                body = ""
+                try: body = x.read(2000).decode("utf-8", "replace")
+                except Exception: pass
+                if x.code in (401, 403) and ("UnauthorizedError" in body or "API key" in body or "Authorization" in body): return {"ok": False, "msg": "Tracearr said no. Check the API key (Tracearr → Settings → Data & API → API)."}
+                if x.code in (401, 403): return {"ok": False, "msg": "That address answers, but it isn't Tracearr. Check the address and port (Tracearr's usual port is 3000)."}
+                if x.code == 404: return {"ok": False, "msg": "That's not Tracearr 2.8 or newer. Check the address, or update Tracearr."}
+                raise
+            names = [x.get("server_name") or x.get("server_type", "?") for x in (r.get("data") or [])]
+            return {"ok": True, "msg": "Connected to Tracearr %s%s." % (str(r.get("tracearr_version", "")).lstrip("v"), (", watching " + ", ".join(names)) if names else ", but it isn't watching any servers yet")}
         if kind == "tautulli":
             r = http(u + "/api/v2?" + urllib.parse.urlencode({"apikey": e.get("key", ""), "cmd": "get_tautulli_info"}), timeout=15)["response"]
             if r.get("result") != "success": return {"ok": False, "msg": r.get("message") or "Tautulli said no. Check the API key."}
@@ -7136,7 +7478,7 @@ def settings_save(new):
     if cfg.get("plex"):
         t = settings_test("plex", dict(cfg["plex"]))
         if t.get("machine"): cfg["plex"]["machine"] = t["machine"]
-        cfg["plex"].setdefault("public", "https://app.plex.tv")
+        if (cfg["plex"].get("kind") or "plex") == "plex": cfg["plex"].setdefault("public", "https://app.plex.tv")
     tmp = CONFIG_FILE + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f: json.dump(cfg, f, indent=1)
@@ -7171,6 +7513,7 @@ def area_of(chk, kind):
     if chk == "missing": return "sync" if kind == "gaps" else "integrity"
     if chk == "dupes": return "metadata" if kind == "mismatch" else "dupes"
     if chk == "quality": return "quality"
+    if chk == "meta" and kind == "namingtags": return None          # v0.3.4: cosmetic tags only, not a gap
     if chk == "meta": return "sync" if kind in SYNC_KINDS else "metadata"
     if chk in ("subs", "coming"): return "metadata"
     if chk in ("queue", "apps"): return "sync"

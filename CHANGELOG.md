@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.4 (beta)
+
+- **Naming check (new, under Metadata gaps).** Finds file names that no longer match your Radarr/Sonarr naming format, using Radarr's and Sonarr's own rename preview: a title or year that changed, episodes still called "Episode 1" when Sonarr knows the real title, or a temporary name Tdarr left behind. **Rename** asks Radarr/Sonarr to rename them with your own format (subtitles and other side files move too), then refreshes that folder in Plex, so watch history is kept.
+  - When a season's episode names have all moved along by one (the new name of each episode is the old name of the next), it says the episodes may be out of order (a different episode list, e.g. a special counted as an episode) and doesn't offer Rename: renaming would put the wrong titles on every file.
+  - Names that only differ in tags (h264 after Tdarr made it h265, a streaming tag your format dropped) are summed up in **one** card you can rename in one go or ignore. They don't lower the health score.
+  - A rename that would turn a real title into "Episode 5" or "TBA" is skipped.
+- **Unwatched check with Tracearr** ([#3](https://github.com/spikey1965/library-doctor/issues/3)). [Tracearr](https://github.com/connorgallopo/Tracearr) (2.8 or newer) can now do the job Tautulli does: add it under **Settings → Optional apps** (address + API key from Tracearr → Settings → Data & API → API) and the Unwatched check reads who watched what from it. Because Tracearr follows Plex, Jellyfin and Emby, **the Unwatched check now works on Jellyfin and Emby too**, not just Plex. Films and shows are matched by their IMDb, TMDB or TVDB id, so plays on one server count for the same title on another. If you have Tautulli as well, Tracearr is used (it covers all three servers); remove Tracearr in Settings to go back to Tautulli.
+  - The Test button tells a wrong key apart from an address that isn't Tracearr.
+  - Jellyfin and Emby items now carry the date they were added, so "in the library for at least 90 days" works on those servers too.
+
+- **Switching media server asks first** ([#4](https://github.com/spikey1965/library-doctor/issues/4)). Library Doctor checks one media server at a time. Clicking Plex, Jellyfin or Emby in Settings and pressing Save used to replace the saved one without a word. Now the Media server section says what will happen as soon as you switch ("Saving replaces your Plex settings"), and Save asks before replacing it. Cancel keeps everything as it was.
+
+- **Fewer false "Some errors" cards from the quick test** (found on the first full nightly pass, 3,600 files, where all 13 cards were false alarms):
+  - **Sound errors are double-checked.** Jumping into the middle of a sound track often gives one bad frame (EAC3 "exponent out-of-range / error decoding the audio block", MP3 "Header missing"). When the only errors in a quick test come from the sound, Library Doctor now plays the whole sound track (a few seconds for most files). Three tiny blips or fewer = fine, no card. A file whose sound really is damaged still gets its card, with the real count.
+  - **Dolby Vision:** "Multiple Dolby Vision RPUs found in one AU" is a notice, not damage, and no longer counts (quick test and deep check).
+  - **Tdarr health-check errors** become "check first" (Check, with Deep check) instead of "damaged" when Library Doctor's own quick test of the same file plays cleanly, or when the video is AV1: NVIDIA graphics cards before the RTX 30 series can't decode AV1, so Tdarr's GPU health check fails on good AV1 files.
+
+- **No more "Plex says 2024, Radarr says 2026" cards for the same film.** When Plex and Radarr have matched the same film (same TMDB and IMDb id), a different year only means each shows a different date (festival premiere, a one-off screening, the cinema or streaming release), and Refresh can't change it. Those cards are gone; a year card now only appears if the IMDb ids disagree too.
+
+- **Fix: "Open in Jellyfin" / "Open in Emby" buttons went to Plex's website** when the "address for the Open buttons" box was left empty: Library Doctor filled in Plex's web address for every media server. An empty box now means your Jellyfin/Emby server's own address, and a Plex address saved by mistake is cleared.
+
+- **Replace no longer fetches the same bad release again.** Replace (broken, damaged, too short or reported in Seerr) now blocks the release the file came from in Radarr/Sonarr before it searches, like the wrong-language Replace already did, so they pick a different release instead of downloading the same faulty one. If the file was renamed since it was imported (a Tdarr conversion or a naming fix), the last release imported for that film or episode is blocked. The card says when it did.
+
+- **Discord:** there's now a [Library Doctor Discord](https://discord.gg/rmuKypgFgB) for setup help, ideas and release news (linked in the footer of every page). Bugs are still best reported on GitHub.
+
 ## 0.3.3 (beta)
 
 - Small footer at the bottom of every page: a GitHub ⭐ link, Buy me a coffee and Report a problem. Nothing else changes.
