@@ -21,7 +21,7 @@
   </picture>
 </p>
 
-<p align="center"><img src="assets/tour.gif" width="880" alt="A quick tour of Library Doctor with a made-up library: the main screen, a dubbed film found by File Health, a stuck download with its reason, duplicates with editions, and Settings with the Plex, Jellyfin or Emby picker"></p>
+<p align="center"><img src="assets/tour.gif" width="880" alt="A quick tour of Library Doctor with a made-up library: the main screen, a damaged film found by File Health, a problem someone reported in Seerr, duplicates with which copy to keep, the naming check with Rename, a stuck download with its reason, and Settings asking before it switches media server"></p>
 
 ## What it checks
 
