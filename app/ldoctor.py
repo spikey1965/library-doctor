@@ -27,19 +27,27 @@ is inside MEDIA_ROOT, never moves the kept file, and never leaves an item with n
 Standard library only.
 """
 import calendar
-import errno, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, threading, time, urllib.parse, urllib.request
+import base64, errno, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 import http.cookiejar as _cookiejar
 import xml.etree.ElementTree as _ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie        # imported by name: this file has its own http() function
 
-APP_VERSION = "0.3.4"
+APP_VERSION = "0.4.0"
 CONFIG_DIR = os.environ.get("LD_CONFIG", "/config")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(CONFIG_DIR, "ldoctor.db")
 LISTEN = os.environ.get("LD_LISTEN", "0.0.0.0")
 PORT = int(os.environ.get("LD_PORT", "8790"))
+# v0.4.0: several media servers. "server" = a child process for one extra media server, started by the main one.
+IS_CHILD = os.environ.get("LD_ROLE", "main") == "server"
+PHONE_APP = os.environ.get("LD_PHONE_APP", "0") == "1"      # v0.4.0: phone pairing, off until the app is in the stores
+INTERNAL_TOKEN = os.environ.get("LD_INTERNAL_TOKEN", "")
+SERVER_ID = os.environ.get("LD_SERVER_ID", "main")
+SERVER_LABEL = os.environ.get("LD_SERVER_LABEL", "")
+PRIMARY_DB = os.environ.get("LD_PRIMARY_DB", "")
+SERVER_CHKS = ("missing", "dupes", "meta", "unwatched")   # cards about the media server itself: a child always keeps these
 SCAN_HOUR = int(os.environ.get("LD_SCAN_HOUR", "3"))   # default; the Settings page can set time + days (v0.1.3)
 MEDIA_ROOT = os.path.realpath(os.environ.get("LD_MEDIA_ROOT", "/media"))
 TRASH_NAME = ".library-doctor-trash"
@@ -276,7 +284,7 @@ def redact(s):
     return _URL_SECRET_RE.sub(lambda m: (m.group(1) or m.group(2)) + "***", s)
 
 def log(msg):
-    print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), redact(msg), flush=True)
+    print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ("[%s] " % SERVER_LABEL if IS_CHILD and SERVER_LABEL else "") + redact(msg), flush=True)
 
 def now_iso():
     return datetime.now().isoformat(timespec="seconds")
@@ -332,6 +340,14 @@ def init_db():
             c.execute("ALTER TABLE done ADD COLUMN ref TEXT")
         if "until" not in [r[1] for r in c.execute("PRAGMA table_info(ignored)")]:
             c.execute("ALTER TABLE ignored ADD COLUMN until TEXT")      # Unwatched "Keep": back on the list after this date; NULL = for good
+        # v0.3.5 "learns what you ignore": each Ignore remembers what KIND of card it was; after a few of the same kind LD asks
+        # whether to hide that kind from now on. learned.state: ask (waiting for an answer), on (hiding), no (keep showing, don't ask again)
+        c.execute("CREATE TABLE IF NOT EXISTS learn_log (id TEXT PRIMARY KEY, sig TEXT, at TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS learned (sig TEXT PRIMARY KEY, label TEXT, state TEXT, seen INTEGER, created TEXT, decided TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS learn_keep (id TEXT PRIMARY KEY, at TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS devices (id INTEGER PRIMARY KEY, name TEXT, platform TEXT, h TEXT UNIQUE, created TEXT, last_seen TEXT, ip TEXT)")   # v0.4.0 phone app
+        try: c.execute("ALTER TABLE devices ADD COLUMN push TEXT")          # v0.4.0 stage 4: Expo push token (NULL = no notifications)
+        except sqlite3.OperationalError: pass   # cards you brought back by hand: rules leave them alone
         for t in ("quick", "deep"):                                     # v0.3.3: where the file really stops (seconds), when it ends early
             if "ends" not in [r[1] for r in c.execute("PRAGMA table_info(%s)" % t)]:
                 c.execute("ALTER TABLE %s ADD COLUMN ends REAL" % t)
@@ -339,9 +355,160 @@ def init_db():
 SNOOZE_DAYS = int(os.environ.get("LD_SNOOZE_DAYS", "30"))
 
 def hidden_ids(c):
-    """Ignored issues plus ones snoozed after a search that found nothing better yet (still inside their 30 days)."""
+    """Ignored issues plus ones snoozed after a search that found nothing better yet (still inside their 30 days),
+    plus (v0.3.5) cards hidden by a rule you said yes to, plus (v0.4.0-pre7) cards you ignored on another media server."""
     now = now_iso()
-    return {r["id"] for r in c.execute("SELECT id FROM ignored")} | {r["id"] for r in c.execute("SELECT id FROM snoozed WHERE until > ?", (now,))}
+    return ({r["id"] for r in c.execute("SELECT id FROM ignored")} | {r["id"] for r in c.execute("SELECT id FROM snoozed WHERE until > ?", (now,))}
+            | set(learned_hidden(c)) | shared_ignored(c))
+
+# ---- v0.4.0-pre7: an Ignore counts on every media server -------------------------------------------------------------
+# Card ids differ between servers (they come from each server's own item numbers), so cards are matched by what they're
+# about: the file, or the Radarr/Sonarr item for a whole show or film.
+def card_keys(chk, detail):
+    d = detail if isinstance(detail, dict) else {}
+    kind, out = d.get("kind") or "", set()
+    if d.get("path"): out.add("%s|%s|f|%s" % (chk, kind, d["path"]))
+    refs = d.get("refs") or d.get("ref") or []
+    for r in (refs if isinstance(refs, list) else [refs]):
+        if isinstance(r, dict) and r.get("arr") and r.get("id") is not None and not d.get("path"):
+            out.add("%s|%s|a|%s|%s|%s" % (chk, kind, r.get("arr"), r.get("kind") or "", r.get("id")))
+    return out
+
+_SHARED = {"at": 0, "keys": set()}
+
+def _other_dbs():
+    root = os.path.dirname(PRIMARY_DB) if IS_CHILD and PRIMARY_DB else CONFIG_DIR
+    dbs = [PRIMARY_DB] if IS_CHILD and PRIMARY_DB else []
+    sd = os.path.join(root, "servers")
+    if os.path.isdir(sd):
+        dbs += [os.path.join(sd, x, "ldoctor.db") for x in sorted(os.listdir(sd))]
+    me = os.path.realpath(DB_PATH)
+    return [p for p in dbs if p and os.path.isfile(p) and os.path.realpath(p) != me]
+
+def _shared_keys():
+    if time.time() - _SHARED["at"] < 30: return _SHARED["keys"]
+    keys, now = set(), now_iso()
+    for p in _other_dbs():
+        try:
+            oc = sqlite3.connect("file:%s?mode=ro" % p, uri=True, timeout=5)
+            try:
+                for chk, det in oc.execute("SELECT i.chk, i.detail FROM issues i JOIN ignored g ON g.id = i.id WHERE g.until IS NULL OR g.until > ?", (now,)):
+                    try: keys |= card_keys(chk, json.loads(det or "{}"))
+                    except Exception: pass
+            finally: oc.close()
+        except Exception as e: log("couldn't read the Ignores of another server (%s): %r" % (os.path.basename(os.path.dirname(p)) or "main", e))
+    _SHARED.update(at=time.time(), keys=keys)
+    return keys
+
+def shared_ignored(c):
+    keys = _shared_keys()
+    if not keys: return set()
+    out = set()
+    for r in c.execute("SELECT id, chk, detail FROM issues"):
+        try:
+            if card_keys(r["chk"], json.loads(r["detail"] or "{}")) & keys: out.add(r["id"])
+        except Exception: pass
+    return out
+
+# ---- v0.3.5: learns what you ignore -------------------------------------------------------------------------------
+LEARN_AFTER = max(2, int(os.environ.get("LD_LEARN_AFTER", "3")))   # Ignores of the same kind of card before LD asks
+LEARN_CHK = {"dupes", "meta", "health", "quality"}                 # never: missing files, viruses, downloads, app warnings, one-off summary cards
+LEARN_LABELS = {
+    ("quality", "hog"): "Big files", ("quality", "odd"): "Episodes in lower quality than the rest of their season",
+    ("quality", "remux"): "Remux files (large untouched copies)", ("quality", "mixedalbum"): "Albums with mixed quality",
+    ("quality", "group"): "Release group cards",
+    ("health", "corrupt", "tdarr"): "Tdarr warnings (not confirmed damaged)", ("health", "corrupt", "quick"): "\"Some errors\" from the quick test",
+    ("health", "corrupt", "deep"): "\"Some errors\" from the deep check", ("health", "lang"): "Audio in another language",
+    ("health", "track"): "Music tracks with errors",
+    ("dupes", "mismatch"): "Duplicates with different versions", ("dupes", "double"): "Files listed twice", ("dupes", "albumdupe"): "Duplicate albums",
+    ("meta", "notsportarr"): "Files Sportarr doesn't know",
+}
+
+def card_sig(chk, sev, detail, library):
+    """(signature, plain-English label) for the kind of card this is, or None if this kind is never learned.
+    Damaged files (sev bad / confidence sure) are never hidden by a rule."""
+    if sev == "bad" or chk not in LEARN_CHK: return None
+    d = detail if isinstance(detail, dict) else {}
+    if d.get("confidence") == "sure": return None
+    kind = str(d.get("kind") or "")
+    src = str((d.get("deep") or {}).get("src") or "deep") if chk == "health" and kind == "corrupt" else ""
+    base = LEARN_LABELS.get((chk, kind, src)) or LEARN_LABELS.get((chk, kind)) or (CHK_NAMES.get(chk, chk)[:1].upper() + CHK_NAMES.get(chk, chk)[1:] + " cards")
+    return "|".join((chk, kind, src, library or "")), base + (" in " + library if library else "")
+
+_LEARN_CACHE = {"k": None, "v": {}}
+def learned_hidden(c):
+    """{issue id: rule sig} for open cards a rule hides. Cached until the cards, the rules or the brought-back list change."""
+    try:
+        on = frozenset(r["sig"] for r in c.execute("SELECT sig FROM learned WHERE state='on'"))
+        if not on: return {}
+        keep = frozenset(r["id"] for r in c.execute("SELECT id FROM learn_keep"))
+        k = (on, keep, tuple(c.execute("SELECT count(*), max(last_seen), max(rowid) FROM issues").fetchone()))
+        if _LEARN_CACHE["k"] == k: return _LEARN_CACHE["v"]
+        out = {}
+        for r in c.execute("SELECT id, chk, sev, library, detail FROM issues"):
+            if r["id"] in keep or r["chk"] not in LEARN_CHK or r["sev"] == "bad": continue
+            try: sg = card_sig(r["chk"], r["sev"], json.loads(r["detail"] or "{}"), r["library"])
+            except Exception: sg = None
+            if sg and sg[0] in on: out[r["id"]] = sg[0]
+        _LEARN_CACHE.update(k=k, v=out)
+        return out
+    except sqlite3.OperationalError:          # tables not there yet (very first start)
+        return {}
+
+def learn_note(c, issue_id):
+    """You pressed Ignore (for good) on this card: remember its kind; on the LEARN_AFTER-th of a kind, ask about a rule."""
+    r = c.execute("SELECT chk, sev, library, detail FROM issues WHERE id=?", (issue_id,)).fetchone()
+    if not r: return None
+    try: sg = card_sig(r["chk"], r["sev"], json.loads(r["detail"] or "{}"), r["library"])
+    except Exception: sg = None
+    if not sg: return None
+    sig, label = sg
+    c.execute("INSERT OR REPLACE INTO learn_log (id, sig, at) VALUES (?,?,?)", (issue_id, sig, now_iso()))
+    n = c.execute("SELECT count(*) FROM learn_log WHERE sig=?", (sig,)).fetchone()[0]
+    if c.execute("SELECT 1 FROM learned WHERE sig=?", (sig,)).fetchone():
+        c.execute("UPDATE learned SET seen=?, label=? WHERE sig=?", (n, label, sig))
+    elif n >= LEARN_AFTER:
+        c.execute("INSERT INTO learned (sig, label, state, seen, created) VALUES (?,?,?,?,?)", (sig, label, "ask", n, now_iso()))
+    return sig
+
+def learn_unnote(c, issue_id):
+    """Stop ignoring: forget that Ignore, and if a rule would still hide the card, let this one card show."""
+    row = c.execute("SELECT sig FROM learn_log WHERE id=?", (issue_id,)).fetchone()
+    c.execute("DELETE FROM learn_log WHERE id=?", (issue_id,))
+    if row:
+        c.execute("UPDATE learned SET seen=(SELECT count(*) FROM learn_log WHERE sig=?) WHERE sig=?", (row["sig"], row["sig"]))
+    if issue_id in learned_hidden(c):
+        c.execute("INSERT OR REPLACE INTO learn_keep (id, at) VALUES (?,?)", (issue_id, now_iso()))
+
+def learn_backfill():
+    """First start of v0.3.5: learn from the Ignores you already made (cards still listed, ignored for good)."""
+    if kv_get("learn_backfill"): return
+    with db() as c:
+        ids = [r["id"] for r in c.execute("SELECT id FROM ignored WHERE until IS NULL AND id IN (SELECT id FROM issues)")]
+        n = sum(1 for i in ids if learn_note(c, i))
+    kv_set("learn_backfill", now_iso())
+    if n: log("learn: remembered %d earlier Ignore%s" % (n, "" if n == 1 else "s"))
+
+def learn_rules():
+    with db() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM learned ORDER BY created")]
+        hid = learned_hidden(c)
+    for r in rows:
+        r["hidden"] = sum(1 for v in hid.values() if v == r["sig"])
+    return rows
+
+def learn_set(sig, do):
+    with db() as c:
+        r = c.execute("SELECT label, state FROM learned WHERE sig=?", (sig,)).fetchone()
+        if not r: return {"ok": False, "error": "That rule isn't there any more."}
+        if do in ("on", "no"):
+            c.execute("UPDATE learned SET state=?, decided=? WHERE sig=?", (do, now_iso(), sig))
+        elif do == "forget":                                  # start again: counts from zero, may ask again later
+            c.execute("DELETE FROM learned WHERE sig=?", (sig,)); c.execute("DELETE FROM learn_log WHERE sig=?", (sig,))
+        else:
+            return {"ok": False, "error": "Unknown choice."}
+    event("learn", {"on": "Hiding from now on: %s.", "no": "Showing again and not asking: %s.", "forget": "Forgot the rule: %s."}[do] % r["label"])
+    return {"ok": True}
 
 def snooze(c, issue_id, title, days=None, count=True):
     old = c.execute("SELECT searches FROM snoozed WHERE id=?", (issue_id,)).fetchone()
@@ -459,16 +626,21 @@ def _jf_send(p, method, path, params=None, body=None, timeout=60):
                                  data=json.dumps(body).encode() if body is not None else b"")
     with urllib.request.urlopen(req, timeout=timeout) as r: return r.status, r.read()
 
-def _jf_res(h):
-    h = int(h or 0)
-    return "4k" if h >= 1600 else "1080" if h >= 900 else "720" if h >= 650 else "576" if h >= 540 else "480" if h >= 400 else "sd" if h else ""
+RES_ORDER = ["", "sd", "480", "576", "720", "1080", "4k"]
+
+def _jf_res(h, w=0):
+    """v0.4.0-pre7: like Plex, a widescreen film counts by its width too (1920x800 is 1080p, 1280x536 is 720p)."""
+    h, w = int(h or 0), int(w or 0)
+    by_h = "4k" if h >= 1600 else "1080" if h >= 900 else "720" if h >= 650 else "576" if h >= 540 else "480" if h >= 400 else "sd" if h else ""
+    by_w = "4k" if w >= 3200 else "1080" if w >= 1800 else "720" if w >= 1200 else "576" if w >= 1000 else ""
+    return max(by_h, by_w, key=RES_ORDER.index)
 
 def _jf_media(src):
     vs = next((s for s in src.get("MediaStreams") or [] if s.get("Type") == "Video"), {})
     au = next((s for s in src.get("MediaStreams") or [] if s.get("Type") == "Audio"), {})
     dur = int((src.get("RunTimeTicks") or 0) / 10000)
     return {"id": src.get("Id"), "duration": dur, "bitrate": int((src.get("Bitrate") or 0) / 1000),
-            "width": vs.get("Width") or 0, "height": vs.get("Height") or 0, "videoResolution": _jf_res(vs.get("Height")),
+            "width": vs.get("Width") or 0, "height": vs.get("Height") or 0, "videoResolution": _jf_res(vs.get("Height"), vs.get("Width")),
             "videoCodec": (vs.get("Codec") or "").lower(), "audioCodec": (au.get("Codec") or "").lower(), "container": src.get("Container") or "",
             "Part": [{"file": src.get("Path") or "", "size": src.get("Size") or 0, "duration": dur, "container": src.get("Container") or ""}]}
 
@@ -568,10 +740,51 @@ def jf_request(p, method, path, params, headers, timeout, raw):
 def plex(path, **params):
     return map_in(ms_request("GET", path, params)["MediaContainer"], S["plex"])
 
+_PLEX_AUTO_BK = {"at": 0, "v": None}
+
+def plex_auto_backup():
+    """Plex's own scheduled "Backup Database" task: {"every": days} when it's on, None when off/unknown. Cached 1 h."""
+    if ms_kind() != "plex" or not (S.get("plex") or {}).get("url"): return None
+    if time.time() - _PLEX_AUTO_BK["at"] < 3600: return _PLEX_AUTO_BK["v"]
+    v = None
+    try:
+        for t in (ms_request("GET", "/butler", timeout=5).get("ButlerTasks") or {}).get("ButlerTask") or []:
+            if t.get("name") == "BackupDatabase" and t.get("enabled"): v = {"every": t.get("interval") or 3}
+    except Exception as e:
+        log("plex butler check failed: %r" % e); _PLEX_AUTO_BK["at"] = time.time() - 3000; return _PLEX_AUTO_BK["v"]   # retry in 10 min, don't slow every page load
+    _PLEX_AUTO_BK.update(at=time.time(), v=v)
+    return v
+
+def plex_backing_up():
+    """True: Plex is backing up its database now. False: it isn't. None: Plex didn't answer within 5 s."""
+    if ms_kind() != "plex" or not (S.get("plex") or {}).get("url"): return False
+    try:
+        acts = (ms_request("GET", "/activities", timeout=5).get("MediaContainer") or {}).get("Activity") or []
+    except Exception:
+        return None
+    return any("backup" in str(a.get("type", "")).lower() or str(a.get("title", "")).lower() in ("database", "backing up database")
+               for a in acts)
+
+# clean-ups that move files / talk to Plex a lot: not while Plex is backing up (11-27 outage)
+PLEX_BUSY_BLOCK = ("/api/replace", "/api/cleanup", "/api/metafix", "/api/fixdouble", "/api/plextidy", "/api/plexsplit",
+                   "/api/purge", "/api/albumclean", "/api/smaller")
+PLEX_NEEDED = ("/api/metafix", "/api/fixdouble", "/api/plextidy", "/api/plexsplit")
+
+def plex_busy_reason(path):
+    if path not in PLEX_BUSY_BLOCK or ms_kind() != "plex": return ""
+    b = plex_backing_up()
+    if b: return "Plex is backing up its database right now. Wait a few minutes until it finishes, then try again. Nothing was changed."
+    if b is None and path in PLEX_NEEDED:
+        return "Plex isn't answering at the moment, so nothing was changed. Check Plex is running, then try again."
+    return ""
+
 def plex_backup():
     """v0.1.5: ask Plex to run its own "Back up database" task now (Plex keeps the copy in its Databases folder)."""
     p = S.get("plex") or {}
     if not p.get("url"): return {"ok": False, "error": "Plex isn't set up."}
+    b = plex_backing_up()
+    if b: return {"ok": False, "error": "Plex is already backing up its database. Give it a few minutes"}
+    if b is None: return {"ok": False, "error": "Plex isn't answering, so no backup was started"}
     try:
         ms_request("POST", "/butler/BackupDatabase", timeout=20)
         kv_set("plex_backup_at", now_iso()); event("backup", "Asked Plex to back up its database.")
@@ -744,6 +957,24 @@ def plex_open(rk, issue_id=None, done_id=None):
     if not hit: return None
     log("plex-open: item %s is now %s" % (rk, hit["ratingKey"]))
     return plex_link(hit["ratingKey"])["url"]
+
+def plex_app_urls(ids):
+    """v0.3.6: {id: watch.plex.tv address} for items Plex has matched. Phones open these in the Plex app; anything missing keeps the normal link."""
+    ids = [x for x in dict.fromkeys(str(i) for i in ids) if x.isdigit()][:60]
+    if not ids or ms_kind() != "plex" or not ((S.get("plex") or {}).get("public") or "https://app.plex.tv").startswith("https://app.plex.tv"): return {}
+    out, ok = {}, lambda s: isinstance(s, str) and re.fullmatch(r"[\w-]{1,200}", s)
+    try: rows = plex("/library/metadata/" + ",".join(ids)).get("Metadata", [])
+    except Exception as e: log("plex-app lookup failed: %r" % e); return {}
+    for m in rows:
+        rk, t, u = str(m.get("ratingKey")), m.get("type"), None
+        if t == "movie" and ok(m.get("slug")): u = "movie/" + m["slug"]
+        elif t == "show" and ok(m.get("slug")): u = "show/" + m["slug"]
+        elif t == "season" and ok(m.get("parentSlug")): u = "show/" + m["parentSlug"]
+        elif t == "episode" and ok(m.get("grandparentSlug")):
+            u, se, ep = "show/" + m["grandparentSlug"], m.get("parentIndex"), m.get("index")
+            if isinstance(se, int) and isinstance(ep, int) and se > 0 and ep > 0: u += "/season/%d/episode/%d" % (se, ep)
+        if u and rk in ids: out[rk] = "https://watch.plex.tv/" + urllib.parse.quote(u)
+    return out
 
 def plex_find_by_files(paths):
     """The Plex film or episode that now holds one of these files (after Plex merged or re-added it), or None."""
@@ -1095,6 +1326,8 @@ def scan():
                 except Exception: ep_files[k] = set()
             return ep_files[k]
         sections = [d for d in plex("/library/sections").get("Directory", []) if d.get("type") in ("movie", "show")]
+        try: kv_set("ms_roots", sorted({l["path"].rstrip("/") for d in sections for l in d.get("Location", []) if l.get("path")}))   # v0.4.0
+        except Exception as e: log("library folders not saved: %r" % e)
         libstat = {}                                           # v0.1.9 Analysis: size, resolution and codec per library
         for si, sec in enumerate(sections):
             lib, kind = sec["title"], sec["type"]
@@ -1150,7 +1383,8 @@ def scan():
                             elif kind == "movie" and has_arrs("radarr"):
                                 note = "Not in Radarr."
                             issues.append(dict(id=iid("missing", f), chk="missing", sev="bad", title=title, library=lib,
-                                               detail={"text": "Plex lists a file that isn't on the disk.", "path": f, "note": note, "size": human(p.get("size"))},
+                                               detail={"text": "Plex lists a file that isn't on the disk.", "path": f, "note": note, "size": human(p.get("size")),
+                                                       "kind": "msmissing", "ref": {"section": str(sec["key"]), "rk": str(m["ratingKey"])}},
                                                links=links))
                 # copies that are really on disk and not in our trash
                 live = [md for md in medias if md.get("Part") and all(os.path.exists(x.get("file", "")) and x.get("file") not in trashed
@@ -1214,11 +1448,11 @@ def scan():
         except Exception as e:
             log("file health check failed: %r" % e)
         try:
-            issues += groups_scan(movies, series)                     # v0.1.7: release groups to avoid
+            issues += [] if IS_CHILD else groups_scan(movies, series)                     # v0.1.7: release groups to avoid
         except Exception as e:
             log("release group check failed: %r" % e)
         try:
-            issues += gaps_scan(series)                               # v0.1.6: season gaps
+            issues += [] if IS_CHILD else gaps_scan(series)                               # v0.1.6: season gaps
         except Exception as e:
             log("season gaps check failed: %r" % e)
         try:
@@ -1226,11 +1460,11 @@ def scan():
         except Exception as e:
             log("language check failed: %r" % e)
         try:
-            issues += virus_scan(sections, movies, series, trashed, started)
+            issues += [] if IS_CHILD else virus_scan(sections, movies, series, trashed, started)
         except Exception as e:
             log("virus check failed: %r" % e)
         try:
-            issues += subs_scan(movies, series, trashed)
+            issues += [] if IS_CHILD else subs_scan(movies, series, trashed)
         except Exception as e:
             log("subtitle check failed: %r" % e)
         try:
@@ -1238,7 +1472,7 @@ def scan():
         except Exception as e:
             log("metadata check failed: %r" % e)
         try:
-            issues += naming_scan(sections)                  # v0.3.4: file names that don't follow your Radarr/Sonarr naming
+            issues += [] if IS_CHILD else naming_scan(sections)                  # v0.3.4: file names that don't follow your Radarr/Sonarr naming
         except Exception as e:
             log("naming check failed: %r" % e)
         sizes = {}
@@ -1246,15 +1480,15 @@ def scan():
             q, sizes = quality_scan(sections, movies, series, trashed); issues += q
             try: monitor_state(q)                             # v32: Monitor button where Sonarr/Radarr won't upgrade by itself
             except Exception as e: log("monitor check failed: %r" % e)
-            try: issues += queue_cards()                      # v33: Downloads (Radarr/Sonarr queues)
+            try: issues += [] if IS_CHILD else queue_cards()                      # v33: Downloads (Radarr/Sonarr queues)
             except Exception as e: log("queue check failed: %r" % e)
-            try: issues += apps_cards()                       # v0.1.5: App health
+            try: issues += [] if IS_CHILD else apps_cards()                       # v0.1.5: App health
             except Exception as e: log("app health check failed: %r" % e)
         except Exception as e:
             log("quality check failed: %r" % e)
         try:
             skip = {p for it in issues if it["chk"] == "quality" and it["detail"].get("kind") == "hog" for p in it["detail"].get("tdarr_paths", [])}
-            issues += tdarr_missed_scan(trashed, skip)
+            issues += [] if IS_CHILD else tdarr_missed_scan(trashed, skip)
         except Exception as e:
             log("tdarr missed check failed: %r" % e)
         try:
@@ -1262,17 +1496,17 @@ def scan():
         except Exception as e:
             log("unwatched check failed: %r" % e)
         try:
-            issues += sports_scan(sections, sport, sport_roots, trashed)
+            issues += [] if IS_CHILD else sports_scan(sections, sport, sport_roots, trashed)
         except Exception as e:
             log("sportarr check failed: %r" % e)
         try: issues += plex_music_scan(trashed)                           # v0.3: Plex music libraries
         except Exception as e: log("plex music check failed: %r" % e)
-        try: issues += lidarr_scan(trashed)                               # v0.3: Lidarr step 1
+        try: issues += [] if IS_CHILD else lidarr_scan(trashed)                               # v0.3: Lidarr step 1
         except Exception as e: log("lidarr check failed: %r" % e)
-        try: issues += seerr_scan(issues, sections, movies, series)      # v0.2.3: Seerr reports + "requested by"
+        try: issues += [] if IS_CHILD else seerr_scan(issues, sections, movies, series)      # v0.2.3: Seerr reports + "requested by"
         except Exception as e: log("seerr check failed: %r" % e)
         STATE.update(step="Checking Radarr files", progress=0.95)
-        for a, m, path, size in arr_files:
+        for a, m, path, size in ([] if IS_CHILD else arr_files):
             if not os.path.exists(path) and path not in trashed:
                 issues.append(dict(id=iid("arrmissing", a["name"], path), chk="missing", sev="bad",
                                    title="%s (%s)" % (m.get("title"), m.get("year", "?")), library=a["name"],
@@ -1287,6 +1521,15 @@ def scan():
             issues = [it for it in issues if not (it["chk"] == "missing" and it["detail"].get("kind") != "gaps")]
             note = "Suspect: %d of %d files looked missing, which usually means a folder mapping problem, so they aren't shown. Check Settings → Folder check." % (len(miss), n_files)
             log(note)
+        if IS_CHILD and PRIMARY_DB and os.path.isfile(PRIMARY_DB):          # v0.4.0: the main server's cards win
+            try:
+                pc = sqlite3.connect("file:%s?mode=ro" % PRIMARY_DB, uri=True, timeout=10)
+                try: main_ids = {r[0] for r in pc.execute("SELECT id FROM issues")}
+                finally: pc.close()
+                before = len(issues)
+                issues = [it for it in issues if it["chk"] in SERVER_CHKS or it["id"] not in main_ids]
+                if before != len(issues): log("%d card%s already shown for the main server" % (before - len(issues), "" if before - len(issues) == 1 else "s"))
+            except Exception as e: log("couldn't compare with the main server: %r" % e)
         finished = now_iso()
         with db() as c:
             sid = c.execute("INSERT INTO scans (started, finished, ok, items, files, issues, note) VALUES (?,?,?,?,?,?,?)",
@@ -1588,7 +1831,7 @@ def _restore_followup(t):
                     told = a["name"]; break
     except Exception as e:
         log("restore: couldn't ask Radarr/Sonarr to rescan %s: %r" % (t["src"], e))
-    if d and d["status"] in ("waiting", "checking") and "(replaced)" in (t["reason"] or ""):
+    if d and d["status"] in ("waiting", "checking", "monitored") and "(replaced)" in (t["reason"] or ""):
         note = "You put the file back, so Library Doctor stopped waiting for a new copy." + \
                (" %s was asked to rescan; if it already grabbed a new copy, that still arrives." % told if told else "")
         with db() as c:
@@ -1620,7 +1863,7 @@ def purge_check(t):
         d = c.execute("SELECT * FROM done WHERE issue_id=? ORDER BY id DESC LIMIT 1", (t["issue_id"],)).fetchone() if t["issue_id"] else None
     if "(replaced)" in r:
         if not d: return "there's no record of a new copy arriving"
-        if d["status"] in ("waiting", "checking"): return "its new copy hasn't arrived yet"
+        if d["status"] in ("waiting", "checking", "monitored"): return "its new copy hasn't arrived yet"
         if d["status"] != "ok": return "its new copy had a problem: %s" % (d["note"] or "")[:120]
         if (d["note"] or "").startswith("Removed from"): return None              # you removed the film/show yourself
         try:
@@ -1907,8 +2150,60 @@ def season_posters(sh, seasons, lib, sec):
     return [_meta("seasonposters", lib, sh["ratingKey"], sh.get("title") or "?", "att",
                   "%d season%s show a blank poster in Plex: no poster is picked for %s." % (len(bad), "" if len(bad) == 1 else "s", "it" if len(bad) == 1 else "them"),
                   "Pick posters chooses the top poster Plex already has for each season (from TMDB). You can still change it in Plex afterwards."
-                  if ms_kind() == "plex" else "Refresh asks %s to look for posters again. If none turns up, pick one on the show's page in %s (Edit images)." % (ms_name(), ms_name()),
-                  ["posters", "refresh"] if ms_kind() == "plex" else ["refresh"], [plex_link(sh["ratingKey"])], section=sec, seasons=bad)]
+                  if ms_kind() == "plex" else "Use the show's poster puts the show's own poster on these seasons, which is what most apps show for a season without one. "
+                  "Refresh asks %s to look for season posters again (often there are none online). You can change any of them on the show's page (Edit images)." % ms_name(),
+                  ["posters", "refresh"] if ms_kind() == "plex" else ["showposter", "refresh"], [plex_link(sh["ratingKey"])], section=sec, seasons=bad)]
+
+def _noposter(lib, rk, title, links, sec, m, mtype):
+    """v0.4.0-pre8: on Jellyfin/Emby with a Plex main server, the poster can be copied from Plex."""
+    main = bool(main_plex())
+    return _meta("noposter", lib, rk, title, "att", "No poster in Plex.",
+                 "A refresh usually fetches one. If it doesn't, Copy poster takes the poster your main server has for it." if main else "A refresh usually fetches one.",
+                 ["mainposter", "refresh"] if main else ["refresh"], links, section=sec, ids=guids(m), year=m.get("year"), mtype=mtype)
+
+# ---- v0.4.0-pre8: poster fixes for Jellyfin / Emby ------------------------------------------------------------------
+def main_plex():
+    """The main Library Doctor's Plex (url + token) when this is a Jellyfin/Emby server running beside it, else None."""
+    if not IS_CHILD or not PRIMARY_DB or ms_kind() == "plex": return None
+    try:
+        p = (json.load(open(os.path.join(os.path.dirname(PRIMARY_DB), "config.json"))) or {}).get("plex") or {}
+    except Exception: return None
+    return p if ms_kind(p) == "plex" and p.get("url") and p.get("token") else None
+
+def _jf_raw(path):
+    p = S["plex"]
+    req = urllib.request.Request(p["url"].rstrip("/") + path, headers=_jf_auth(p))
+    with urllib.request.urlopen(req, timeout=60) as r: return r.read()
+
+def _jf_set_poster(sid, img):
+    p = S["plex"]
+    ct = "image/png" if img[:8] == b"\x89PNG\r\n\x1a\n" else "image/webp" if img[8:12] == b"WEBP" else "image/jpeg"
+    req = urllib.request.Request(p["url"].rstrip("/") + "/Items/%s/Images/Primary" % sid, data=base64.b64encode(img), method="POST",
+                                 headers=dict(_jf_auth(p), **{"Content-Type": ct}))
+    with urllib.request.urlopen(req, timeout=60) as r: return r.status
+
+def _plex_main_poster(d, title):
+    """Find the same film/show in the main Plex and return its poster bytes."""
+    p = main_plex()
+    if not p: raise RuntimeError("There is no main server to copy a poster from.")
+    base, h = p["url"].rstrip("/"), {"X-Plex-Token": p["token"]}
+    want = {k: str(v) for k, v in (d.get("ids") or {}).items() if k in ("tmdb", "tvdb", "imdb") and v}
+    typ = "2" if d.get("mtype") == "show" else "1"
+    name = re.sub(r"\s*\(\d{4}\)$", "", title).strip()
+    best = None
+    for sec in http(base + "/library/sections", h).get("MediaContainer", {}).get("Directory", []):
+        if sec.get("type") != ("show" if typ == "2" else "movie"): continue
+        q = urllib.parse.urlencode({"type": typ, "includeGuids": 1, "title": name})
+        for m in http(base + "/library/sections/%s/all?%s" % (sec["key"], q), h).get("MediaContainer", {}).get("Metadata", []):
+            g = {k: v for k, v in guids(m).items()}
+            if want and any(g.get(k) == v for k, v in want.items()): best = m; break
+            if not best and (m.get("title") or "").lower() == name.lower() and (not d.get("year") or not m.get("year") or abs(int(m["year"]) - int(d["year"])) <= 1):
+                best = m
+        if best and want and any(guids(best).get(k) == v for k, v in want.items()): break
+    if not best: raise RuntimeError("Couldn't find %s in your main server." % name)
+    if not best.get("thumb"): raise RuntimeError("Your main server has no poster for %s either." % name)
+    req = urllib.request.Request(base + best["thumb"], headers=h)
+    with urllib.request.urlopen(req, timeout=60) as r: return r.read()
 
 def _meta(kind, lib, rk, title, sev, text, note, fixes, links, **extra):
     return dict(id=iid("meta", kind, lib, rk), chk="meta", sev=sev, title=title, library=lib,
@@ -1923,7 +2218,7 @@ def movie_meta(m, lib, sec, std, owners, movies, by_path):
                       paths=[pt["file"] for md in m.get("Media", []) for pt in md.get("Part", []) if pt.get("file")][:5])]
     out = []
     if not m.get("thumb"):
-        out.append(_meta("noposter", lib, rk, title, "att", "No poster in Plex.", "A refresh usually fetches one.", ["refresh"], links, section=sec))
+        out.append(_noposter(lib, rk, title, links, sec, m, "movie"))
     if not owners: return out
     files = [p.get("file") for md in m.get("Media", []) for p in md.get("Part", []) if p.get("file")]
     for f in files:
@@ -1959,7 +2254,7 @@ def show_meta(sh, eps, lib, sec, std, owners, series, sonarr_paths, sonarr_title
                       paths=[pt["file"] for e in (eps or [])[:3] for md in e.get("Media", []) for pt in md.get("Part", []) if pt.get("file")][:5])]
     out = []
     if not sh.get("thumb"):
-        out.append(_meta("noposter", lib, rk, title, "att", "No poster in Plex.", "A refresh usually fetches one.", ["refresh"], links, section=sec))
+        out.append(_noposter(lib, rk, title, links, sec, sh, "show"))
     if not owners: return out
     owner, f = None, first_file(eps)
     d = os.path.dirname(f) if f else ""
@@ -2015,7 +2310,8 @@ def _meta_left(d):
         left = [x for x in d["seasons"] if not plex_img_ok((_plex_item(x["rk"]) or {}).get("thumb"))]
         n = len(d["seasons"]) - len(left)
         return (not left, "Plex checked: all %d season posters show now." % len(d["seasons"]) if not left else
-                "%d of %d seasons have a poster now. The rest have no poster to pick from in Plex; try Refresh." % (n, len(d["seasons"])), left)
+                "%d of %d seasons have a poster now. The rest have no poster to pick from in Plex; try Refresh." % (n, len(d["seasons"]))
+                if ms_kind() == "plex" else "%d of %d seasons have a poster now. Use the show's poster for the rest." % (n, len(d["seasons"])), left)
     if k == "musicunmatched":                                  # v0.3 music
         ok = not str(m.get("guid") or "").startswith(("local://", "com.plexapp.agents.none"))
         return (ok, "%s checked: matched as %s." % (ms_name(), m.get("title")) if ok else "%s still can't match it. Use %s on the album's page." % (ms_name(), "Fix Match" if ms_kind() == "plex" else "Identify"), None)
@@ -2205,7 +2501,9 @@ def meta_fix(issue_id, how):
     if how == "rename" and d.get("kind") in ("naming", "namingtags"): return naming_fix(issue_id, row, d)     # v0.3.4
     if not str(d.get("rk", "")).isdigit() or not all(e["rk"].isdigit() for e in d.get("eps", []) + d.get("seasons", [])):
         return {"ok": False, "error": "Bad item id."}
-    note = "Copying %d titles from Sonarr\u2026" % len(d["eps"]) if how == "titles" else "Picking %d season posters\u2026" % len(d["seasons"]) if how == "posters" else "Asking Plex to refresh\u2026"
+    note = ("Copying %d titles from Sonarr\u2026" % len(d["eps"]) if how == "titles" else "Picking %d season posters\u2026" % len(d["seasons"]) if how == "posters"
+            else "Putting the show's poster on %d season%s\u2026" % (len(d["seasons"]), "" if len(d["seasons"]) == 1 else "s") if how == "showposter"
+            else "Copying the poster from your main server\u2026" if how == "mainposter" else "Asking Plex to refresh\u2026")
     with db() as c:
         c.execute("DELETE FROM done WHERE issue_id=? AND status='checking'", (issue_id,))
         done_id = c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -2243,6 +2541,18 @@ def _meta_fix(done_id, issue_id, title, d, how):
                     plex_put("/library/metadata/%s/poster?%s" % (x["rk"], urllib.parse.urlencode({"url": ps[0]["ratingKey"]}))); n += 1
             event("metadata", "%s: picked posters for %d season%s." % (title, n, "" if n == 1 else "s"))
             tries = 3
+        elif how == "showposter":                     # v0.4.0-pre8 (Jellyfin/Emby)
+            try: img = _jf_raw("/Items/%s/Images/Primary" % ms_sid(d["rk"]))
+            except urllib.error.HTTPError: raise RuntimeError("The show has no poster either. Add one on its page first.")
+            n = 0
+            for x in d["seasons"]:
+                _jf_set_poster(ms_sid(x["rk"]), img); n += 1
+            event("metadata", "%s: put the show's poster on %d season%s." % (title, n, "" if n == 1 else "s"))
+            tries = 3
+        elif how == "mainposter":                     # v0.4.0-pre8 (Jellyfin/Emby beside a Plex main server)
+            _jf_set_poster(ms_sid(d["rk"]), _plex_main_poster(d, title))
+            event("metadata", "%s: copied the poster from the main server." % title)
+            tries = 3
         elif d["kind"] == "unmatched" and _meta_left(d)[0]:
             status, note = "ok", _meta_left(d)[1]     # Plex matched it by itself in the meantime
             tries = 0
@@ -2273,7 +2583,11 @@ def _meta_fix(done_id, issue_id, title, d, how):
 # ---------------- file health (stage 3) ----------------
 BROKEN_BYTES = 5 * 1024 * 1024
 
+UNPROBED_MAX = 200
+_UNPROBED = {"n": 0, "skipped": 0}
+
 def health_scan(sections, movies, series, arr_files, trashed):
+    _UNPROBED.update(n=0, skipped=0)
     out = []
     by_path = {p: (a, m) for a, m, p, _ in arr_files}
     deep_bad = deep_findings()                                      # v0.3: files a deep check (or Tdarr) found damaged
@@ -2307,6 +2621,14 @@ def health_scan(sections, movies, series, arr_files, trashed):
                 f = parts[0]["file"]
                 if f in trashed or not os.path.isfile(f): continue
                 size, dur = os.path.getsize(f), (md.get("duration") or 0) / 60000.0
+                # v0.4.0: no length = the media server hasn't measured it (yet): Jellyfin/Emby right after adding a library.
+                # Measure it ourselves (up to UNPROBED_MAX files a scan) instead of calling it broken.
+                if size >= BROKEN_BYTES and not md.get("duration"):
+                    if _UNPROBED["n"] >= UNPROBED_MAX: _UNPROBED["skipped"] += 1; continue
+                    _UNPROBED["n"] += 1
+                    pd, _ph = _probe(f)
+                    if pd >= 60: continue
+                    dur = pd / 60.0
                 broken = size < BROKEN_BYTES or dur < 1
                 k4 = int(md.get("height") or 0) > 1440 or str(md.get("videoResolution") or "").lower() in ("4k", "2160")
                 lib_stats["files"] += 1; lib_stats["min"] += dur
@@ -2559,7 +2881,7 @@ def health_fix(issue_id):
                 moved.append(p)
             except Exception as e:
                 if p == src: return {"ok": False, "error": "Couldn't move it: %s" % e}
-        plex_refresh_folder(d.get("section"), os.path.dirname(src))
+        threading.Thread(target=plex_refresh_folder, args=(d.get("section"), os.path.dirname(src)), daemon=True).start()   # pre4: don't make the page wait on Plex
         with db() as c:
             done_id = c.execute("INSERT INTO done (issue_id, title, library, kept, moved, trash_ids, links, at, status, note, chk, ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (issue_id, row["title"], row["library"], "", json.dumps(moved), json.dumps(tids), row["links"], now_iso(),
@@ -2585,6 +2907,15 @@ def _health_search(done_id, ref, moved=None):
             item = arr(a, "/movie/%d" % int(ref["id"])) if ref["kind"] == "movie" else arr(a, "/episode/%d" % int(ref["id"]))
             has = item.get("hasFile")
             if not has: break
+        unmon_show = False
+        try:                                        # pre6: monitored, so it keeps looking after this one search
+            if ref["kind"] == "movie" and not item.get("monitored"):
+                arr(a, "/movie/editor", {"movieIds": [int(ref["id"])], "monitored": True}, "PUT")
+            elif ref["kind"] != "movie":
+                if not item.get("monitored"): arr(a, "/episode/monitor", {"episodeIds": [int(ref["id"])], "monitored": True}, "PUT")
+                unmon_show = not arr(a, "/series/%d" % int(ref["series"])).get("monitored", True)
+        except Exception as e:
+            log("replace: couldn't set monitored in %s: %r" % (a["name"], e))
         if ref["kind"] == "movie":
             arr(a, "/command", {"name": "MoviesSearch", "movieIds": [int(ref["id"])]}, "POST")
         else:
@@ -2592,7 +2923,8 @@ def _health_search(done_id, ref, moved=None):
         status = "waiting"
         note = ("Blocked the release it came from, so it won't be downloaded again. " if blocked else "") + (
                "%s is searching for a new copy. If it finds one, it downloads %s and shows up in Plex by itself." % (a["name"], dl_when()) if not has else
-               "Asked %s to search, but it still thinks it has the old file. Its next disk scan will catch up." % a["name"])
+               "Asked %s to search, but it still thinks it has the old file. Its next disk scan will catch up." % a["name"]) + (
+               " The show isn't monitored in %s, so after this search it won't pick up a copy by itself." % a["name"] if unmon_show else "")
     except Exception as e:
         note = "Moved to the trash, but couldn't ask %s to search: %s" % (ref.get("arr"), e)
     with db() as c:
@@ -3058,12 +3390,37 @@ def lidarr_fix(row, d):
         return {"ok": True, "text": "%s is rescanning %s. The missing tracks then show as wanted there." % (name, row["title"])}
     return {"ok": False, "error": "Nothing to do here."}
 
+def ms_missing_fix(row, d):
+    """Plex (or Jellyfin/Emby) lists a file that's gone, usually because it was renamed (Tdarr, an upgrade) and the
+    server missed it. Rescan just that folder, then look again: card goes if the old path has gone."""
+    sn, ref, old = ms_name(), d.get("ref") or {}, d.get("path") or ""
+    folder = os.path.dirname(old)
+    if not ref.get("section") or not plex_refresh_folder(ref["section"], folder):
+        return {"ok": False, "error": "Couldn't reach %s to ask for a rescan. Is it running?" % sn}
+    files = None
+    for _ in range(10):
+        time.sleep(3)
+        try:
+            md = (plex("/library/metadata/%s" % ref["rk"]).get("Metadata") or [{}])[0]
+            files = [p.get("file") for x in md.get("Media", []) for p in x.get("Part", []) if p.get("file")]
+        except Exception:
+            files = []          # the item itself went (nothing left on disk for it)
+        if old not in files: break
+    event("missing", "%s: asked %s to rescan %s." % (row["title"], sn, folder))
+    if files is not None and old not in files:
+        with db() as c: c.execute("DELETE FROM issues WHERE id=?", (row["id"],))
+        now_on = [os.path.basename(f) for f in files if os.path.exists(f)]
+        return {"ok": True, "text": "%s has caught up: %s" % (sn, ("it now plays " + ", ".join(now_on)) if now_on else
+                "it no longer lists the missing file, and there's no other copy on disk, so look in Radarr/Sonarr.")}
+    return {"ok": True, "text": "%s is rescanning the folder. It's taking a while; the card goes on the next scan if it has caught up." % sn}
+
 def gaps_fix(issue_id):
     with db() as c:
         row = c.execute("SELECT * FROM issues WHERE id=? AND chk='missing'", (issue_id,)).fetchone()
     if not row: return {"ok": False, "error": "That card has gone; scan again."}
     d = json.loads(row["detail"])
     if d.get("kind") in ("albumgaps", "lidarrmissing"): return lidarr_fix(row, d)      # v0.3 Lidarr
+    if d.get("kind") == "msmissing": return ms_missing_fix(row, d)
     if d.get("kind") != "gaps": return {"ok": False, "error": "Nothing to search here."}
     a = arr_by_name(d["ref"]["arr"]); sid = int(d["ref"]["series"]); n = 0
     why = arr_cannot_grab(a)
@@ -4518,10 +4875,142 @@ def _derive_ref(path):
             log("derive ref via %s failed: %r" % (a["name"], e))
     return None
 
+FOLLOWUP_LOCK = threading.Lock()
+
 def followup():
+    """One follow-up at a time: if one is already running, this call skips (that run covers it)."""
+    if not FOLLOWUP_LOCK.acquire(blocking=False):
+        log("followup: already running, skipped"); return
+    try: return _followup()
+    finally: FOLLOWUP_LOCK.release()
+
+# ---------------- quality fallback (pre7) ----------------
+FALLBACKS = {"2160-480": (2160, 480, "4K to 480p"), "1080-480": (1080, 480, "1080p to 480p"), "2160-1080": (2160, 1080, "4K to 1080p")}
+_FB_SKIP_SRC = {"unknown", "cam", "telesync", "telecine", "workprint", "dvdscr", "regional", "televisionraw", "rawhd"}
+_FB_SKIP_MOD = {"brdisk", "rawhd", "screener"}
+_FB_LOW_SRC = {"television", "tv", "dvd"}          # SDTV / DVD rips aren't real 480p copies: never in a fallback
+_FB_TIER_NAME = {2160: "4K", 1080: "1080p", 720: "720p", 480: "480p"}
+
+def _fb_tier(q):
+    """2160 / 1080 / 720 / 480 for a Radarr/Sonarr quality, None if it never belongs in a fallback."""
+    src, mod, res = str(q.get("source", "")).lower(), str(q.get("modifier", "")).lower(), int(q.get("resolution") or 0)
+    if src in _FB_SKIP_SRC or mod in _FB_SKIP_MOD or res <= 0: return None
+    if res >= 2000: return 2160
+    if res >= 1000: return 1080
+    if res >= 700: return 720
+    if res >= 480 and src not in _FB_LOW_SRC: return 480
+    return None
+
+def fb_build(base, mode):
+    """A new quality profile (dict, no id) from base: tiers low..top allowed, best first, each lower tier a fallback."""
+    top, low, label = FALLBACKS[mode]
+    quals = []
+    for it in base["items"]:
+        quals += [it["quality"]] if it.get("quality") else [x["quality"] for x in it.get("items", []) if x.get("quality")]
+    tiers, rest = {}, []
+    for q in quals:
+        t = _fb_tier(q)
+        if t and low <= t <= top: tiers.setdefault(t, []).append(q)
+        else: rest.append(q)
+    items, gid, cutoff = [{"quality": q, "items": [], "allowed": False} for q in rest], 1100, None
+    for t in sorted(tiers):                         # Radarr/Sonarr: later in the list = preferred
+        nm = _FB_TIER_NAME[t] + ("" if t == top else " (last resort)" if t == low else " (fallback)")
+        if len(tiers[t]) == 1:
+            items.append({"quality": tiers[t][0], "items": [], "allowed": True}); cutoff = tiers[t][0]["id"]
+        else:
+            gid += 1; cutoff = gid
+            items.append({"id": gid, "name": nm, "allowed": True, "items": [{"quality": q, "items": [], "allowed": True} for q in tiers[t]]})
+    new = {k: v for k, v in base.items() if k != "id"}
+    new.update(name="Library Doctor fallback (%s)" % label, items=items, cutoff=cutoff, upgradeAllowed=True)
+    return new
+
+def fb_profile(a, base_id, mode):
+    """The instance's fallback profile for this mode: reused when it exists, else made from the item's own profile."""
+    name = "Library Doctor fallback (%s)" % FALLBACKS[mode][2]
+    for p in arr(a, "/qualityprofile"):
+        if p.get("name") == name: return p
+    return arr(a, "/qualityprofile", fb_build(arr(a, "/qualityprofile/%d" % int(base_id)), mode), "POST")
+
+def fb_why(a, ref):
+    """One interactive search: when copies exist but the profile turned every one down for quality, what's the best of them."""
+    q = "movieId=%d" % int(ref["id"]) if ref["kind"] == "movie" else "episodeId=%d" % int(ref["id"])
+    rel = arr(a, "/release?" + q)
+    if not isinstance(rel, list) or not rel or any(r.get("approved") for r in rel): return None
+    low = [r for r in rel if any("not wanted in profile" in str(x) for x in r.get("rejections") or [])]
+    if not low: return None
+    best = max(low, key=lambda r: int(((r.get("quality") or {}).get("quality") or {}).get("resolution") or 0))
+    bq = (best.get("quality") or {}).get("quality") or {}
+    try:
+        it = arr(a, "/movie/%d" % int(ref["id"])) if ref["kind"] == "movie" else arr(a, "/series/%d" % int(ref["series"]))
+        prof = next((p["name"] for p in arr(a, "/qualityprofile") if p["id"] == it.get("qualityProfileId")), "")
+    except Exception: prof = ""
+    return {"best": bq.get("name") or "?", "res": int(bq.get("resolution") or 0), "n": len(low), "profile": prof, "at": now_iso()}
+
+def fb_followup():
+    """Hourly: Replaces with nothing grabbed after 2 h get one look at why (max 5 an hour, it searches every indexer)."""
+    with db() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM done WHERE chk='health' AND status IN ('waiting','monitored') AND cleared=0 AND ref IS NOT NULL")]
+    n = 0
+    for r in rows:
+        try: ref = json.loads(r["ref"] or "null")
+        except Exception: continue
+        if not isinstance(ref, dict) or ref.get("kind") not in ("movie", "episode") or ref.get("lower_checked") or ref.get("fallback"): continue
+        try: at = datetime.fromisoformat(r["at"])
+        except Exception: continue
+        if datetime.now() - at < timedelta(hours=2): continue
+        a = arr_by_name(ref.get("arr"))
+        if not a: continue
+        if n >= 5: break
+        n += 1
+        try:
+            since = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            hist = arr(a, "/history/movie?movieId=%d" % int(ref["id"])) if ref["kind"] == "movie" else \
+                   [h for h in arr(a, "/history/series?seriesId=%d" % int(ref["series"])) if int(h.get("episodeId") or 0) == int(ref["id"])]
+            hist = hist if isinstance(hist, list) else hist.get("records", [])
+            if any(h.get("eventType") == "grabbed" and (h.get("date") or "") >= since for h in hist): continue   # something is on its way
+            ref["lower"] = fb_why(a, ref)
+        except Exception as e:
+            log("fallback check %s failed: %r" % (r["title"], e)); continue
+        ref["lower_checked"] = now_iso()
+        with db() as c: c.execute("UPDATE done SET ref=? WHERE id=?", (json.dumps(ref), r["id"]))
+        if ref.get("lower"): event("health", "%s: only %s copies exist; %s's profile turns them down." % (r["title"], ref["lower"]["best"], a["name"]))
+
+def fallback_apply(done_id, confirm=False):
+    with db() as c:
+        row = c.execute("SELECT * FROM done WHERE id=? AND chk='health'", (int(done_id),)).fetchone()
+    if not row: return {"ok": False, "error": "That one has gone. Reload the page."}
+    ref = json.loads(row["ref"] or "null") or {}
+    a = arr_by_name(ref.get("arr")); mode = (a or {}).get("fallback") or ""
+    if not a: return {"ok": False, "error": "%s isn't in Settings any more." % ref.get("arr")}
+    if mode not in FALLBACKS: return {"ok": False, "error": "Pick a fallback for %s in Settings first (Settings, %s, Fallback when nothing is found)." % (a["name"], a["name"])}
+    try:
+        if ref["kind"] == "movie":
+            m = arr(a, "/movie/%d" % int(ref["id"])); p = fb_profile(a, m["qualityProfileId"], mode)
+            arr(a, "/movie/editor", {"movieIds": [m["id"]], "qualityProfileId": p["id"], "monitored": True}, "PUT")
+            arr(a, "/command", {"name": "MoviesSearch", "movieIds": [m["id"]]}, "POST"); what = "the film"
+        else:
+            sid = int(ref["series"]); ser = arr(a, "/series/%d" % sid)
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            others = [e for e in arr(a, "/episode?seriesId=%d" % sid) if e.get("monitored") and not e.get("hasFile") and e.get("seasonNumber")
+                      and (e.get("airDateUtc") or "9") < today and e["id"] != int(ref["id"])]
+            if others and not confirm:
+                return {"ok": False, "confirm": len(others), "error": "%d other missing episode%s of %s %s monitored, so %s could download %s at lower quality too. Go ahead?" % (
+                        len(others), "" if len(others) == 1 else "s", ser.get("title"), "is" if len(others) == 1 else "are", a["name"], "it" if len(others) == 1 else "them")}
+            p = fb_profile(a, ser["qualityProfileId"], mode); ser["qualityProfileId"] = p["id"]
+            arr(a, "/series/%d" % sid, ser, "PUT")
+            arr(a, "/command", {"name": "EpisodeSearch", "episodeIds": [int(ref["id"])]}, "POST"); what = "the whole show"
+    except Exception as e:
+        return {"ok": False, "error": "Couldn't change it in %s (%s). Nothing else was changed." % (a["name"], getattr(e, "reason", e))}
+    ref["fallback"] = p["name"]
+    note = "Moved %s to the profile “%s”. %s is searching again and takes the best copy it can find; a better one replaces it later by itself." % (what, p["name"], a["name"])
+    with db() as c: c.execute("UPDATE done SET status='waiting', note=?, at=?, checked_at=?, ref=? WHERE id=?", (note, now_iso(), now_iso(), json.dumps(ref), row["id"]))
+    event("health", "%s: %s" % (row["title"], note))
+    return {"ok": True, "text": note}
+
+def _followup():
     """For each Replace still waiting: has Radarr/Sonarr got a new copy yet? Warn after FOLLOW_DAYS."""
     with db() as c:
-        rows = [dict(r) for r in c.execute("SELECT * FROM done WHERE chk='health' AND status IN ('waiting','checking') AND cleared=0")]
+        rows = [dict(r) for r in c.execute("SELECT * FROM done WHERE chk='health' AND status IN ('waiting','checking','monitored') AND cleared=0")]
     for r in rows:
         try:
             moved = json.loads(r["moved"] or "[]"); old = moved[0] if moved else ""
@@ -4583,9 +5072,10 @@ def followup():
                 with db() as c: c.execute("UPDATE done SET status='waiting', note=?, checked_at=? WHERE id=?",
                                           ("%s still listed the old file, so it was asked to rescan. It searches again after that." % a["name"], now_iso(), r["id"]))
             elif age > FOLLOW_DAYS:
-                with db() as c: c.execute("UPDATE done SET status='warn', note=?, checked_at=? WHERE id=?",
-                                          ("No new copy after %d days. %s can't find one; try Interactive Search on its page." % (FOLLOW_DAYS, a["name"]), now_iso(), r["id"]))
-                event("health", "%s: still no new copy after %d days." % (r["title"], FOLLOW_DAYS))
+                with db() as c: c.execute("UPDATE done SET status='monitored', note=?, checked_at=? WHERE id=?",
+                                          ("Nothing out there yet. It's monitored, so %s grabs a copy when one turns up; Library Doctor checks every hour. "
+                                           "Want to watch it meanwhile? Put back returns the old file while it's still in the trash." % a["name"], now_iso(), r["id"]))
+                if r["status"] != "monitored": event("health", "%s: no copy yet after %d days; left monitored in %s." % (r["title"], FOLLOW_DAYS, a["name"]))
             else:
                 with db() as c: c.execute("UPDATE done SET status='waiting', note=?, checked_at=? WHERE id=?",
                                           ("Waiting for %s to download a new copy%s. Checked %s." % (a["name"], " (in your download window)" if NIGHT_END_HOUR is not None else "", datetime.now().strftime("%a %H:%M")), now_iso(), r["id"]))
@@ -4598,6 +5088,8 @@ def followup():
             log("followup %s failed: %r" % (r["id"], e))
     smaller_followup()
     tdarr_followup()
+    try: fb_followup()
+    except Exception as e: log("fallback followup failed: %r" % e)
     try: search_followup()
     except Exception as e: log("search followup failed: %r" % e)
 
@@ -4622,37 +5114,46 @@ _MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
 
 def _plain(t): return _MD_BOLD.sub(r"\1", t or "")
 
-def notify_one(kind, e, title, message, priority=5):
+def app_link(page=""):
+    """The address to open from a message, or "" when none is set (Settings, General)."""
+    u = (S.get("app_url") or "").rstrip("/")
+    return u + "/" + page if u else ""
+
+def notify_one(kind, e, title, message, priority=5, page=""):
     """Send to one channel config e. Returns {"ok", "error"?}. Raises nothing."""
+    link = app_link(page)
+    tail = "\n\n" + link if link else ""
     try:
+        if kind == "phone": return push_send(e.get("tokens") or [], title, message, page)
         if kind == "gotify":
             g = e
             extras = {"client::display": {"contentType": "text/markdown"}}
-            if g.get("click"): extras["client::notification"] = {"click": {"url": g["click"]}}
+            if g.get("click") or link: extras["client::notification"] = {"click": {"url": g.get("click") or link}}
             http(g["url"].rstrip("/") + "/message", {"X-Gotify-Key": g.get("token", "")}, data={"title": title, "message": message, "priority": priority, "extras": extras}, method="POST", timeout=20)
         elif kind == "discord":
             hook = e.get("token", "")
             if not hook.startswith("https://"): return {"ok": False, "error": "Paste the whole Discord webhook URL (Channel settings → Integrations → Webhooks)."}
-            text = ("**%s**\n%s" % (title, message))[:1990]
+            text = ("**%s**\n%s" % (title, message))[:1990 - len(tail)] + tail
             http(hook, {"User-Agent": "LibraryDoctor"}, data={"content": text, "username": "Library Doctor"}, method="POST", timeout=20)
         elif kind == "telegram":
             if not e.get("token") or not e.get("chat"): return {"ok": False, "error": "Fill in the bot token and the chat ID."}
             http((e.get("url") or NOTIFY_DEFAULT_URL["telegram"]).rstrip("/") + "/bot%s/sendMessage" % e["token"], {},
-                 data={"chat_id": e["chat"], "text": ("%s\n\n%s" % (title, _plain(message)))[:4000], "disable_web_page_preview": True}, method="POST", timeout=20)
+                 data={"chat_id": e["chat"], "text": ("%s\n\n%s" % (title, _plain(message)))[:4000 - len(tail)] + tail, "disable_web_page_preview": True}, method="POST", timeout=20)
         elif kind == "ntfy":
             if not e.get("topic"): return {"ok": False, "error": "Fill in the topic."}
             h = {"Title": title.encode("ascii", "replace").decode(), "Priority": str(min(5, max(1, priority // 2 + 1))), "Markdown": "yes", "Content-Type": "text/plain; charset=utf-8"}
             if e.get("token"): h["Authorization"] = "Bearer " + e["token"]
+            if link: h["Click"] = link
             req = urllib.request.Request(e["url"].rstrip("/") + "/" + urllib.parse.quote(e["topic"]), data=message.encode("utf-8"), headers=h, method="POST")
             urllib.request.urlopen(req, timeout=20).read()
         elif kind == "webhook":
             h = {"User-Agent": "LibraryDoctor"}
             if e.get("token"): h["Authorization"] = "Bearer " + e["token"]
-            http(e["url"], h, data={"title": title, "message": message, "text": _plain(message), "priority": priority, "source": "library-doctor"}, method="POST", timeout=20)
+            http(e["url"], h, data={"title": title, "message": message, "text": _plain(message), "priority": priority, "source": "library-doctor", **({"url": link} if link else {})}, method="POST", timeout=20)
         elif kind == "pushover":                              # v0.1.7
             if not e.get("token") or not e.get("user"): return {"ok": False, "error": "Fill in the app token and your user key."}
             body = urllib.parse.urlencode({"token": e["token"], "user": e["user"], "title": title[:250], "message": _plain(message)[:1000],
-                                           "priority": 1 if priority >= 8 else 0}).encode()
+                                           "priority": 1 if priority >= 8 else 0, **({"url": link, "url_title": "Open Library Doctor"} if link else {})}).encode()
             urllib.request.urlopen(urllib.request.Request((e.get("url") or NOTIFY_DEFAULT_URL["pushover"]).rstrip("/") + "/1/messages.json", data=body, method="POST"), timeout=20).read()
         elif kind == "email":
             import smtplib, ssl as _ssl
@@ -4663,7 +5164,7 @@ def notify_one(kind, e, title, message, priority=5):
             to = [x.strip() for x in (e.get("to") or "").replace(";", ",").split(",") if x.strip()]
             if not host or not to: return {"ok": False, "error": "Fill in the mail server and who to send to."}
             msg = EmailMessage(); msg["Subject"] = title; msg["From"] = e.get("from") or e.get("user") or "library-doctor@localhost"; msg["To"] = ", ".join(to)
-            msg.set_content(_plain(message))
+            msg.set_content(_plain(message) + tail)
             ctx = _ssl.create_default_context()
             srv = smtplib.SMTP_SSL(host, port, timeout=20, context=ctx) if mode == "ssl" else smtplib.SMTP(host, port, timeout=20)
             try:
@@ -4688,12 +5189,16 @@ def notify_channels():
     for k in NOTIFY_KINDS:
         e = S.get(k)
         if isinstance(e, dict) and e.get("url"): out.append((k, e))
+    tk = phone_tokens()                                          # v0.4.0: paired phones with notifications on
+    if tk: out.append(("phone", {"tokens": tk}))
     return out
 
-def notify(title, message, priority=5):
+def notify(title, message, priority=5, page=""):
+    if IS_CHILD and SERVER_LABEL:                                # v0.4.0
+        title = title.replace("Library Doctor", "Library Doctor (%s)" % SERVER_LABEL, 1) if "Library Doctor" in title else "%s: %s" % (SERVER_LABEL, title)
     chans = notify_channels()
     if not chans: return {"ok": False, "error": "No notification channel is set up (Settings → Optional)."}
-    res = [(k, notify_one(k, e, title, message, priority)) for k, e in chans]
+    res = [(k, notify_one(k, e, title, message, priority, page)) for k, e in chans]
     for k, r in res:
         if not r.get("ok"): log("notify %s failed: %s" % (k, r.get("error")))
     ok = [k for k, r in res if r.get("ok")]
@@ -4820,6 +5325,12 @@ def nightly_summary():
         if hb: lines.append("**Kept back in the trash:** %d file%s after a closer look (%s). Check them in the Trash screen." % (len(hb), "" if len(hb) == 1 else "s", list(hb.values())[0]))
     except Exception: pass
     if soon: lines.append("**Trash:** %d item%s (%s) delete%s for good in the next 24 hours (Library Doctor's trash and the recycle bins). Review them in the Trash screen." % (len(soon), "" if len(soon) == 1 else "s", human(sum(t["size"] or 0 for t in soon)), "s" if len(soon) == 1 else ""))
+    page = ""                                                # v0.3.6: the page the message opens
+    if new:
+        cnt = {}
+        for i in new: cnt[i["chk"]] = cnt.get(i["chk"], 0) + 1
+        page = "#check-" + next((k for k in ("virus", "missing", "health") if k in cnt), max(cnt, key=cnt.get))
+    elif soon and not (back or done or smaller or (sc and not sc["ok"])): page = "#trash"
     if not lines:
         log("nightly summary: nothing new, no message sent"); kv_set("gotify_last_summary", now_iso()); return {"ok": True, "sent": False}
     try:                                                     # v0.1.10: the score rides along (never a reason to send by itself)
@@ -4828,7 +5339,7 @@ def nightly_summary():
     except Exception as e: log("score line failed: %r" % e)
     lines.append("Open now: %d to look at \u00b7 trash %d item%s (%s)" % (len(allopen), len(trash), "" if len(trash) == 1 else "s", human(sum(t["size"] or 0 for t in trash))))
     title = "Library Doctor: " + ("%d new to look at" % len(new) if new else "%d replaced file%s arrived" % (len(arrived), "" if len(arrived) == 1 else "s") if arrived else "nightly check")
-    r = notify(title, "\n\n".join(lines), prio)
+    r = notify(title, "\n\n".join(lines), prio, page)
     if r.get("ok"): kv_set("gotify_last_summary", now_iso()); log("nightly summary sent: %s" % title)
     return dict(r, sent=r.get("ok"))
 
@@ -4899,6 +5410,8 @@ def nightly():
             try: followup()
             except Exception as e: log("followup failed: %r" % e)
             scan()
+            try: servers_nightly()                                     # v0.4.0: then each extra media server, one at a time
+            except Exception as e: log("other servers' nightly failed: %r" % e)
             try: snooze_due()
             except Exception as e: log("snooze re-search failed: %r" % e)
             try: weekly_digest()
@@ -4907,7 +5420,7 @@ def nightly():
             except Exception as e: log("nightly summary failed: %r" % e)
         elif now.minute % IMPORT_EVERY_MIN == 3 and last_import != (now.hour, now.minute):   # v0.1.7: checks on import
             last_import = (now.hour, now.minute)
-            try: import_check()
+            try: None if IS_CHILD else import_check()
             except Exception as e: log("import check failed: %r" % e)
         elif now.minute == 17 and last_follow != now.hour:     # hourly: has a replaced file arrived?
             last_follow = now.hour
@@ -4921,23 +5434,23 @@ def nightly():
             except Exception as e: log("score snapshot failed: %r" % e)
             try: space_record()                                       # v0.1.6: one free-space reading per day (latest wins)
             except Exception as e: log("space record failed: %r" % e)
-            try: queue_refresh(notify=(now.hour == QUEUE_NOTIFY_HOUR))
+            try: IS_CHILD or queue_refresh(notify=(now.hour == QUEUE_NOTIFY_HOUR))
             except Exception as e: log("queue refresh failed: %r" % e)
             try:
-                cards, _ = apps_refresh()
+                cards, _ = ([], []) if IS_CHILD else apps_refresh()
                 if now.hour == QUEUE_NOTIFY_HOUR and notify_channels():      # once a day: warnings not told about before
                     with db() as c: hid = hidden_ids(c)
                     told = set(json.loads(kv_get("apps_notified") or "[]"))
                     cur = [x for x in cards if x["id"] not in hid and x["detail"]["kind"] != "update"]
                     bad = [x for x in cur if x["id"] not in told]
                     if bad:
-                        notify("Library Doctor: %d app warning%s" % (len(bad), "" if len(bad) == 1 else "s"), "\n\n".join("**%s**: %s" % (x["library"], x["detail"]["text"][:200]) for x in bad[:6]), 5)
+                        notify("Library Doctor: %d app warning%s" % (len(bad), "" if len(bad) == 1 else "s"), "\n\n".join("**%s**: %s" % (x["library"], x["detail"]["text"][:200]) for x in bad[:6]), 5, "#check-apps")
                     kv_set("apps_notified", json.dumps([x["id"] for x in cur]))
             except Exception as e: log("app health refresh failed: %r" % e)
         elif now.minute % 10 == 7 and last_tdarr != (now.hour, now.minute):   # v23: every 10 min while Tdarr has files of ours
             last_tdarr = (now.hour, now.minute)
             try:
-                if tdarr_pending(): tdarr_followup()
+                if not IS_CHILD and tdarr_pending(): tdarr_followup()
             except Exception as e: log("tdarr followup failed: %r" % e)
         time.sleep(60)
 
@@ -5270,7 +5783,7 @@ def unwatched_scan(sections, sizes):
     t = S.get("tautulli")
     if S.get("tracearr"):                                   # v0.3.4: Tracearr first when both are set (it covers Plex, Jellyfin and Emby)
         return tracearr_unwatched_scan(sections, sizes)
-    if not t:
+    if not t or IS_CHILD or ms_kind() != "plex":          # v0.4.0: Tautulli only knows the main Plex (its library numbers)
         return []
     STATE["step"] = "Checking what nobody watches"
     def tt(cmd, **q):
@@ -6186,7 +6699,10 @@ def indexer_cards(a, health_items):
         if not log_[k]: del log_[k]
     kv_set("idx_fail", log_)
     fails = {k.split("|", 1)[1]: len(v) for k, v in log_.items() if k.split("|", 1)[0] == a["name"]}
-    cand = {n: c for n, c in fails.items() if c >= IDX_MIN_FAILS}
+    day = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H")
+    recent = {k.split("|", 1)[1] for k, v in log_.items() if k.split("|", 1)[0] == a["name"] and max(v) >= day}
+    # pre5: working now and fine for a whole day -> no card (it only nags while the problem is current)
+    cand = {n: c for n, c in fails.items() if c >= IDX_MIN_FAILS and (n in cur or n in recent)}
     if not cand: return []
     try:
         idx = {i["name"]: i for i in arr(a, "/indexer")}
@@ -6203,15 +6719,87 @@ def indexer_cards(a, health_items):
         i = idx.get(n)
         if not i or not (i.get("enableRss") or i.get("enableAutomaticSearch") or i.get("enableInteractiveSearch")): continue
         if used.get(n): continue
+        via, pnote = "", ""
+        try:
+            pl = prowlarr_plan(a, i) if n.endswith("(Prowlarr)") else {"mode": "arr"}
+            if pl["mode"] in ("tag", "untag", "manual"): via, pnote = "prowlarr", prowlarr_plan_text(pl)
+        except Exception as e: log("prowlarr plan for card failed: %r" % e)
         out.append(dict(id=iid("apps", a["name"], "indexer", n), chk="apps", sev="att", library=a["name"],
                         title="%s: %s keeps failing and never finds anything" % (a["name"], n),
                         detail={"kind": "indexer", "source": "indexer", "indexer": n, "indexer_id": i["id"], "fails": c,
-                                "text": "%s named it as failing in %d hourly check%s over the last 7 days, and nothing you downloaded in the last %d days came from it." % (
+                                "text": ("" if n in cur else "It's working right now, but ") + "%s named it as failing in %d hourly check%s over the last 7 days, and nothing you downloaded in the last %d days came from it." % (
                                     a["name"], c, "" if c == 1 else "s", IDX_DAYS),
-                                "note": "Turning it off stops the warnings and the wasted searches. It stays set up in %s, so you can switch it back on there any time." % a["name"],
-                                "ref": {"kind": "arr", "name": a["name"]}, "fixes": ["idxoff"]},
+                                "now_ok": n not in cur,
+                                "note": pnote or "Turning it off stops the warnings and the wasted searches. It stays set up in %s, so you can switch it back on there any time." % a["name"],
+                                "via": via, "ref": {"kind": "arr", "name": a["name"]}, "fixes": ["idxoff"]},
                         links=[{"label": "Open indexers in %s" % a["name"], "url": (a.get("public") or a["url"]).rstrip("/") + "/settings/indexers"}]))
     return out
+
+# ---- v0.4.0: switching off a Prowlarr indexer for one app, in Prowlarr ----
+def _pw(path, data=None, method=None):
+    p = S.get("prowlarr") or {}
+    return http(p["url"].rstrip("/") + "/api/v1" + path, {"X-Api-Key": p.get("key", "")}, data=data, method=method, timeout=60)
+
+def _hostport(u):
+    try:
+        pu = urllib.parse.urlparse(u or ""); return pu.port or (443 if pu.scheme == "https" else 80), (pu.path or "").rstrip("/")
+    except Exception: return None, ""
+
+def prowlarr_plan(a, arr_idx):
+    """How to keep this arr indexer out of app `a` for good. {"mode": "tag"|"untag"|"arr"|"manual", ...}"""
+    pw = S.get("prowlarr") or {}
+    if not (pw.get("url") and pw.get("key")): return {"mode": "arr"}
+    f = {x.get("name"): x.get("value") for x in arr_idx.get("fields") or []}
+    m = re.search(r"/(\d+)/?$", str(f.get("baseUrl") or ""))
+    if not m or _hostport(f.get("baseUrl"))[0] != _hostport(pw["url"])[0]: return {"mode": "arr"}     # not from this Prowlarr
+    pid = int(m.group(1))
+    apps = _pw("/applications"); idxs = _pw("/indexer")
+    me = next((x for x in idxs if x.get("id") == pid), None)
+    if not me: return {"mode": "arr"}
+    port, path = _hostport(a["url"])
+    cand = [ap for ap in apps if _hostport({x.get("name"): x.get("value") for x in ap.get("fields") or []}.get("baseUrl")) == (port, path)]
+    if len(cand) != 1: return {"mode": "arr"}
+    app = cand[0]
+    if str(app.get("syncLevel") or "").lower() != "fullsync": return {"mode": "arr"}
+    base = {"pid": pid, "pname": me.get("name"), "app_id": app["id"], "app": app.get("name"), "arr": a["name"]}
+    if not app.get("tags"):
+        label = "ld-" + (re.sub(r"[^a-z0-9]+", "-", (app.get("name") or a["name"]).lower()).strip("-") or "app")
+        return dict(base, mode="tag", tag=label, others=[x["id"] for x in idxs if x["id"] != pid])
+    inter = set(app["tags"]) & set(me.get("tags") or [])
+    if not inter: return {"mode": "arr"}
+    left = set(me.get("tags") or []) - inter
+    hurt = [ap.get("name") for ap in apps if ap["id"] != app["id"] and ap.get("tags") and set(ap["tags"]) & set(me.get("tags") or []) and not set(ap["tags"]) & left]
+    if hurt: return dict(base, mode="manual", why="the same Prowlarr tag also sends it to %s" % ", ".join(hurt))
+    return dict(base, mode="untag", tags=sorted(inter))
+
+def prowlarr_plan_text(pl):
+    if pl["mode"] == "tag":
+        return ("Prowlarr manages this indexer and puts it back in %s at every sync, so Library Doctor stops Prowlarr sending it there: "
+                "it makes the tag \"%s\" in Prowlarr, adds it to your other %d indexers and to the %s app, then Prowlarr removes %s from %s. "
+                "Your other apps keep it. Indexers you add to Prowlarr later need the tag \"%s\" to reach %s."
+                % (pl["arr"], pl["tag"], len(pl["others"]), pl["app"], pl["pname"], pl["arr"], pl["tag"], pl["arr"]))
+    if pl["mode"] == "untag":
+        return ("Prowlarr manages this indexer and puts it back in %s at every sync, so Library Doctor removes the tag that sends it there from this indexer in Prowlarr. "
+                "Your other apps keep it." % pl["arr"])
+    if pl["mode"] == "manual":
+        return ("Prowlarr manages this indexer and puts it back in %s at every sync. Library Doctor can't change it safely because %s. "
+                "In Prowlarr, give %s its own tag and use it on the %s app, or remove %s from Prowlarr." % (pl["arr"], pl["why"], pl["arr"], pl["app"], pl["pname"]))
+    return ""
+
+def prowlarr_apply(pl):
+    """Carry out a "tag" or "untag" plan, ask Prowlarr to sync, and check the indexer left the arr."""
+    if pl["mode"] == "tag":
+        tags = _pw("/tag")
+        t = next((x for x in tags if x.get("label") == pl["tag"]), None) or _pw("/tag", {"label": pl["tag"]}, "POST")
+        if pl["others"]: _pw("/indexer/bulk", {"ids": pl["others"], "tags": [t["id"]], "applyTags": "add"}, "PUT")      # first the others...
+        _pw("/applications/bulk", {"ids": [pl["app_id"]], "tags": [t["id"]], "applyTags": "add"}, "PUT")              # ...then the app
+        undo = "To undo: in Prowlarr → Settings → Apps → %s, remove the tag \"%s\"." % (pl["app"], pl["tag"])
+    else:
+        _pw("/indexer/bulk", {"ids": [pl["pid"]], "tags": pl["tags"], "applyTags": "remove"}, "PUT")
+        undo = "To undo: in Prowlarr, add the tag back to %s." % pl["pname"]
+    try: _pw("/command", {"name": "ApplicationIndexerSync"}, "POST")
+    except Exception as e: log("prowlarr sync command failed: %r" % e)
+    return undo
 
 def apps_fix(issue_id, how):
     with db() as c:
@@ -6228,6 +6816,14 @@ def apps_fix(issue_id, how):
         if not a: return {"ok": False, "error": "%s isn't in Settings any more." % app}
         try:
             i = arr(a, "/indexer/%d" % int(d["indexer_id"]))
+            try: pl = prowlarr_plan(a, i)                                  # v0.4.0: Prowlarr would undo an arr-side switch-off
+            except Exception as e: log("prowlarr plan failed: %r" % e); pl = {"mode": "arr"}
+            if pl["mode"] == "manual": return {"ok": False, "error": prowlarr_plan_text(pl)}
+            if pl["mode"] in ("tag", "untag"):
+                undo = prowlarr_apply(pl)
+                with db() as c: c.execute("DELETE FROM issues WHERE id=?", (issue_id,))
+                event("apps", "Stopped Prowlarr sending %s to %s%s. %s" % (pl["pname"], app, (" (tag \"%s\" on %d other indexers and the %s app; indexers added later need it)" % (pl["tag"], len(pl["others"]), pl["app"])) if pl["mode"] == "tag" else "", undo))
+                return {"ok": True, "text": "Prowlarr stops sending %s to %s; it disappears there after Prowlarr's sync (a minute or so). Your other apps keep it. %s" % (pl["pname"], app, undo)}
             i.update(enableRss=False, enableAutomaticSearch=False, enableInteractiveSearch=False)
             arr(a, "/indexer/%d?forceSave=true" % int(d["indexer_id"]), i, "PUT")
         except Exception as e:
@@ -7025,6 +7621,9 @@ def security_info():
     if b and b.get("at", "") < (datetime.now() - timedelta(days=7)).isoformat(timespec="seconds"): b = None
     return {"auth": AUTH_ON, "trusted": [str(n) for n in TRUSTED_PROXIES], "hosts": sorted(ALLOWED_HOSTS), "blocked": b}
 AUTH_FILE = os.path.join(CONFIG_DIR, "auth.json")
+PWA_FILES = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"), "/sw.js": ("sw.js", "text/javascript; charset=utf-8"),
+             "/pwa/offline.html": ("offline.html", "text/html; charset=utf-8"),
+             **{"/pwa/" + n: (n, "image/png") for n in ("icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png")}}
 SESSION_DAYS = 30
 PBKDF2_ROUNDS = 600000
 _FAILS = {}                      # key -> [times of recent wrong passwords]
@@ -7091,10 +7690,265 @@ def session_end(tok, everyone=False):
         if everyone: c.execute("DELETE FROM sessions")
         elif tok: c.execute("DELETE FROM sessions WHERE h=?", (hashlib.sha256(tok.encode()).hexdigest(),))
 
+# ---------------- QR code (v0.4.0 phone pairing) ----------------
+# A small QR encoder (byte mode, error correction M, versions 1-10), so the pairing code can be shown as a QR code
+# without loading anything from outside (the page's security policy allows only Library Doctor's own code).
+# Follows the standard algorithm (ISO/IEC 18004), as in Project Nayuki's public-domain-style reference.
+_QR_ECC_M = [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26]        # error correction codewords per block, by version
+_QR_BLK_M = [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5]                  # number of blocks, by version
+
+def _qr_raw_modules(ver):
+    r = (16 * ver + 128) * ver + 64
+    if ver >= 2:
+        na = ver // 7 + 2
+        r -= (25 * na - 10) * na - 55
+        if ver >= 7: r -= 36
+    return r
+
+def _qr_data_codewords(ver):
+    return _qr_raw_modules(ver) // 8 - _QR_ECC_M[ver] * _QR_BLK_M[ver]
+
+def _qr_mul(x, y):
+    z = 0
+    for i in reversed(range(8)):
+        z = (z << 1) ^ ((z >> 7) * 0x11D)
+        z ^= ((y >> i) & 1) * x
+    return z
+
+def _qr_rs_divisor(deg):
+    res = [0] * (deg - 1) + [1]; root = 1
+    for _ in range(deg):
+        for j in range(deg):
+            res[j] = _qr_mul(res[j], root)
+            if j + 1 < deg: res[j] ^= res[j + 1]
+        root = _qr_mul(root, 0x02)
+    return res
+
+def _qr_rs_remainder(data, div):
+    res = [0] * len(div)
+    for b in data:
+        f = b ^ res.pop(0); res.append(0)
+        for i, coef in enumerate(div): res[i] ^= _qr_mul(coef, f)
+    return res
+
+def qr_matrix(text):
+    """The QR code for `text` as a list of rows of booleans (True = dark)."""
+    data = text.encode("utf-8")
+    ver = next((v for v in range(1, 11) if 4 + (8 if v < 10 else 16) + 8 * len(data) <= _qr_data_codewords(v) * 8), None)
+    if ver is None: raise ValueError("too long for a QR code here")
+    bits = []
+    def put(val, n): bits.extend((val >> i) & 1 for i in reversed(range(n)))
+    put(4, 4); put(len(data), 8 if ver < 10 else 16)
+    for b in data: put(b, 8)
+    cap = _qr_data_codewords(ver) * 8
+    put(0, min(4, cap - len(bits)))
+    put(0, (8 - len(bits) % 8) % 8)
+    pad = 0xEC
+    while len(bits) < cap: put(pad, 8); pad ^= 0xEC ^ 0x11
+    cw = [int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8)]
+    # error correction + interleaving
+    nb, el = _QR_BLK_M[ver], _QR_ECC_M[ver]; raw = _qr_raw_modules(ver) // 8
+    nshort, slen = nb - raw % nb, raw // nb
+    div = _qr_rs_divisor(el); blocks = []; k = 0
+    for i in range(nb):
+        dat = cw[k:k + slen - el + (0 if i < nshort else 1)]; k += len(dat)
+        ecc = _qr_rs_remainder(dat, div)
+        if i < nshort: dat = dat + [0]
+        blocks.append(dat + ecc)
+    allcw = [blk[i] for i in range(len(blocks[0])) for j, blk in enumerate(blocks) if i != slen - el or j >= nshort]
+    size = ver * 4 + 17
+    mod = [[False] * size for _ in range(size)]; fn = [[False] * size for _ in range(size)]
+    def setf(x, y, d): mod[y][x] = d; fn[y][x] = True
+    for i in range(size): setf(6, i, i % 2 == 0); setf(i, 6, i % 2 == 0)
+    for cx, cy in ((3, 3), (size - 4, 3), (3, size - 4)):
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                x, y = cx + dx, cy + dy
+                if 0 <= x < size and 0 <= y < size: setf(x, y, max(abs(dx), abs(dy)) not in (2, 4))
+    if ver > 1:
+        na = ver // 7 + 2; step = (ver * 8 + na * 3 + 5) // (na * 4 - 4) * 2
+        pos = [6] + sorted(size - 7 - i * step for i in range(na - 1))
+        for i, a in enumerate(pos):
+            for j, b in enumerate(pos):
+                if (i == 0 and j == 0) or (i == 0 and j == na - 1) or (i == na - 1 and j == 0): continue
+                for dy in range(-2, 3):
+                    for dx in range(-2, 3): setf(a + dx, b + dy, max(abs(dx), abs(dy)) != 1)
+    def fmt(mask):
+        d = (0 << 3) | mask; r = d                       # ECC level M = 0b00
+        for _ in range(10): r = (r << 1) ^ ((r >> 9) * 0x537)
+        b = ((d << 10) | r) ^ 0x5412; g = lambda i: (b >> i) & 1 == 1
+        for i in range(6): setf(8, i, g(i))
+        setf(8, 7, g(6)); setf(8, 8, g(7)); setf(7, 8, g(8))
+        for i in range(9, 15): setf(14 - i, 8, g(i))
+        for i in range(8): setf(size - 1 - i, 8, g(i))
+        for i in range(8, 15): setf(8, size - 15 + i, g(i))
+        setf(8, size - 8, True)
+    fmt(0)
+    if ver >= 7:
+        r = ver
+        for _ in range(12): r = (r << 1) ^ ((r >> 11) * 0x1F25)
+        b = (ver << 12) | r
+        for i in range(18):
+            d = (b >> i) & 1 == 1; a, c = size - 11 + i % 3, i // 3
+            setf(a, c, d); setf(c, a, d)
+    i = 0; right = size - 1
+    while right >= 1:
+        if right == 6: right = 5
+        for vert in range(size):
+            for j in range(2):
+                x = right - j; up = ((right + 1) & 2) == 0; y = size - 1 - vert if up else vert
+                if not fn[y][x] and i < len(allcw) * 8:
+                    mod[y][x] = (allcw[i >> 3] >> (7 - (i & 7))) & 1 == 1; i += 1
+        right -= 2
+    masks = [lambda x, y: (x + y) % 2 == 0, lambda x, y: y % 2 == 0, lambda x, y: x % 3 == 0, lambda x, y: (x + y) % 3 == 0,
+             lambda x, y: (x // 3 + y // 2) % 2 == 0, lambda x, y: x * y % 2 + x * y % 3 == 0,
+             lambda x, y: (x * y % 2 + x * y % 3) % 2 == 0, lambda x, y: ((x + y) % 2 + x * y % 3) % 2 == 0]
+    def apply(m):
+        for y in range(size):
+            for x in range(size):
+                if not fn[y][x] and masks[m](x, y): mod[y][x] = not mod[y][x]
+    def penalty():
+        p = 0
+        for rows in (mod, [list(c) for c in zip(*mod)]):
+            for row in rows:
+                run, prev = 0, None
+                for v in row:
+                    if v == prev: run += 1
+                    else:
+                        if run >= 5: p += run - 2
+                        run, prev = 1, v
+                if run >= 5: p += run - 2
+        for y in range(size - 1):
+            for x in range(size - 1):
+                if mod[y][x] == mod[y][x + 1] == mod[y + 1][x] == mod[y + 1][x + 1]: p += 3
+        dark = sum(v for row in mod for v in row); total = size * size
+        p += (abs(dark * 20 - total * 10) + total - 1) // total * 10
+        return p
+    best = None
+    for m in range(8):
+        apply(m); fmt(m); pen = penalty()
+        if best is None or pen < best[0]: best = (pen, m)
+        apply(m)                                          # undo (XOR)
+    apply(best[1]); fmt(best[1])
+    return mod
+
+def qr_svg(text, scale=6, border=4):
+    m = qr_matrix(text); n = len(m) + border * 2
+    path = "".join("M%d,%dh1v1h-1z" % (x + border, y + border) for y, row in enumerate(m) for x, v in enumerate(row) if v)
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" shape-rendering="crispEdges" role="img" aria-label="QR code">'
+            '<rect width="100%%" height="100%%" fill="#fff"/><path d="%s" fill="#000"/></svg>') % (n, n, n * scale, n * scale, path)
+
+# ---------------- phone app: pairing + device keys (v0.4.0) ----------------
+PAIR_MINUTES = 10
+_PAIR = {}                                  # sha256(code) -> {"exp": time, "ip": who asked}
+_PAIR_LOCK = threading.Lock()
+_PAIR_ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I: easy to type
+DEVICE_BLOCKED = ("/api/settings", "/api/auth", "/api/devices", "/api/security", "/api/login", "/api/logout")
+DEVICE_OPEN = ("/api/devices/me", "/api/devices/push")
+
+def _code_norm(c):
+    return re.sub(r"[^A-Z0-9]", "", str(c or "").upper())
+
+def pair_new(origin, ip):
+    """A one-time pairing code for Settings -> Phone app, with the QR code the phone app scans."""
+    raw = "".join(secrets.choice(_PAIR_ALPHA) for _ in range(10)); code = raw[:5] + "-" + raw[5:]
+    base = (S.get("app_url") or "").strip().rstrip("/")
+    if not base and isinstance(origin, str) and re.fullmatch(r"https?://[A-Za-z0-9._\[\]:-]{1,200}", origin.strip()): base = origin.strip().rstrip("/")
+    now = time.time()
+    with _PAIR_LOCK:
+        for k in [k for k, v in _PAIR.items() if v["exp"] < now]: del _PAIR[k]
+        if len(_PAIR) >= 20: return {"ok": False, "error": "Too many pairing codes waiting. Try again in a few minutes."}
+        _PAIR[hashlib.sha256(raw.encode()).hexdigest()] = {"exp": now + PAIR_MINUTES * 60, "ip": ip}
+    payload = "librarydoctor://pair?" + urllib.parse.urlencode({"s": base, "c": code})
+    return {"ok": True, "code": code, "server": base, "payload": payload, "qr": qr_svg(payload, scale=5),
+            "expires": (datetime.now() + timedelta(minutes=PAIR_MINUTES)).isoformat(timespec="seconds"), "minutes": PAIR_MINUTES}
+
+def pair_claim(code, name, platform, ip):
+    h = hashlib.sha256(_code_norm(code).encode()).hexdigest()
+    with _PAIR_LOCK:
+        p = _PAIR.pop(h, None)
+    if not p or p["exp"] < time.time(): return None
+    name = re.sub(r"[\x00-\x1f]", "", str(name or "")).strip()[:60] or "Phone"
+    platform = str(platform or "")[:20] if str(platform or "") in ("ios", "android", "web", "test") else ""
+    tok = "ldd_" + secrets.token_urlsafe(32)
+    with db() as c:
+        c.execute("INSERT INTO devices (name, platform, h, created, last_seen, ip) VALUES (?,?,?,?,?,?)",
+                  (name, platform, hashlib.sha256(tok.encode()).hexdigest(), now_iso(), now_iso(), ip))
+    event("devices", "Paired a phone: %s." % name)
+    return tok
+
+def device_by_token(tok, ip=None):
+    if not tok or not tok.startswith("ldd_") or len(tok) > 100: return None
+    h = hashlib.sha256(tok.encode()).hexdigest()
+    with db() as c:
+        r = c.execute("SELECT * FROM devices WHERE h=?", (h,)).fetchone()
+        if not r: return None
+        if (r["last_seen"] or "") < (datetime.now() - timedelta(minutes=5)).isoformat(timespec="seconds"):
+            c.execute("UPDATE devices SET last_seen=?, ip=? WHERE id=?", (now_iso(), ip or r["ip"], r["id"]))
+    return dict(r)
+
+def devices_list():
+    with db() as c:
+        return [dict({k: r[k] for k in ("id", "name", "platform", "created", "last_seen")}, push=bool(r["push"])) for r in c.execute("SELECT * FROM devices ORDER BY created")]
+
+_PUSH_RE = re.compile(r"^Expo(nent)?PushToken\[[A-Za-z0-9_-]{10,200}\]$")
+def device_push_set(dev, token):
+    if token is not None and not (isinstance(token, str) and _PUSH_RE.match(token)): return {"ok": False, "error": "That isn't an Expo push token."}
+    with db() as c: c.execute("UPDATE devices SET push=? WHERE id=?", (token, dev["id"]))
+    if bool(token) != bool(dev.get("push")): event("devices", "Notifications %s for %s." % ("switched on" if token else "switched off", dev["name"]))
+    return {"ok": True, "push": bool(token)}
+
+def phone_tokens():
+    """[(device id, push token)] of paired phones that want notifications. A child reads them from the main database."""
+    try:
+        if IS_CHILD:
+            if not PRIMARY_DB or not os.path.isfile(PRIMARY_DB): return []
+            pc = sqlite3.connect("file:%s?mode=ro" % PRIMARY_DB, uri=True, timeout=10)
+            try: return [(r[0], r[1]) for r in pc.execute("SELECT id, push FROM devices WHERE push IS NOT NULL AND push != ''")]
+            except sqlite3.OperationalError: return []
+            finally: pc.close()
+        with db() as c: return [(r["id"], r["push"]) for r in c.execute("SELECT id, push FROM devices WHERE push IS NOT NULL AND push != ''")]
+    except Exception as e:
+        log("phone list failed: %r" % e); return []
+
+def _plain(md):
+    t = re.sub(r"\*\*(.+?)\*\*", r"\1", md or ""); t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", t)
+    return re.sub(r"\n{3,}", "\n\n", t).strip()
+
+def push_send(tokens, title, message, page=""):
+    """Send through Expo's push service. Returns {"ok", "error"?}. Phones Expo no longer knows lose their token."""
+    if not tokens: return {"ok": False, "error": "No phone has notifications switched on."}
+    body = _plain(message)
+    if len(body) > 900: body = body[:897] + "…"
+    msgs = [{"to": tok, "title": (title or "Library Doctor")[:120], "body": body, "sound": "default", "priority": "high",
+             "data": {"page": page or "", "server": SERVER_ID}} for _, tok in tokens]
+    try:
+        r = http("https://exp.host/--/api/v2/push/send", {"Accept-Encoding": "identity"}, data=msgs, method="POST", timeout=20)
+    except Exception as e:
+        return {"ok": False, "error": "Expo's push service didn't answer (%s)." % getattr(e, "reason", e)}
+    tickets = (r or {}).get("data") or []
+    gone = [tokens[i][0] for i, t in enumerate(tickets) if isinstance(t, dict) and (t.get("details") or {}).get("error") == "DeviceNotRegistered" and i < len(tokens)]
+    if gone and not IS_CHILD:
+        with db() as c:
+            for did in gone: c.execute("UPDATE devices SET push=NULL WHERE id=?", (did,))
+        log("push: %d phone%s no longer registered, notifications switched off for %s" % (len(gone), "" if len(gone) == 1 else "s", "it" if len(gone) == 1 else "them"))
+    ok = [t for t in tickets if isinstance(t, dict) and t.get("status") == "ok"]
+    if ok: return {"ok": True}
+    err = next((t.get("message") for t in tickets if isinstance(t, dict) and t.get("message")), None) or (r or {}).get("errors") or "no answer"
+    return {"ok": False, "error": "Expo's push service refused it: %s" % err}
+
+def device_remove(did):
+    with db() as c:
+        r = c.execute("SELECT name FROM devices WHERE id=?", (did,)).fetchone()
+        if not r: return {"ok": False, "error": "That phone isn't paired any more."}
+        c.execute("DELETE FROM devices WHERE id=?", (did,))
+    event("devices", "Removed the phone %s; its key no longer works." % r["name"])
+    return {"ok": True}
+
 # ---------------- settings page ----------------
 SECRET_FIELDS = ("token", "key", "password")
 SINGLE = ("plex", "lidarr", "tautulli", "tracearr", "tdarr", "sportarr", "prowlarr", "jackett", "seerr", "qbit", "transmission", "sabnzbd", "nzbget", "gotify") + NOTIFY_KINDS
-LISTS = ("arrs", "bazarr")
+LISTS = ("arrs", "bazarr", "servers")       # v0.4.0 servers: extra media servers
 
 def settings_public():
     """Settings for the page: secrets replaced by <field>_set: true. List items carry _i (their index) so a save can keep unchanged keys."""
@@ -7109,14 +7963,14 @@ def settings_public():
     h, mi, days = sched()
     out["schedule"] = {"hour": h, "minute": mi, "days": days}
     out["language"] = pref_language()
-    out["trash_days"] = TRASH_DAYS; out["digest"] = S.get("digest") or "news"
+    out["trash_days"] = TRASH_DAYS; out["digest"] = S.get("digest") or "news"; out["app_url"] = S.get("app_url") or ""
     out["deep"] = deep_cfg()
     tz = os.environ.get("TZ", "").strip()
     if not tz:
         try: tz = os.path.relpath(os.path.realpath("/etc/localtime"), "/usr/share/zoneinfo")
         except Exception: tz = ""
     hints = {"puid": os.getuid() or 1000, "pgid": os.getgid() or 1000, "tz": tz if tz and not tz.startswith("..") else "Etc/UTC"}   # v0.1.9 "Don't have it?" snippets
-    return {"settings": out, "configured": configured(), "media_root": MEDIA_ROOT, "languages": sorted(LANGS), "hints": hints}
+    return {"settings": out, "configured": configured(), "media_root": MEDIA_ROOT, "languages": sorted(LANGS), "hints": hints, "phone_app": PHONE_APP}
 
 RUNTIME_KEYS = ("roots", "machine")                          # filled in while running; never written to config.json
 
@@ -7128,7 +7982,7 @@ def _with_secrets(kind, e):
     """Fill blank secret fields of an edited entry from what's saved (matched by _i for lists)."""
     e = {k: v for k, v in _clean_entry(e).items() if not k.endswith("_set")}
     old = (S.get(kind) or [])[e["_i"]] if kind in LISTS and isinstance(e.get("_i"), int) and e["_i"] < len(S.get(kind) or []) else S.get(kind) if kind in SINGLE else None
-    if kind == "plex":                       # v0.2: never hand a saved Plex token to Jellyfin/Emby (or the other way round)
+    if kind in ("plex", "servers"):          # v0.2: never hand a saved Plex token to Jellyfin/Emby (or the other way round)
         if e.get("kind") not in ("plex", "jellyfin", "emby"): e["kind"] = "plex"
         if isinstance(old, dict) and (old.get("kind") or "plex") != e["kind"]: old = None
     for f in SECRET_FIELDS:
@@ -7140,6 +7994,10 @@ def _with_secrets(kind, e):
     return e
 
 def settings_test(kind, e):
+    if kind == "servers":                    # v0.4.0: an extra media server tests like the main one, with its own saved key only
+        e = _with_secrets("servers", e)
+        if not e.get("token"): return {"ok": False, "msg": "Fill in the token / API key first."}
+        kind = "plex"
     e = _with_secrets(kind, e)
     if kind in NOTIFY_DEFAULT_URL and not e.get("url"): e["url"] = NOTIFY_DEFAULT_URL[kind]
     if not e.get("url"): return {"ok": False, "msg": "Fill in the address first."}
@@ -7221,7 +8079,7 @@ def settings_test(kind, e):
             r = notify_one(kind, e, "Library Doctor", "Connected. Nightly summaries will come here.", 3)
             return {"ok": r.get("ok"), "msg": "Sent a test message." if r.get("ok") else r.get("error")}
         if kind == "gotify":
-            http(u + "/message", {"X-Gotify-Key": e.get("token", "")}, data={"title": "Library Doctor", "message": "Connected. Nightly summaries will come here.", "priority": 3}, method="POST", timeout=15)
+            http(u + "/message", {"X-Gotify-Key": e.get("token", "")}, data={"title": "Library Doctor", "message": "Connected. Nightly summaries will come here.", "priority": 3, **({"extras": {"client::notification": {"click": {"url": e.get("click") or app_link()}}}} if e.get("click") or app_link() else {})}, method="POST", timeout=15)
             return {"ok": True, "msg": "Sent a test message to Gotify."}
     except urllib.error.HTTPError as x:
         return {"ok": False, "msg": "It answered, but said %d %s. %s" % (x.code, x.reason, ("Check the username and password." if kind in ("qbit", "transmission", "nzbget") else "Check the API key.") if x.code in (401, 403) else "")}
@@ -7372,7 +8230,7 @@ def settings_import(data, passphrase=None):
     cfg = (data or {}).get("settings") if isinstance(data, dict) else None
     if not isinstance(cfg, dict) or not (data or {}).get("library_doctor_settings"):
         return {"ok": False, "msg": "That isn't a Library Doctor settings file."}
-    known = set(SINGLE) | set(LISTS) | {"schedule", "language", "trash_days", "digest", "deep"}
+    known = set(SINGLE) | set(LISTS) | {"schedule", "language", "trash_days", "digest", "deep", "app_url"}
     for k, v in cfg.items():                                  # settings this page doesn't edit (e.g. qbit) come along too
         if k not in known: S[k] = v
     new = {k: cfg[k] for k in known if k in cfg}
@@ -7391,6 +8249,10 @@ def settings_import(data, passphrase=None):
 
 def settings_detect(kind, e):
     """Work out the folder mapping: for each sample, find which folder under MEDIA_ROOT holds the same tail."""
+    if kind == "servers":                    # v0.4.0
+        e = _with_secrets("servers", e)
+        if not e.get("token"): return {"ok": False, "msg": "Fill in the token / API key first."}
+        kind = "plex"
     e = _with_secrets(kind, e)
     try: smp = _samples(kind, e)
     except Exception as x: return {"ok": False, "msg": "Couldn't read paths from it: %s. Test the connection first." % getattr(x, "reason", x)}
@@ -7440,6 +8302,11 @@ def settings_save(new):
         if td not in (3, 7, 14, 30): return {"ok": False, "msg": "Pick 3, 7, 14 or 30 days for the trash."}
         cfg["trash_days"] = td
     elif "trash_days" in S: cfg["trash_days"] = S["trash_days"]
+    if "app_url" in (new or {}):                             # v0.3.6: where messages link to
+        au = str(new.get("app_url") or "").strip().rstrip("/")
+        if au and not re.fullmatch(r"https?://[A-Za-z0-9._\[\]:-]{1,200}", au): return {"ok": False, "msg": "The Library Doctor address should look like https://librarydoctor.example.com, with nothing after it."}
+        cfg["app_url"] = au
+    elif "app_url" in S: cfg["app_url"] = S["app_url"]
     if "digest" in (new or {}):                              # v0.1.7: news (after scans with news) | weekly | both
         dg = str(new.get("digest") or "news")
         cfg["digest"] = dg if dg in ("news", "weekly", "both") else "news"
@@ -7470,11 +8337,21 @@ def settings_save(new):
         cfg[k] = [_with_secrets(k, e) for e in (new or {}).get(k) or [] if isinstance(e, dict) and e.get("url")]
     # v0.1.4: keep settings this page doesn't edit (e.g. "qbit" from an older secrets.json) instead of dropping them
     for k, v in S.items():
-        if k not in cfg and k not in SINGLE and k not in LISTS and k not in ("schedule", "language", "trash_days", "digest", "deep"): cfg[k] = v
+        if k not in cfg and k not in SINGLE and k not in LISTS and k not in ("schedule", "language", "trash_days", "digest", "deep", "app_url"): cfg[k] = v
     names = [a.get("name", "") for a in cfg["arrs"]]
     if any(not n for n in names) or len(set(names)) != len(names): return {"ok": False, "msg": "Each Radarr/Sonarr needs its own name."}
+    olds = {i: x.get("id") for i, x in enumerate(S.get("servers") or [])}           # v0.4.0: extra media servers keep their id
+    for e, raw in zip(cfg["servers"], [x for x in (new or {}).get("servers") or [] if isinstance(x, dict) and x.get("url")]):
+        sid = str(raw.get("id") or (olds.get(raw.get("_i")) if isinstance(raw.get("_i"), int) else "") or "")
+        e["id"] = sid if re.fullmatch(r"s[0-9a-f]{8}", sid) else "s" + secrets.token_hex(4)
+        e["name"] = str(e.get("name") or MS_NAMES.get(e.get("kind") or "plex", "Plex")).strip()[:40]
+        if not e.get("token"): return {"ok": False, "msg": "Fill in the %s for %s under More media servers." % ("Plex token" if (e.get("kind") or "plex") == "plex" else "API key", e["name"])}
+    snames = [MS_NAMES.get((cfg.get("plex") or {}).get("kind") or "plex", "Plex") if cfg.get("plex") else ""] + [e["name"] for e in cfg["servers"]]
+    if len({n.lower() for n in snames if n}) != len([n for n in snames if n]): return {"ok": False, "msg": "Give each media server its own name (for example \"Jellyfin 2\")."}
+    if not cfg.get("plex") and cfg["servers"]: return {"ok": False, "msg": "Add your main media server first, then the others under More media servers."}
     for a in cfg["arrs"]:
         if a.get("kind") not in ("radarr", "sonarr"): return {"ok": False, "msg": "Pick Radarr or Sonarr for %s." % a["name"]}
+        if (a.get("fallback") or "") not in ("",) + tuple(FALLBACKS): return {"ok": False, "msg": "Pick a fallback from the list for %s." % a["name"]}
     if cfg.get("plex"):
         t = settings_test("plex", dict(cfg["plex"]))
         if t.get("machine"): cfg["plex"]["machine"] = t["machine"]
@@ -7487,6 +8364,9 @@ def settings_save(new):
     apply_trash_days(); _FC["t"] = 0
     _TDARR_LIBS["t"] = 0; _STATS["v"] = None
     event("settings", "Settings saved.")
+    if not IS_CHILD:
+        try: servers_sync()                                       # v0.4.0: start, restart or stop the other media servers
+        except Exception as e: log("other servers not updated: %r" % e)
     return {"ok": True, "configured": configured()}
 
 _SIZE_RE = re.compile(r"saved ([\d.]+) (B|KB|MB|GB|TB)\b")
@@ -7766,6 +8646,8 @@ def state():
     with db() as c:
         ign = hidden_ids(c)
         snz = {r["id"]: r["until"] for r in c.execute("SELECT id, until FROM snoozed WHERE until > ? AND id NOT IN (SELECT id FROM ignored)", (now_iso(),))}
+        by_rule = learned_hidden(c)
+        own_ign = {r["id"] for r in c.execute("SELECT id FROM ignored")}
         rows = [dict(r) for r in c.execute("SELECT * FROM issues ORDER BY chk, library, title")]
         scans = [dict(r) for r in c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 10")]
         trash = [dict(r) for r in c.execute("SELECT id, title, src, size, reason, moved_at FROM trash WHERE restored_at IS NULL AND purged_at IS NULL ORDER BY id DESC")]
@@ -7777,11 +8659,15 @@ def state():
         x["trash_ids"] = [t for t in json.loads(x["trash_ids"] or "[]") if t in open_trash]
         try: rf = json.loads(x.get("ref") or "null")
         except Exception: rf = None
+        if isinstance(rf, dict) and x.get("chk") == "health":     # pre7: quality fallback
+            x["lower"] = rf.get("lower"); x["fb_arr"] = rf.get("arr"); x["fb_done"] = rf.get("fallback")
+            x["fb"] = bool(rf.get("lower") and not rf.get("fallback") and ((arr_by_name(rf.get("arr")) or {}).get("fallback") or "") in FALLBACKS)
         x["tdarr"] = [{"name": os.path.basename(os.path.dirname(it["path"])), "state": it.get("state", "queued"), "pct": it.get("pct"),
                        "size": it["size"], "after": it.get("after")} for it in rf["items"]] if isinstance(rf, dict) and rf.get("kind") == "tdarr" else None
     for r in rows:
         r["detail"] = json.loads(r["detail"]); r["links"] = live_plex_links(json.loads(r["links"]), "i", r["id"]); r["ignored"] = r["id"] in ign
         if r["id"] in snz: r["snoozed"] = snz[r["id"]]
+        if r["id"] in by_rule and r["id"] not in own_ign: r["learned"] = True
     held = kv_get("trash_held") or {}
     for t in trash:
         t["empties"] = (datetime.fromisoformat(t["moved_at"]) + timedelta(days=TRASH_DAYS)).isoformat(timespec="seconds")
@@ -7801,10 +8687,168 @@ def state():
              "full_running": VIRUS_LOCK.locked(), "full_started": (kv_get("virus_full_running") or {}).get("at")}
     try: space = space_forecast()
     except Exception as e: space = None; log("space forecast failed: %r" % e)
-    return {"ms_kind": ms_kind(), "ms_name": ms_name(), "space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "deep": deep_status(), "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "scans": scans,
+    return {"ms_kind": ms_kind(), "ms_name": ms_name(), "space": space, "language": pref_language(), "plex_backup_at": kv_get("plex_backup_at"), "plex_auto_backup": plex_auto_backup(), "plex_tidy_at": kv_get("plex_tidy_at"), "gotify": bool(notify_channels()), "notify": [k for k, _ in notify_channels()], "follow_days": FOLLOW_DAYS, "virus": virus, "deep": deep_status(), "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "issues": rows, "learned": learn_rules(), "scans": scans,
             "scan_hour": sched()[0], "scan_minute": sched()[1], "scan_days": sched()[2], "keep_days": KEEP_DAYS, "stats": stats(), "score": library_score(), "trash": trash, "bins": bins, "trash_days": TRASH_DAYS, "events": events, "done": done,
+            "child": IS_CHILD, "phone_app": PHONE_APP, "main_name": os.environ.get("LD_MAIN_LABEL", ""), "main_checks": ["virus", "subs", "queue", "apps"] if IS_CHILD else [],   # v0.4.0
             "configured": configured(), "has_arrs": has_arrs(), "has_lidarr": bool((S.get("lidarr") or {}).get("url")), "version": APP_VERSION, "split_mounts": split_mounts(), "media_root": MEDIA_ROOT, "security_blocked": security_info()["blocked"],
             "plex_settings": "%s/desktop/#!/settings/server/%s/manage/optimized" % ((S.get("plex") or {}).get("public", "https://app.plex.tv").rstrip("/"), (S.get("plex") or {}).get("machine", ""))}
+
+# ---------------- several media servers (v0.4.0, GitHub #5) ----------------
+SERVERS_DIR = os.path.join(CONFIG_DIR, "servers")
+_KIDS = {}                                   # server id -> {"proc", "port", "sig", "name", "kind"}
+_KIDS_LOCK = threading.Lock()
+_INTERNAL = INTERNAL_TOKEN or secrets.token_hex(24)   # main: made fresh at every start, handed to the children
+
+def _free_port(start=8801):
+    import socket
+    used = {k["port"] for k in _KIDS.values()}
+    for p in range(start, start + 200):
+        if p in used or p == PORT: continue
+        s = socket.socket()
+        try: s.bind(("127.0.0.1", p)); return p
+        except OSError: continue
+        finally: s.close()
+    raise RuntimeError("no free port for another media server")
+
+def _child_cfg(sv):
+    """The child's config.json: everything from the main settings (Radarr, Sonarr, notifications...) with this server
+    as its media server, and no schedule of its own (the main process runs its night after the main scan)."""
+    # only saved settings: running caches (roots, machine, _rbown...) would change the signature and restart the child
+    cl = lambda v: _clean_entry(v) if isinstance(v, dict) else [_clean_entry(x) if isinstance(x, dict) else x for x in v] if isinstance(v, list) else v
+    c = {k: cl(v) for k, v in S.items() if k not in ("servers", "plex")}
+    c["plex"] = {k: v for k, v in _clean_entry(sv).items() if k not in ("id", "_i")}
+    c["schedule"] = {"hour": -1, "minute": 0, "days": list(range(7))}
+    return c
+
+def _kid_stop(sid):
+    k = _KIDS.pop(sid, None)
+    if not k: return
+    try:
+        k["proc"].terminate(); k["proc"].wait(timeout=20)
+    except Exception:
+        try: k["proc"].kill()
+        except Exception: pass
+
+def servers_sync():
+    """Start a child for every extra media server, restart one whose settings changed or that stopped, stop removed ones."""
+    if IS_CHILD: return
+    with _KIDS_LOCK:
+        want = {sv["id"]: sv for sv in S.get("servers") or [] if sv.get("id") and sv.get("url") and sv.get("token")}
+        for sid in [x for x in _KIDS if x not in want]:
+            log("stopping %s (removed from Settings)" % _KIDS[sid]["name"]); _kid_stop(sid)
+        for sid, sv in want.items():
+            cfg = _child_cfg(sv); sig = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
+            k = _KIDS.get(sid)
+            if k and k["sig"] == sig and k["proc"].poll() is None: continue
+            if k: _kid_stop(sid)
+            d = os.path.join(SERVERS_DIR, sid); os.makedirs(d, mode=0o700, exist_ok=True)
+            f = os.path.join(d, "config.json"); tmp = f + ".tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh: json.dump(cfg, fh, indent=1)
+            os.replace(tmp, f)
+            port = _free_port()
+            env = dict(os.environ, LD_CONFIG=d, LD_PORT=str(port), LD_LISTEN="127.0.0.1", LD_AUTH="off", LD_ROLE="server",
+                       LD_INTERNAL_TOKEN=_INTERNAL, LD_SERVER_ID=sid, LD_SERVER_LABEL=sv.get("name") or "", LD_PRIMARY_DB=DB_PATH, LD_MAIN_LABEL=(S.get("plex") or {}).get("name") or ms_name(),
+                       LD_ALLOWED_HOSTS="", LD_TRUSTED_PROXIES="")
+            proc = subprocess.Popen([sys.executable, os.path.abspath(__file__)], env=env, cwd=APP_DIR)
+            _KIDS[sid] = {"proc": proc, "port": port, "sig": sig, "name": sv.get("name") or "", "kind": sv.get("kind") or "plex"}
+            log("started %s (%s) for the other media server" % (sv.get("name"), MS_NAMES.get(sv.get("kind") or "plex", "Plex")))
+
+def servers_watch():
+    while True:
+        time.sleep(30)
+        try: servers_sync()
+        except Exception as e: log("other servers check failed: %r" % e)
+
+def kid_call(sid, method, path, body=None, timeout=300, headers=None):
+    """(status, headers, body bytes) from a child. Redirects are passed back, not followed."""
+    k = _KIDS.get(sid)
+    if not k or k["proc"].poll() is not None: raise ConnectionError("not running")
+    h = {"X-LD-Internal": _INTERNAL, "Host": "127.0.0.1:%d" % k["port"]}
+    h.update(headers or {})
+    class _NoRedir(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **kw): return None
+    op = urllib.request.build_opener(_NoRedir)
+    req = urllib.request.Request("http://127.0.0.1:%d%s" % (k["port"], path), data=body, headers=h, method=method)
+    try:
+        with op.open(req, timeout=timeout) as r: return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers or {}), e.read() if hasattr(e, "read") else b""
+
+_SUMMARY = {"v": None}
+def server_summary():
+    """One server's headline numbers for the server picker and the All servers overview. While a scan runs the last
+    numbers are reused with the live progress, so the page never waits on the scan for the database."""
+    live = {"running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"]}
+    if STATE["running"] and _SUMMARY["v"]: return dict(_SUMMARY["v"], **live)
+    v = _server_summary(); _SUMMARY["v"] = v
+    return dict(v, **live)
+
+def _server_summary():
+    with db() as c:
+        sc = c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1").fetchone()
+        hid = hidden_ids(c)
+        rows = [(r["id"], r["chk"]) for r in c.execute("SELECT id, chk FROM issues")]
+    by = {}
+    for i, ch in rows:
+        if i in hid or ch == "unwatched": continue
+        by[ch] = by.get(ch, 0) + 1
+    try: score = library_score()
+    except Exception: score = None
+    with db() as c: tr = c.execute("SELECT COUNT(*) n, COALESCE(SUM(size),0) s FROM trash WHERE restored_at IS NULL AND purged_at IS NULL").fetchone()
+    p = S.get("plex") or {}
+    return {"id": SERVER_ID, "name": (SERVER_LABEL if IS_CHILD else "") or p.get("name") or ms_name(), "kind": ms_kind(), "configured": configured(),
+            "running": STATE["running"], "step": STATE["step"], "progress": STATE["progress"], "score": score, "open": sum(by.values()), "by_chk": by,
+            "last_scan": dict(sc) if sc else None, "roots": kv_get("ms_roots") or [], "trash": {"count": tr["n"], "size": tr["s"]}, "version": APP_VERSION}
+
+_LAST_SUM = {}
+def servers_list():
+    out = [dict(server_summary(), main=True)]
+    res = {}
+    def one(sv):
+        sid = sv["id"]; base = {"id": sid, "name": sv.get("name") or MS_NAMES.get(sv.get("kind") or "plex", "Plex"), "kind": sv.get("kind") or "plex", "main": False}
+        try:
+            st, _, b = kid_call(sid, "GET", "/api/summary", timeout=12)
+            res[sid] = dict(json.loads(b), **{k: base[k] for k in ("id", "name", "main")}) if st == 200 else dict(base, error="answered %d" % st)
+            if st == 200: _LAST_SUM[sid] = res[sid]
+        except Exception as e:
+            k = _KIDS.get(sid)
+            if k and k["proc"].poll() is None and _LAST_SUM.get(sid): res[sid] = dict(_LAST_SUM[sid], busy=True)   # alive, just slow to answer
+            else: res[sid] = dict(base, error="starting" if k and k["proc"].poll() is None else "not running", detail=str(getattr(e, "reason", e))[:120])
+    ts = [threading.Thread(target=one, args=(sv,), daemon=True) for sv in S.get("servers") or [] if sv.get("id")]
+    for t in ts: t.start()
+    for t in ts: t.join(10)
+    for sv in S.get("servers") or []:
+        if sv.get("id") in res: out.append(res[sv["id"]])
+    return out
+
+def servers_nightly():
+    """After the main nightly scan: each other server's night (empty its old trash, follow-ups, scan, summary), one at a time."""
+    if IS_CHILD: return
+    for sid in list(_KIDS):
+        name = _KIDS.get(sid, {}).get("name", sid)
+        try:
+            st, _, b = kid_call(sid, "POST", "/api/internal/nightly", b"{}", timeout=30, headers={"X-LD": "1", "Content-Type": "application/json"})
+            if st != 202: log("%s didn't start its nightly scan (%d)" % (name, st)); continue
+            t0 = time.time(); time.sleep(20)
+            while time.time() - t0 < 4 * 3600:
+                st, _, b = kid_call(sid, "GET", "/api/summary", timeout=15)
+                if st == 200 and not json.loads(b).get("running"): break
+                time.sleep(30)
+        except Exception as e:
+            log("%s nightly failed: %r" % (name, e))
+
+def _child_nightly():
+    try: purge(TRASH_DAYS)
+    except Exception as e: log("purge failed: %r" % e)
+    try: followup()
+    except Exception as e: log("followup failed: %r" % e)
+    scan()
+    for fn in (snooze_due, weekly_digest, nightly_summary):
+        try: fn()
+        except Exception as e: log("%s failed: %r" % (fn.__name__, e))
+
+MAIN_ONLY = ("/api/auth", "/api/login", "/api/logout", "/api/settings", "/api/servers", "/api/security", "/api/foldercheck", "/api/devices")
 
 class H(BaseHTTPRequestHandler):
     server_version = "LibraryDoctor/2"
@@ -7820,6 +8864,8 @@ class H(BaseHTTPRequestHandler):
         return chain[0] if chain else peer
     def _gate(self):
         """None when the request may go on, else the reason it's refused (wrong host name, or login off and not via the proxy)."""
+        if IS_CHILD:                                 # v0.4.0: a child answers only the main Library Doctor
+            return None if INTERNAL_TOKEN and hmac.compare_digest(self.headers.get("X-LD-Internal") or "", INTERNAL_TOKEN) else "Refused."
         if not host_ok(self.headers.get("Host")):
             why = "the address %s isn't in LD_ALLOWED_HOSTS" % host_name(self.headers.get("Host"))[:80]
             note_blocked(self._peer(), why); return "Refused: " + why + "."
@@ -7836,8 +8882,39 @@ class H(BaseHTTPRequestHandler):
     def _cookie(self, tok, clear=False):
         secure = "; Secure" if is_trusted_proxy(self._peer()) and (self.headers.get("X-Forwarded-Proto") or "").lower() == "https" else ""
         return "ld_session=%s; Path=/; HttpOnly; SameSite=Strict%s; Max-Age=%d" % ("" if clear else tok, secure, 0 if clear else SESSION_DAYS * 86400)
+    def _bearer(self):
+        """v0.4.0: (sent a phone key?, the paired device or None)."""
+        if IS_CHILD: return False, None
+        a = (self.headers.get("Authorization") or "").strip()
+        if not re.match(r"bearer(\s|$)", a, re.I): return False, None      # "Bearer" with no key still counts as a (bad) key
+        if getattr(self, "_dev_key", None) != a: self._dev_key, self._dev_cache = a, device_by_token(a[6:].strip(), self._ip())
+        return True, self._dev_cache
     def authed(self):
+        sent, dev = self._bearer()
+        if sent: return dev is not None                   # a phone key decides, even with LD_AUTH=off
         return not AUTH_ON or session_ok(self._tok())
+    def _dev_blocked(self, path):
+        sent, dev = self._bearer()
+        return bool(sent and dev and path not in DEVICE_OPEN and any(path == p or path.startswith(p + "/") for p in DEVICE_BLOCKED))
+    def _srv(self, path):
+        """v0.4.0: the extra media server this request is for (None = this process)."""
+        if IS_CHILD or not path.startswith("/api/") or any(path == p or path.startswith(p + "/") for p in MAIN_ONLY): return None
+        sid = (self.headers.get("X-LD-Server") or "").strip()
+        if not sid:
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            sid = (q.get("srv") or [""])[0]
+        return sid if sid and sid != "main" else None
+    def _pass_on(self, sid, method, body=None):
+        if not any(sv.get("id") == sid for sv in S.get("servers") or []):
+            return self.send(404, {"ok": False, "error": "That media server isn't in Settings any more. Pick another one at the top."})
+        h = {"Content-Type": "application/json"} if body is not None else {}
+        if self.headers.get("X-LD") or (method == "POST" and self._bearer()[1]): h["X-LD"] = "1"   # the main process already checked the page header or the phone key
+        try: st, rh, b = kid_call(sid, method, self.path, body, headers=h)
+        except Exception:
+            nm = next((sv.get("name") for sv in S.get("servers") or [] if sv.get("id") == sid), "That server")
+            return self.send(503, {"ok": False, "error": "%s is still starting. Try again in a few seconds." % nm})
+        if st in (301, 302, 303, 307, 308) and rh.get("Location"): return self._redirect(rh["Location"])
+        return self.send(st, b, rh.get("Content-Type") or "application/json")
     def send(self, code, body, ctype="application/json", cookie=None):
         b = body if isinstance(body, bytes) else json.dumps(ms_words_in(body)).encode()
         self.send_response(code)
@@ -7856,12 +8933,26 @@ class H(BaseHTTPRequestHandler):
         if path == "/healthz": return self.send(200, {"ok": True, "version": APP_VERSION})
         g = self._gate()
         if g: return self.send(403, g.encode(), "text/plain; charset=utf-8")
+        if path in PWA_FILES:                                   # v0.3.6: home screen app. Fixed files with nothing private in them, so no login needed
+            name, ctype = PWA_FILES[path]
+            with open(os.path.join(APP_DIR, "pwa", name), "rb") as f: return self.send(200, f.read(), ctype)
         if path == "/login" or (path in ("/", "/index.html") and not self.authed()):
             if path == "/login" and self.authed(): return self._redirect("/")
             with open(os.path.join(APP_DIR, "login.html"), "rb") as f:
                 return self.send(200, f.read(), "text/html; charset=utf-8")
+        if path == "/api/auth" and self._bearer()[0]: return self.send(403, {"error": "A phone can't open this. Use Library Doctor in a browser."})
         if path == "/api/auth": return self.send(200, dict({"on": AUTH_ON, "has_password": bool(auth_get()), "in": self.authed()}, **({"security": security_info()} if self.authed() else {})))
         if not self.authed(): return self.send(401, {"error": "Please log in.", "login": True})
+        if self._dev_blocked(path): return self.send(403, {"error": "A phone can't open this. Use Library Doctor in a browser."})
+        if path == "/api/devices/me":
+            sent, dev = self._bearer()
+            if not dev: return self.send(401, {"error": "This phone isn't paired."})
+            return self.send(200, {"ok": True, "name": dev["name"], "created": dev["created"], "version": APP_VERSION, "server": (S.get("plex") or {}).get("name") or ms_name()})
+        if path == "/api/devices": return self.send(200, {"devices": devices_list()})
+        sid = self._srv(path)
+        if sid: return self._pass_on(sid, "GET")
+        if path == "/api/summary": return self.send(200, server_summary())              # v0.4.0
+        if path == "/api/servers": return self.send(200, {"servers": servers_list()})
         if path in ("/", "/index.html"):
             with open(os.path.join(APP_DIR, "index.html"), "rb") as f:
                 return self.send(200, f.read(), "text/html; charset=utf-8")
@@ -7876,6 +8967,9 @@ class H(BaseHTTPRequestHandler):
             return self.send(404, b"<!doctype html><meta charset=utf-8><title>Library Doctor</title><body style='font:16px system-ui;padding:24px'>"
                              b"<p>Plex doesn't have this item any more, and none of its files are in a Plex library now.</p>"
                              b"<p>Run <b>Scan now</b> in Library Doctor to bring the list up to date.</p>", "text/html; charset=utf-8")
+        if path == "/api/plex-app":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            return self.send(200, {"urls": plex_app_urls((q.get("ids") or [""])[0].split(","))})
         if path.startswith("/api/history"):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self.send(200, history(int((q.get("days") or ["30"])[0]) if (q.get("days") or ["30"])[0].isdigit() else 30))
@@ -7893,12 +8987,22 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         g = self._gate()
         if g: return self.send(403, {"error": g, "msg": g})
-        if self.headers.get("X-LD") != "1":          # only our own page may call these
-            return self.send(403, {"error": "forbidden"})
         path = urllib.parse.urlparse(self.path).path
+        if self.headers.get("X-LD") != "1" and not self._bearer()[0] and path != "/api/devices/claim":   # only our own page (or a phone key)
+            return self.send(403, {"error": "forbidden"})
         n = int(self.headers.get("Content-Length") or 0)
         if n > 2_000_000: return self.send(413, {"error": "too big"})
         body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+        if path in ("/api/devices/claim", "/api/devices/pair") and not PHONE_APP:
+            return self.send(404, {"ok": False, "error": "The phone app isn't available yet."})
+        if path == "/api/devices/claim" and not IS_CHILD:     # v0.4.0: a phone swaps a pairing code for its own key
+            key = self._ip()
+            if _locked(key): return self.send(429, {"ok": False, "error": "Too many wrong codes. Try again in 15 minutes."})
+            tok = pair_claim(body.get("code"), body.get("name"), body.get("platform"), key)
+            if not tok:
+                _fail(key); time.sleep(1)
+                return self.send(200, {"ok": False, "error": "That code isn't right or has expired. Make a new one in Settings → Phone app."})
+            return self.send(200, {"ok": True, "token": tok, "version": APP_VERSION, "server": (S.get("plex") or {}).get("name") or ms_name()})
         if path == "/api/auth/setup":                  # first run only: create the password
             if not AUTH_ON or auth_get(): return self.send(409, {"ok": False, "msg": "A password is already set."})
             bad = pw_problem(body.get("password"))
@@ -7916,6 +9020,23 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/logout":
             session_end(self._tok()); return self.send(200, {"ok": True}, cookie=self._cookie("", clear=True))
         if not self.authed(): return self.send(401, {"error": "Please log in.", "login": True})
+        if self._dev_blocked(path): return self.send(403, {"ok": False, "error": "A phone can't do this. Use Library Doctor in a browser."})
+        if path == "/api/devices/push" and not IS_CHILD:          # v0.4.0 stage 4: a phone switches its notifications on/off
+            sent, dev = self._bearer()
+            if not dev: return self.send(401, {"ok": False, "error": "Only a paired phone can do this."})
+            return self.send(200, device_push_set(dev, body.get("token")))
+        if path == "/api/devices/pair" and not IS_CHILD:
+            return self.send(200, pair_new(body.get("origin"), self._ip()))
+        if path == "/api/devices/remove" and not IS_CHILD:
+            try: did = int(body.get("id"))
+            except (TypeError, ValueError): return self.send(200, {"ok": False, "error": "Pick a phone."})
+            return self.send(200, device_remove(did))
+        sid = self._srv(path)
+        if sid: return self._pass_on(sid, "POST", json.dumps(body).encode())
+        if path == "/api/internal/nightly" and IS_CHILD:            # v0.4.0: the main process starts a child's night
+            if STATE["running"]: return self.send(409, {"error": "A scan is already running."})
+            threading.Thread(target=_child_nightly, daemon=True).start()
+            return self.send(202, {"started": True})
         if path == "/api/auth/change":
             if not AUTH_ON: return self.send(200, {"ok": False, "msg": "The login is switched off (LD_AUTH=off)."})
             if not auth_check(body.get("old")): _fail(self._ip()); time.sleep(1); return self.send(200, {"ok": False, "msg": "Your current password isn't right."})
@@ -7923,10 +9044,14 @@ class H(BaseHTTPRequestHandler):
             if bad: return self.send(200, {"ok": False, "msg": bad})
             auth_set(body["new"]); session_end(None, everyone=True); event("login", "Password changed; everyone else logged out.")
             return self.send(200, {"ok": True}, cookie=self._cookie(session_new(self.client_address[0])))
+        busy = plex_busy_reason(path)
+        if busy: return self.send(200, {"ok": False, "error": busy})
         try:
             if path == "/api/settings/test": return self.send(200, settings_test(str(body.get("kind")), body.get("cfg") or {}))
             if path == "/api/settings/detect": return self.send(200, settings_detect(str(body.get("kind")), body.get("cfg") or {}))
-            if path == "/api/settings/save": return self.send(200, settings_save(body.get("settings") or {}))
+            if path == "/api/settings/save":
+                if IS_CHILD: return self.send(403, {"ok": False, "msg": "Settings are saved in the main Library Doctor."})
+                return self.send(200, settings_save(body.get("settings") or {}))
             if path == "/api/scan":
                 if not configured(): return self.send(409, {"error": "Set up your media server (Plex, Jellyfin or Emby) in Settings first."})
                 if STATE["running"]: return self.send(409, {"error": "A scan is already running."})
@@ -7940,11 +9065,18 @@ class H(BaseHTTPRequestHandler):
                     until = (datetime.now() + timedelta(days=int(days))).isoformat(timespec="seconds") if isinstance(days, int) and 0 < days < 10000 else None
                     if path == "/api/ignore":
                         c.execute("INSERT OR REPLACE INTO ignored (id, title, at, until) VALUES (?,?,?,?)", (i, str(body.get("title", ""))[:200], now_iso(), until))
+                        if until is None and not body.get("uw"):
+                            try: learn_note(c, i)
+                            except Exception as e: log("learn note failed: %r" % e)
                     else:
                         c.execute("DELETE FROM ignored WHERE id=?", (i,)); c.execute("DELETE FROM snoozed WHERE id=?", (i,))
+                        try: learn_unnote(c, i)
+                        except Exception as e: log("learn unnote failed: %r" % e)
                 if body.get("uw"):                       # an Unwatched item: move it on the card now
                     uw_move(i, until=until, show=(path == "/api/unignore"))
                 return self.send(200, {"ok": True})
+            if path == "/api/learn":
+                return self.send(200, learn_set(str(body.get("sig", ""))[:300], str(body.get("do", ""))))
             if path == "/api/cleanup":
                 ids = body.get("ids") or [body.get("id")]
                 keep = body.get("keep") or {}          # {issue_id: index of the copy to keep}
@@ -7960,7 +9092,7 @@ class H(BaseHTTPRequestHandler):
                 ids = body.get("ids") or [body.get("id")]
                 res = [dict(health_fix(str(i)[:32]), id=i) for i in ids if i][:200]
                 return self.send(200, {"ok": any(r.get("ok") for r in res), "started": sum(1 for r in res if r.get("ok")),
-                                       "errors": [r["error"] for r in res if not r.get("ok")]})
+                                       "errors": [r["error"] for r in res if not r.get("ok")], "failed": [r["id"] for r in res if not r.get("ok")]})
             if path == "/api/subfix":
                 ids = body.get("ids") or [body.get("id")]
                 how = str(body.get("how", ""))
@@ -7990,6 +9122,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, {"ok": any(r.get("ok") for r in res), "errors": [r["error"] for r in res if not r.get("ok") and r.get("error")]})
             if path == "/api/seerrok": return self.send(200, seerr_ok(str(body.get("id", ""))[:32]))
             if path == "/api/albumclean": return self.send(200, album_clean(str(body.get("id", ""))[:32]))
+            if path == "/api/fallback":
+                return self.send(200, fallback_apply(body.get("id") or 0, bool(body.get("confirm"))))
             if path == "/api/appsfix":
                 return self.send(200, apps_fix(str(body.get("id", ""))[:32], str(body.get("how", ""))))
             if path == "/api/plextidy":
@@ -8071,7 +9205,13 @@ if __name__ == "__main__":
     except Exception as e:
         log("startup: couldn't tidy unfinished checks: %r" % e)
     threading.Thread(target=nightly, daemon=True).start()
-    threading.Thread(target=deep_worker, daemon=True).start()      # v0.3 deep check (idle unless asked or switched on)
+    if not IS_CHILD:
+        threading.Thread(target=deep_worker, daemon=True).start()      # v0.3 deep check (idle unless asked or switched on); main only (v0.4.0)
+        try: servers_sync()                                            # v0.4.0: the other media servers
+        except Exception as e: log("other servers didn't start: %r" % e)
+        threading.Thread(target=servers_watch, daemon=True).start()
     apply_trash_days()
+    try: learn_backfill()
+    except Exception as e: log("learn backfill failed: %r" % e)
     log("Library Doctor listening on %s:%d (nightly scan at %02d:00, trash kept %d days)" % (LISTEN, PORT, SCAN_HOUR, TRASH_DAYS))
     ThreadingHTTPServer((LISTEN, PORT), H).serve_forever()

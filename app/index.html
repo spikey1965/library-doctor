@@ -2,9 +2,12 @@
 <html lang="en-GB">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cmask id='ldp' maskUnits='userSpaceOnUse' x='0' y='0' width='64' height='64'%3E%3Crect width='64' height='64' fill='%23fff'/%3E%3Cpath d='M-2 38h14.8l8.1-9.5 6.9 22.7 8.1-18.6 4.7 5.4H66' fill='none' stroke='%23000' stroke-width='4.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/mask%3E%3Cg mask='url%28%23ldp%29'%3E%3Crect x='4' y='11.4' width='12.3' height='46' rx='4.6' fill='%232bc6b4'/%3E%3Crect x='18.6' y='18.8' width='12.3' height='38.6' rx='4.6' fill='%232bc6b4'/%3E%3Crect x='33.2' y='6.5' width='12.3' height='50.9' rx='4.6' fill='%232bc6b4'/%3E%3Crect x='47.7' y='23.6' width='12.3' height='33.8' rx='4.6' fill='%23ff8b3d'/%3E%3C/g%3E%3C/svg%3E">
 <title>Library Doctor</title>
+<!--pwa--><link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials"><link rel="apple-touch-icon" href="/pwa/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Library Doctor">
+<meta name="theme-color" content="#0d1830" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#f3f6fb" media="(prefers-color-scheme: light)"><!--/pwa-->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&display=swap">
 <script>try{var t=localStorage.getItem("ld_theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <style>
@@ -138,7 +141,7 @@ button.sm { font-size:12px; padding:5px 10px; border-radius:9px; }
 .gen .genf { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
 .gen label:not(.day) { display:flex; flex-direction:column; gap:4px; font-size:12px; font-weight:700; color:var(--mut); min-width:0; }
 .gen label small { font-weight:400; font-size:12px; }
-.gen input[type=time], .gen select { font:inherit; font-size:14px; font-weight:400; background:var(--card); color:var(--fg); border:1px solid var(--line2); border-radius:10px; padding:8px 10px; width:100%; box-sizing:border-box; }
+.gen input[type=time], .gen input[type=url], .gen select { font:inherit; font-size:14px; font-weight:400; background:var(--card); color:var(--fg); border:1px solid var(--line2); border-radius:10px; padding:8px 10px; width:100%; box-sizing:border-box; }
 .gen .days { align-items:center; margin-top:4px; }
 .fcapp { white-space:nowrap; } .fcapp .alogo { width:18px; height:18px; vertical-align:-4px; margin:0 5px 0 3px; border-radius:4px; }
 .fcok { margin:0; font-size:14px; display:flex; align-items:center; gap:8px; } details.fcd > summary { cursor:pointer; color:var(--teal); font-size:13px; font-weight:600; }
@@ -387,23 +390,76 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
 .dsk b { font-size:22px; } .dbar { height:8px; }
 @media (max-width:560px) { .panel { padding:16px; } .checks { grid-template-columns:repeat(2,minmax(0,1fr)); } .check .l { white-space:normal; } .hero .ring { width:104px; height:104px; } }
 @media (prefers-reduced-motion: reduce) { .rcard, .check, .tab, button, a.btn { transition:none; } .rcard:hover, .check:hover { transform:none; } }
+/* v0.3.6 phone layout: tabs along the bottom, a one-line header and finger-sized buttons. Wider screens are unchanged. */
+.ponly, .rofoot { display:none; } .tab .tl, .tab .tl span { color:inherit; padding:0; }
+@media (max-width:720px) {
+  .ponly { display:block; } .donly { display:none; }
+  html { scroll-padding-bottom:calc(80px + env(safe-area-inset-bottom,0px)); -webkit-text-size-adjust:100%; }
+  body { padding-top:env(safe-area-inset-top,0px); padding-bottom:calc(84px + env(safe-area-inset-bottom,0px)); }
+  .nav { flex-wrap:nowrap; gap:8px; padding:8px 0; margin-bottom:12px; } .logo { font-size:18px; margin-right:auto; white-space:nowrap; min-width:0; }
+  .nav .ro { display:none; } .rofoot { display:block; text-align:center; color:var(--teal); font:600 13px var(--font); margin:24px 0 0; }
+  .nav .themet, .nav #logout { margin-left:0 !important; min-width:44px; min-height:44px; }
+  .tabs { position:fixed; left:0; right:0; bottom:0; z-index:50; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; background:var(--panel); border-top:1px solid var(--line2);
+    padding:4px max(6px,env(safe-area-inset-right,0px)) calc(4px + env(safe-area-inset-bottom,0px)) max(6px,env(safe-area-inset-left,0px)); }
+  .tabs .tab { position:relative; flex-direction:column; justify-content:center; gap:2px; min-height:54px; padding:4px 2px; border-radius:12px; font-size:12px; }
+  .tabs .tab svg { width:22px; height:22px; } .tabs .tab.on { color:var(--teal); } .tabs .count { position:absolute; top:1px; left:calc(50% + 6px); }
+  #tabSet.unsaved::after { top:6px; right:calc(50% - 18px); }
+  .hero { gap:14px; } .hero .ring b { font-size:20px; } .hero > button { flex:1 1 130px; }
+  button, a.btn, a.b-line, label.b-line, select, input:not([type=checkbox]):not([type=radio]) { min-height:44px !important; }
+  .set a:not(.btn):not(.b-line), .ldfoot a { display:inline-block; padding:11px 4px; }
+  button.sm, a.btn.sm, a.b-line.sm { font-size:13px; padding:8px 12px; }
+  .hero > div:not(.ring) { flex:1 1 150px !important; } .hero > button, .savebar button, .nav .themet, .nav #logout { justify-content:center; text-align:center; white-space:nowrap; }
+  .logo svg { flex:none; } .savebar { padding:8px 0; } .savebar button { flex:1 1 130px; } .savebar .dirty:not(.on) { display:none; }
+  .set table, .set tbody { display:block; width:100%; } .set table tr { display:flex; flex-wrap:wrap; gap:2px 10px; padding:8px 0; border-top:1px solid var(--line); } .set table td { display:block; border:0 !important; padding:2px 0 !important; min-width:0; max-width:100%; overflow-wrap:anywhere; }
+  .eye { min-height:36px; } .pwrap input { padding-right:70px !important; }
+  input:not([type=checkbox]):not([type=radio]), select, textarea { font-size:16px !important; } /* stops iPhones zooming in on tap */
+  input[type=checkbox], input[type=radio] { min-width:20px; min-height:20px; }
+  .savebar { bottom:calc(63px + env(safe-area-inset-bottom,0px)); z-index:20; }
+  .setnav button { min-height:44px; }
+  .bkm { padding:max(12px,env(safe-area-inset-top,0px)) 12px max(12px,env(safe-area-inset-bottom,0px)); } .bkbox { max-height:100%; overflow:auto; }
+  .rvbox { max-height:calc(100dvh - 24px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px)); }
+  .rvbody .rvt td { overflow-wrap:anywhere; }
+  .lgexp { top:calc(14px + env(safe-area-inset-top,0px)); }
+}
+.srvsel { font:600 14px var(--font); background:var(--panel); color:var(--fg); border:1px solid var(--line2); border-radius:9px; padding:6px 10px; max-width:200px; }
+.srvn { display:inline-block; font:600 13px var(--font); color:var(--teal); border:1px solid var(--line2); border-radius:999px; padding:2px 10px; vertical-align:middle; margin-left:6px; }
+.allnote { margin:0 0 12px; }
+.srvgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; margin-top:14px; }
+.srvc { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; display:grid; gap:12px; min-width:0; }
+.srvh { display:flex; align-items:center; gap:8px; min-width:0; } .srvh b { font-size:17px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .srvh .opt { margin-left:auto; white-space:nowrap; }
+.srvb { display:flex; align-items:center; gap:14px; } .srvb .ring { width:76px; height:76px; flex:none; } .srvb .ring b { font-size:16px; }
+.srvl { list-style:none; margin:0; padding:0; display:grid; gap:4px; color:var(--mut); font-size:14px; } .srvl b { color:var(--fg); }
+.srvar { display:flex; flex-wrap:wrap; gap:6px; } .srvar span { font-size:12px; border:1px solid var(--line2); border-radius:999px; padding:2px 8px; color:var(--mut); }
+.srvc .acts { display:flex; flex-wrap:wrap; gap:8px; } .srvc .err { color:var(--red); font-size:14px; }
+.alsoin { display:inline-block; margin-left:6px; font-size:12px; color:var(--orange); }
+@media (max-width:720px) { .srvsel { max-width:130px; padding:6px; } }
+.pairbox { display:flex; flex-wrap:wrap; gap:16px; align-items:center; margin:12px 0; padding:14px; border:1px solid var(--line2); border-radius:12px; background:var(--card); }
+.pairbox svg { width:200px; height:200px; max-width:100%; border-radius:8px; flex:none; }
+.paircode { font:600 26px ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing:.08em; margin:6px 0; user-select:all; }
+.devl { width:100%; border-collapse:collapse; margin:8px 0; } .devl td { padding:8px 6px; border-top:1px solid var(--line); vertical-align:middle; } .devl td:last-child { text-align:right; }
+@media (max-width:350px) { .logo { font-size:15px; gap:6px; } }
+@media (max-width:720px) and (prefers-reduced-motion:no-preference) { .tabs .tab:active { transform:scale(.96); } }
+@media print { .tabs { position:static; } }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="nav">
     <div class="logo"><svg viewBox="0 0 64 64" aria-hidden="true"><mask id="ldp" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M-2 38h14.8l8.1-9.5 6.9 22.7 8.1-18.6 4.7 5.4H66" fill="none" stroke="#000" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/></mask><g mask="url(#ldp)"><rect x="4" y="11.4" width="12.3" height="46" rx="4.6" fill="#2bc6b4"/><rect x="18.6" y="18.8" width="12.3" height="38.6" rx="4.6" fill="#2bc6b4"/><rect x="33.2" y="6.5" width="12.3" height="50.9" rx="4.6" fill="#2bc6b4"/><rect x="47.7" y="23.6" width="12.3" height="33.8" rx="4.6" fill="#ff8b3d"/></g></svg>Library Doctor</div>
-    <div class="tabs" role="tablist"><button class="tab on" id="tabScan" role="tab" aria-selected="true">Scan Library</button><button class="tab" id="tabAna" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Analysis</button><button class="tab" id="tabTrash" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Trash <span class="count" id="trashCount" hidden></span></button><button class="tab" id="tabSet" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M5.5 18.5l1.8-1.8M16.7 7.3l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Settings</button></div>
+    <select id="srvSel" class="srvsel" hidden aria-label="Which media server"></select>
+    <div class="tabs" role="tablist"><button class="tab on" id="tabScan" role="tab" aria-selected="true"><svg class="ponly" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span class="tl">Scan<span class="donly"> Library</span></span></button><button class="tab" id="tabAna" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Analysis</button><button class="tab" id="tabTrash" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Trash <span class="count" id="trashCount" hidden></span></button><button class="tab" id="tabSet" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M5.5 18.5l1.8-1.8M16.7 7.3l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Settings</button></div>
     <button class="themet" id="themeT" type="button" aria-label="Switch light or dark mode" title="Light / dark mode">☾</button><span class="ro" title="Nothing is deleted straight away: clean-up moves copies to the trash, which you can restore for 7 days.">Nothing deleted without asking</span>
     <button class="b-line sm" id="logout" hidden style="margin-left:10px">Log out</button>
   </div>
+  <p class="note allnote" id="allNote" hidden></p>
+  <section class="allv" id="allView" hidden aria-label="All media servers"></section>
   <div class="grid" id="scanView">
     <div class="col">
       <div class="panel">
         <div class="hero">
           <div class="ring" aria-hidden="true"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--orange)" stroke-width="12"/><circle id="arc" cx="60" cy="60" r="50" fill="none" stroke="var(--teal)" stroke-width="12" stroke-linecap="round" stroke-dasharray="0 999"/></svg><b id="ringN">–</b></div>
           <div style="flex:1 1 240px;min-width:0">
-            <h1>Library Health <span id="score">–</span></h1>
+            <h1>Library Health <span id="score">–</span><span class="srvn" id="srvName" hidden></span></h1>
             <p id="last">Loading…</p>
             <div class="meta"><span><b id="nItems">–</b> items</span><span><b id="nFiles">–</b> files checked</span><span><b id="nOpen">–</b> to look at</span><span><b id="nIgn">0</b> ignored</span></div>
             <div class="bar" id="barWrap" hidden><i id="bar" style="width:0"></i></div>
@@ -421,6 +477,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
         <div class="splitw secw" id="secWarn" role="alert" hidden></div>
         <div class="splitw expw" id="expWarn" role="status" hidden></div>
         <div class="splitw expw" id="fcWarn" role="status" hidden></div>
+        <div class="splitw expw" id="learnAsk" role="status" hidden></div>
         <div class="checks" id="checks" role="group" aria-label="Checks"></div>
         <p class="note" id="roNote" hidden></p>
       </div>
@@ -435,6 +492,9 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       <button class="deskbin" id="deskBin" aria-label="Open the Trash"><span id="deskBinArt"></span><span class="dm"><b>Trash</b><span id="deskBinN">Empty</span><small id="deskBinSub">Clean-ups land here first</small></span><span class="go">Open →</span></button>
       <div class="panel"><div class="h"><h2>Scans</h2></div><div class="scans" id="scans"></div>
         <p class="note" id="sched"></p></div>
+      <div class="panel" id="learnP" hidden><div class="h"><h2>Learned from your Ignores</h2></div>
+        <p class="note">When you ignore the same kind of card a few times, Library Doctor asks whether to hide that kind from now on. Damaged files are never hidden.</p>
+        <div id="learnB"></div></div>
       <div class="panel" id="diskP"><div class="h"><h2>Disk space</h2></div><div id="diskB"><p class="note">Loading…</p></div></div>
       <div class="panel" id="tidyP"><div class="h"><h2>Plex tidy-up</h2></div>
         <p class="note">Removes artwork and metadata Plex no longer uses (old posters, replaced overlays) and optimises its database. Plex does this itself every so often; this runs it now.</p>
@@ -480,6 +540,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
         <p class="note"><b>Clean up</b> never deletes. It moves the copies marked Remove into this trash, then asks <span class="msn">Plex</span> and Radarr/Sonarr to rescan, so they don't go looking for them. <b>Put Back</b> returns a file to where it was. The trash empties itself after <span id="tdays">7</span> days. Plex's own converted copies are left alone: remove those in Plex.</p></div>
     </div>
   </section>
+  <p class="rofoot">Nothing is deleted without asking.</p>
   <footer class="ldfoot">Library Doctor is free. If it saves you time, a <a href="https://github.com/spikey1965/library-doctor" target="_blank" rel="noopener">⭐ on GitHub</a> helps others find it, or <a href="https://buymeacoffee.com/bobgreggr" target="_blank" rel="noopener">☕ buy me a coffee</a> · <a href="https://discord.gg/rmuKypgFgB" target="_blank" rel="noopener">💬 Discord</a> · <a href="https://github.com/spikey1965/library-doctor/issues" target="_blank" rel="noopener">Report a problem</a></footer>
 </div>
 <script>
@@ -523,9 +584,15 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
   const human = n => { n = +n || 0; for (const u of ["B", "KB", "MB", "GB", "TB"]) { if (n < 1024 || u === "TB") return u === "B" ? n + " B" : n.toFixed(1) + " " + u; n /= 1024; } };
   const base = p => String(p || "").split("/").pop();
   const removable = i => eff(i).filter(v => v.action === "remove");
-  async function api(path, body) {
-    const r = await fetch(path, body === undefined ? { cache: "no-store" } : { method: "POST", headers: { "Content-Type": "application/json", "X-LD": "1" }, body: JSON.stringify(body) });
-    if (r.status === 401) { location.href = "/login"; throw new Error("Logged out"); }
+  // v0.4.0: several media servers. SRV = "" (only one), "all" (overview) or a server id ("main" = the main one)
+  let SRV = (() => { try { return localStorage.getItem("ld_srv") || ""; } catch (e) { return ""; } })(), SERVERS = [];
+  const CUR = () => SRV && SRV !== "all" ? SRV : "main";
+  const allMode = () => SRV === "all" && SERVERS.length > 1;
+  const srvUrl = u => (CUR() !== "main" && /^\/api\//.test(u || "")) ? u + (u.includes("?") ? "&" : "?") + "srv=" + encodeURIComponent(CUR()) : u;
+  async function api(path, body, sid) {
+    const hs = { "X-LD-Server": sid || CUR() };
+    const r = await fetch(path, body === undefined ? { cache: "no-store", headers: hs } : { method: "POST", headers: Object.assign({ "Content-Type": "application/json", "X-LD": "1" }, hs), body: JSON.stringify(body) });
+    if (r.status === 401) { location.href = "/login" + location.hash; throw new Error("Logged out"); }
     if (!r.ok && r.status !== 409) throw new Error(path + " " + r.status);
     // v0.1.5: behind Authentik/Authelia an expired session answers with that login page (via a redirect) instead of JSON
     const ct = r.headers.get("content-type") || "";
@@ -640,13 +707,17 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
 
   /* v0.1.5: gentle Plex-backup reminder before bulk clean-ups. "Don't ask again today" is remembered per browser. */
   const BK_KEY = "ld_backup_skip";
+  const REPL = {};   // pre4: issue id -> time Replace was pressed; those cards show "Replacing..." instead of the button
+  const replPending = id => { const t = REPL[id]; if (t && Date.now() - t > 180000) delete REPL[id]; return !!REPL[id]; };
   // v0.2: name of the media server (Plex, Jellyfin or Emby) and whether Plex-only features apply
   const SN = () => (S && S.ms_name) || "Plex";
   const isPlex = () => !S || !S.ms_kind || S.ms_kind === "plex";
+  const MAINN = () => (S && S.main_name) || "your main server";   // v0.4.0-pre8: the main Library Doctor's server (for Copy poster)
   function backupGate(go) {
     if (!isPlex()) return go();          // the "back up your Plex database" reminder is Plex-only
     let skip = ""; try { skip = localStorage.getItem(BK_KEY) || ""; } catch (e) {}
     if (skip === new Date().toDateString()) return go();
+    if (S && S.plex_auto_backup) return go();   // pre4: Plex already backs itself up (a second backup hung Plex on 27 Nov)
     let m = $("bkModal"); if (m) m.remove();
     m = document.createElement("div"); m.id = "bkModal"; m.className = "bkm"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true"); m.setAttribute("aria-labelledby", "bkT");
     const last = S && S.plex_backup_at ? `Last backup Library Doctor asked for: ${esc(fmt(S.plex_backup_at))}. ` : "";
@@ -687,7 +758,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     else if (i.chk === "subs" && f.length) { what = f.includes("searchall") ? "Ask Bazarr to search for every missing subtitle" : f.includes("rename") ? "Rename the subtitle to match the video" : "Move the subtitle to the trash and ask Bazarr for a real one"; kind = f.includes("searchall") ? "other" : "trash"; if (kind === "trash") files = 1; }
     else if (i.chk === "meta" && d.kind === "namingshift") { what = "Play one of these episodes to check which one it really is. If they're out of order, fix it in Sonarr (Manual Import), or Ignore if they're right"; kind = "look"; }
     else if (i.chk === "meta" && f.includes("rename")) { what = d.kind === "namingtags" ? `Rename ${(+d.count).toLocaleString("en-GB")} files with out-of-date tags (Radarr/Sonarr do it)` : `Rename ${d.count === 1 ? "the file" : "the " + d.count + " files"} to match your naming format (${esc((d.ref && d.ref.arr) || "Radarr/Sonarr")} does it)`; kind = "meta"; }
-    else if (i.chk === "meta") { what = f.includes("titles") ? `Copy Sonarr's titles into Plex${d.eps ? " (" + d.eps.length + " episodes)" : ""}` : f.includes("posters") ? "Pick a poster for the seasons without one" : f.includes("refresh") ? "Refresh it in Plex" : "Nothing automatic: open it and decide (e.g. add it in Radarr/Sonarr)"; kind = f.length ? "meta" : "look"; }
+    else if (i.chk === "meta") { what = f.includes("titles") ? `Copy Sonarr's titles into Plex${d.eps ? " (" + d.eps.length + " episodes)" : ""}` : f.includes("posters") ? "Pick a poster for the seasons without one" : f.includes("showposter") ? "Put the show's poster on the seasons without one" : f.includes("mainposter") ? "Copy the poster from " + MAINN() : f.includes("refresh") ? "Refresh it in Plex" : "Nothing automatic: open it and decide (e.g. add it in Radarr/Sonarr)"; kind = f.length ? "meta" : "look"; }
     else if (i.chk === "quality") { const parts = [];
       if (f.includes("smaller")) parts.push("Find a smaller copy (the old one waits in the recycle bin)");
       if (f.includes("tdarr")) parts.push(d.kind === "tdarrfail" ? `Retry ${d.count || 1} file${(d.count || 1) === 1 ? "" : "s"} in Tdarr` : d.kind === "tdarrmissed" ? `Send ${d.count} files to Tdarr` : "Convert with Tdarr (shrinks it in place)");
@@ -702,6 +773,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     else if (i.chk === "missing" && d.kind === "gaps") { what = `Ask ${(d.ref && d.ref.arr) || "Sonarr"} to search for ${d.count} missing episode${d.count === 1 ? "" : "s"}`; kind = "download"; }
     else if (i.chk === "missing" && d.kind === "albumgaps") { what = `Ask ${(d.ref && d.ref.arr) || "Lidarr"} to search for ${d.count} missing album${d.count === 1 ? "" : "s"}`; kind = "download"; }
     else if (i.chk === "missing" && d.kind === "lidarrmissing") what = `Ask ${(d.ref && d.ref.arr) || "Lidarr"} to rescan the artist's folder`;
+    else if (i.chk === "missing" && d.kind === "msmissing") what = `Ask ${SN()} to rescan this folder, in case the file was renamed`;
     else if (i.chk === "missing") what = "Nothing automatic: open it in " + SN() + " or Radarr/Sonarr";
     else if (i.chk === "dupes" && d.kind === "mismatch") what = f.includes("split") ? "Nothing deleted: ask Plex to split the different films it put together" : (isPlex() ? "Nothing automatic: different films, use Fix Match in Plex" : "Nothing automatic: different films, use Identify in " + SN());
     else if (i.chk === "apps" && f.includes("idxoff")) what = `Turn off ${d.indexer} in ${(d.ref && d.ref.name) || i.library} (it stays set up there)`;
@@ -735,7 +807,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     else if (i.chk === "virus") { risk = R("low", "It's a program or fake file, not a video. It's moved, never opened or run."); save = p.bytes ? human(p.bytes) + later : "Very little."; }
     else if (i.chk === "subs") { risk = f.includes("rename") ? R("low", "Only the subtitle's file name changes.") : f.includes("searchall") ? R("none", "Only a search in Bazarr.") : R("low", "If Bazarr finds nothing better, the title has no subtitle in that language (Put back restores it)."); save = "A few KB."; }
     else if (i.chk === "meta" && f.includes("rename")) { risk = R("low", "Files are renamed, not moved or changed. " + SN() + " keeps the watch history; it just rescans the folder."); save = "None."; }
-    else if (i.chk === "meta") { risk = f.includes("titles") ? R("low", "Plex's episode titles are replaced with Sonarr's; a full metadata refresh in Plex could bring the old ones back.") : R("none", "Only Plex's metadata changes; no files are touched."); save = "None."; }
+    else if (i.chk === "meta") { risk = f.includes("titles") ? R("low", "Plex's episode titles are replaced with Sonarr's; a full metadata refresh in Plex could bring the old ones back.") : R("none", f.includes("showposter") || f.includes("mainposter") ? "Only " + SN() + "'s artwork changes; no files are touched. You can pick another poster on its page any time." : "Only Plex's metadata changes; no files are touched."); save = "None."; }
     else if (i.chk === "quality") {
       if (f.includes("remux")) { risk = R("low", "The same video and audio go into a new container; nothing is re-encoded. The old file waits in the trash."); save = "About none: same streams, different container."; }
       else if (f.includes("tdarr")) { const b = d.kind === "hog" ? (d.extra || d.size || 0) : d.kind === "tdarrmissed" ? (d.total || 0) : (d.size || 0);
@@ -752,7 +824,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       else if (f.includes("retry")) { risk = R("low", "That release is blocklisted and another is searched for; it downloads in your download window."); save = "None."; }
       else if (f.includes("remove")) { risk = R("med", "The torrent stops seeding, which can matter for your ratio on that tracker."); save = (d.size ? human(d.size) : "Its size") + later; }
       else { save = "None."; } }
-    else if (i.chk === "missing") { risk = d.kind === "gaps" ? R("none", "Only a search in Sonarr.") : d.kind === "albumgaps" ? R("none", "Only a search in Lidarr.") : d.kind === "lidarrmissing" ? R("none", "Only a rescan: nothing is deleted.") : R("none", "Nothing automatic: you decide in " + SN() + " or Radarr/Sonarr."); save = d.kind === "gaps" ? "None: it adds episodes." : d.kind === "albumgaps" ? "None: it adds albums." : "None."; }
+    else if (i.chk === "missing") { risk = d.kind === "gaps" ? R("none", "Only a search in Sonarr.") : d.kind === "albumgaps" ? R("none", "Only a search in Lidarr.") : (d.kind === "lidarrmissing" || d.kind === "msmissing") ? R("none", "Only a rescan: nothing is deleted.") : R("none", "Nothing automatic: you decide in " + SN() + " or Radarr/Sonarr."); save = d.kind === "gaps" ? "None: it adds episodes." : d.kind === "albumgaps" ? "None: it adds albums." : "None."; }
     else if (i.chk === "apps") { risk = f.includes("selfupdate") ? R("med", "New versions can change things; Library Doctor checks the app comes back healthy.") : f.includes("idxoff") ? R("low", "That indexer stops being searched until you switch it back on.") : R("none", "Nothing automatic."); save = "None."; }
     if (none && i.chk !== "quality") risk = R("none", "Nothing automatic: nothing changes unless you act.");
     return { fix: p.what, risk, save: save || "None." };
@@ -799,6 +871,22 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
         if (r.ok && S) S.plex_tidy_at = r.at;
       } catch (x) { flash = { err: true, text: "Couldn't start it: " + x.message }; }
       b.disabled = false; b.textContent = "Tidy up Plex now"; render(); }); });
+  // v0.3.5: learns what you ignore
+  function learnRender() {
+    const R = S.learned || [], ask = R.find(r => r.state === "ask"), box = $("learnAsk");
+    box.hidden = !ask;
+    if (ask) {
+      box.innerHTML = `<b>You've ignored ${ask.seen} “${esc(ask.label)}” cards.</b> Hide cards like these from now on? You can undo this any time under <i>Learned from your Ignores</i>. Damaged files are always shown. <button class="b-teal sm" id="learnYes">Yes, hide them</button> <button class="b-line sm" id="learnNo">No, keep showing them</button>`;
+      const go = async (b, how) => { b.disabled = true; const r = await api("/api/learn", { sig: ask.sig, do: how }); if (r && r.ok === false) alert(r.error || "That didn't work."); load(); };
+      $("learnYes").onclick = e => go(e.target, "on"); $("learnNo").onclick = e => go(e.target, "no");
+    }
+    $("learnP").hidden = !R.length;
+    const ST = { on: "Hiding", no: "Showing (won't ask again)", ask: "Waiting for your answer" };
+    $("learnB").innerHTML = R.map((r, j) => `<div class="lrule" style="padding:8px 0;border-top:1px solid var(--line, rgba(127,127,127,.25))"><b>${esc(r.label)}</b><br><small>${ST[r.state] || esc(r.state)} · you ignored ${r.seen}${r.state === "on" ? ` · ${r.hidden} hidden now` : ""}</small>
+      <div class="acts" style="margin-top:6px">${r.state === "on" ? `<button class="b-line sm" data-lr="${j}" data-do="no">Show them again</button>` : `<button class="b-line sm" data-lr="${j}" data-do="on">Hide them</button>`}<button class="b-line sm" data-lr="${j}" data-do="forget" title="Start again from zero. Library Doctor may ask again after a few more Ignores.">Forget</button></div></div>`).join("");
+    $("learnB").querySelectorAll("[data-lr]").forEach(b => b.onclick = async () => { b.disabled = true;
+      const r = await api("/api/learn", { sig: R[+b.dataset.lr].sig, do: b.dataset.do }); if (r && r.ok === false) alert(r.error || "That didn't work."); load(); });
+  }
   function render() {
     document.querySelectorAll(".msn").forEach(x => { x.textContent = SN(); });
     const scan = S.scans.find(s => s.ok) || null;
@@ -827,6 +915,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     $("nItems").textContent = scan ? scan.items.toLocaleString("en-GB") : "–";
     $("nFiles").textContent = scan ? scan.files.toLocaleString("en-GB") : "–";
     $("nOpen").textContent = open.length; $("nIgn").textContent = ign;
+    try { learnRender(); } catch (x) { console.error(x); }
     $("last").textContent = S.running ? (S.step || "Scanning") + "…" : scan ? "Last scan: " + fmt(scan.finished) : "No scan yet. Press Scan now.";
     $("barWrap").hidden = !S.running; $("bar").style.width = Math.round((S.progress || 0) * 100) + "%";
     $("scanBtn").disabled = S.running; $("scanBtn").textContent = S.running ? "Scanning…" : "Scan now";
@@ -834,6 +923,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       if (!c.live) return `<button class="check" disabled><span class="ico">${svg(c.id)}</span><span class="l">${esc(c.label)}</span><span class="s">Coming in stage ${c.stage}</span></button>`;
       const n = c.id === "unwatched" ? open.filter(i => i.chk === c.id).reduce((a, i) => a + (i.detail.count || 0), 0) : open.filter(i => i.chk === c.id).length;
       const none = !n && S.configured && !S.has_arrs && (c.id === "queue" || c.id === "subs");   // v0.2.2 report-only: stuck downloads and the subtitle check work from Radarr/Sonarr
+      if (S.child && (S.main_checks || []).includes(c.id)) return `<button class="check" disabled title="This check is about your whole setup, so it runs once, for ${esc(S.main_name || "the main server")}."><span class="ico">${svg(c.id)}</span><span class="l">${esc(c.label)}</span><span class="s">On ${esc(S.main_name || "the main server")}</span></button>`;   // v0.4.0
       return `<button class="check ${n ? c.sev : ""}" data-c="${c.id}" aria-pressed="${filter === c.id}"><span class="ico">${svg(n ? c.id : "ok")}</span><span class="l">${esc(c.label)}</span><span class="s">${n ? n + " " + (n === 1 && c.unit === "warnings" ? "warning" : c.id === "health" && !S.has_arrs ? "to look at" : c.unit) : none ? "Needs Radarr or Sonarr" : "All clear"}</span></button>`;
     }).join("");
     $("roNote").hidden = !(S.configured && !S.has_arrs);
@@ -848,7 +938,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     diskDraw();
     if ($("tidyP")) $("tidyP").hidden = !isPlex();       // Plex tidy-up is Plex-only
     if ($("tidyLast")) $("tidyLast").textContent = S.plex_tidy_at ? "Last run from here: " + fmt(S.plex_tidy_at) + "." : "";
-    $("sched").innerHTML = (S.scan_hour < 0 ? "Automatic scan is off. Press Scan now to scan." : "Scans automatically " + (sd.length === 7 ? "every day" : "on " + sd.map(d => DN[d]).join(", ")) + " at " + String(S.scan_hour).padStart(2, "0") + ":" + String(S.scan_minute || 0).padStart(2, "0") + ".") +
+    $("sched").innerHTML = (S.child ? esc("Scans automatically after " + (S.main_name || "the main server") + "'s nightly scan.") : S.scan_hour < 0 ? "Automatic scan is off. Press Scan now to scan." : "Scans automatically " + (sd.length === 7 ? "every day" : "on " + sd.map(d => DN[d]).join(", ")) + " at " + String(S.scan_hour).padStart(2, "0") + ":" + String(S.scan_minute || 0).padStart(2, "0") + ".") +
       `<span class="sched2">${S.gotify ? "Summary via " + (S.notify || []).map(k => APPS[k] ? APPS[k].t : k).join(", ") + " after the scan, only when there's news." : "Notifications: not set up (Settings → Notifications)."}${S.gotify ? '<button class="b-line sm" id="gTest">Send a test</button>' : ""}</span>`;
     const gt = $("gTest"); if (gt) gt.onclick = async () => { gt.disabled = true; gt.textContent = "Sending…";
       const r = await api("/api/gotifytest", {}); gt.textContent = r.ok ? "Sent ✓" : "Failed"; if (!r.ok) flash = { err: true, text: r.error || "Sending failed." }; setTimeout(() => { gt.disabled = false; gt.textContent = "Send a test"; }, 4000); };
@@ -870,10 +960,10 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
   }
   function card(i, inReview) {
     const d = i.detail, vs = eff(i), rm = removable(i), lo = overrides[i.id] == null ? (d.leftovers || []) : [];
-    const vers = d.versions ? '<ul class="vers">' + vs.map((v, j) => `<li class="${esc(v.action)}"><span class="badge ${esc(v.action)}">${LBL[v.action] || ""}</span>${v.edition ? `<span class="badge plex" title="Edition">${esc(v.edition)}</span>` : ""}${(v.links || 1) > 1 ? '<span class="badge plex" title="Another link to the same data exists (usually a torrent that is still seeding), so removing this copy frees no space until that is removed too.">Hardlinked</span>' : ""}<b>${esc(v.desc)}</b><span class="why">${esc(v.reason)}</span><code>${esc(v.path)}</code>${
+    const vers = d.versions ? '<ul class="vers">' + vs.map((v, j) => `<li class="${esc(v.action)}"><span class="badge ${esc(v.action)}">${LBL[v.action] || ""}</span>${v.action === "remove" ? alsoIn(v.path) : ""}${v.edition ? `<span class="badge plex" title="Edition">${esc(v.edition)}</span>` : ""}${(v.links || 1) > 1 ? '<span class="badge plex" title="Another link to the same data exists (usually a torrent that is still seeding), so removing this copy frees no space until that is removed too.">Hardlinked</span>' : ""}<b>${esc(v.desc)}</b><span class="why">${esc(v.reason)}</span><code>${esc(v.path)}</code>${
         !i.ignored && v.action !== "keep" && v.action !== "plex" ? `<div class="acts" style="margin-top:6px"><button class="b-line sm" data-keep="${esc(i.id)}|${j}">Keep this one instead</button></div>` : ""}</li>`).join("") + "</ul>" : "";
     const path = d.path ? `<code>${esc(d.path)}</code>` : "";
-    const links = i.links.map(l => `<a class="btn b-line" href="${esc(l.url)}" target="_blank" rel="noopener"${l.label.startsWith("Add in ") ? " data-added=\"1\"" : ""}>${esc(l.label === "Open in Plex" ? "Open in " + SN() : l.label)}</a>`).join("");
+    const links = i.links.map(l => `<a class="btn b-line" href="${esc(srvUrl(l.url))}" target="_blank" rel="noopener"${l.label.startsWith("Add in ") ? " data-added=\"1\"" : ""}>${esc(l.label === "Open in Plex" ? "Open in " + SN() : l.label)}</a>`).join("");
     const plexBtn = vs.some(v => v.action === "plex") ? `<a class="btn b-line" href="${esc(S.plex_settings)}" target="_blank" rel="noopener">Plex optimized versions</a>` : "";
     const loLine = lo.length ? `<p class="det">Also tidies ${lo.length} leftover side file${lo.length === 1 ? "" : "s"} (${[...new Set(lo.map(x => "." + x.path.split(".").pop()))].join(", ")}).</p>`
                  : (overrides[i.id] != null ? '<p class="det">Leftover side files are worked out again for your choice when you clean up.</p>' : "");
@@ -887,7 +977,8 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     })();
     const dbl = d.kind === "double", meta = i.chk === "meta";
     const eps = meta && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} title${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td><s>${esc(e.plex)}</s> → ${esc(e.real)}</td></tr>`).join("")}</table></div></details>` : "";
-    const FIX = { titles: "Use Sonarr's titles", refresh: "Refresh in " + SN(), posters: "Pick posters", rename: d.kind === "namingtags" ? "Rename all" : "Rename" };
+    const FIX = { titles: "Use Sonarr's titles", refresh: "Refresh in " + SN(), posters: "Pick posters", rename: d.kind === "namingtags" ? "Rename all" : "Rename",
+      showposter: "Use the show's poster", mainposter: "Copy poster from " + MAINN() };   // v0.4.0-pre8: Jellyfin/Emby
     const seas = meta && d.seasons ? `<p class="det">${d.seasons.map(x => esc(x.t)).join(" · ")}</p>` : "";
     const sb = i.chk === "subs", SFX = { replace: "Replace with a real subtitle", rename: "Rename to match", trash: "Remove", searchall: "Search all now" };
     const wanted = sb && d.kind === "wanted" ? `<ul class="wl">${(d.top || []).map(x => `<li><b>${x.n}</b> ${esc(x.t)}</li>`).join("")}${(d.films || []).map(t => `<li><b>Film</b> ${esc(t)}</li>`).join("")}</ul>` : "";
@@ -906,10 +997,12 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       act = (d.fixes || []).map(h => `<button class="${h === "remove" || h === "clearinc" || h === "delete" ? "b-orange" : h === "retry" && (d.fixes || []).includes("reannounce") ? "b-line" : "b-teal"}" data-queuefix="${esc(i.id)}|${h}">${QQ[h]}</button>`).join("");
     } else if (i.chk === "missing" && (d.kind === "gaps" || d.kind === "albumgaps") && !i.ignored) {
       act = `<button class="b-teal" data-gaps="${esc(i.id)}">Search for ${d.count === 1 ? "it" : "these " + d.count}</button>`;
+    } else if (i.chk === "missing" && d.kind === "msmissing" && !i.ignored) {
+      act = `<button class="b-teal" data-gaps="${esc(i.id)}">Refresh ${esc(SN())}</button>`;
     } else if (i.chk === "missing" && d.kind === "lidarrmissing" && !i.ignored) {
       act = `<button class="b-teal" data-gaps="${esc(i.id)}">Rescan in ${esc((d.ref && d.ref.arr) || "Lidarr")}</button>`;
     } else if (i.chk === "apps" && d.kind === "indexer" && !i.ignored) {
-      act = `<button class="b-teal" data-appfix="${esc(i.id)}|idxoff">Turn it off in ${esc((d.ref && d.ref.name) || i.library)}</button>`;
+      act = `<button class="b-teal" data-appfix="${esc(i.id)}|idxoff">${d.via === "prowlarr" ? "Stop Prowlarr sending it to " : "Turn it off in "}${esc((d.ref && d.ref.name) || i.library)}</button>`;
     } else if (i.chk === "apps" && !i.ignored && (d.fixes || []).length) {
       const skip = `<button class="b-line" data-appfix="${esc(i.id)}|skipver">Skip this version</button>`;
       if (howto === i.id) {
@@ -927,7 +1020,8 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       act = d.fixes.map(h => `<button class="b-teal" data-sub="${esc(i.id)}|${h}">${SFX[h]}</button>`).join("");
     } else if (hl && !i.ignored && (d.fixes || []).length) {
       const okBtn = (d.fixes || []).includes("seerrok") && confirmId !== i.id ? `<button class="b-line" data-seerrok="${esc(i.id)}" title="Adds a note in Seerr that the file looks fine, and closes the report">Mark resolved in Seerr</button>` : "";
-      if (!(d.fixes || []).includes("replace")) act = okBtn; else {
+      if (replPending(i.id)) act = `<button class="b-line" disabled title="Already pressed. The result shows under Done below.">\u23f3 Replacing\u2026 shows under Done</button>`;
+      else if (!(d.fixes || []).includes("replace")) act = okBtn; else {
       const side = "Any leftover .edl/.ffmeta files go with it.";
       const lf = d.kind === "lang" && d.files ? d.files : null;
       act = confirmId === i.id ? `<div class="confirm"><b>Replace ${lf && lf.length > 1 ? "these " + lf.length + " files" : "this file"}?</b><ul>${(lf || [{ path: d.path, size: d.size }]).slice(0, 8).map(x => `<li><code>${esc(base(x.path))}</code> (${human(x.size)})</li>`).join("")}${lf && lf.length > 8 ? `<li>…and ${lf.length - 8} more</li>` : ""}</ul>
@@ -940,7 +1034,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
         act = `<div class="confirm"><b>Rename ${(+d.count).toLocaleString("en-GB")} files in ${(d.titles || []).length} titles?</b> Radarr/Sonarr rename them with your naming format, one title at a time. ${SN()} and Tdarr rescan those folders afterwards, which can take a while.
              <div class="acts"><button class="b-orange" data-meta="${esc(i.id)}|rename">Rename all</button><button class="b-line" data-no="1">Cancel</button></div></div>`;
       else if (d.kind === "namingtags") act = `<button class="b-line" data-clean="${esc(i.id)}">Rename all</button>`;
-      else act = d.fixes.filter(h => isPlex() || h === "refresh" || h === "rename").map((h, n) => `<button class="${n ? "b-line" : "b-teal"}" data-meta="${esc(i.id)}|${h}">${FIX[h]}</button>`).join("");   // titles/posters are Plex-only
+      else act = d.fixes.filter(h => isPlex() || h === "refresh" || h === "rename" || h === "showposter" || h === "mainposter").map((h, n) => `<button class="${n ? "b-line" : "b-teal"}" data-meta="${esc(i.id)}|${h}">${FIX[h]}</button>`).join("");   // titles/posters are Plex-only
     } else if (d.kind === "mismatch" && !i.ignored) {
       act = (d.fixes || []).includes("split") && isPlex() ? `<button class="b-teal" data-split="${esc(i.id)}">Split in Plex</button>` : "";
     } else if (dbl && !i.ignored) {
@@ -955,9 +1049,9 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       else act = `<button class="b-teal" data-clean="${esc(i.id)}">Clean up (${rm.length} cop${rm.length === 1 ? "y" : "ies"}, ${size})</button>`;
     } else if (inReview) act = `<button class="b-line" id="rvSkip">Next</button>`;
     const block = act.startsWith("<div") ? act : "", inline = act.startsWith("<div") ? "" : act;
-    return `<div class="item ${i.ignored ? "ign" : i.sev === "bad" ? "bad" : ""}"><h3>${esc(i.title)} <span class="pill lib">${esc(i.library)}</span>${conf}${i.ignored ? (i.snoozed ? `<span class="pill lib" title="Searched, nothing better yet. Searched again by itself on this date.">Snoozed till ${esc(new Date(i.snoozed).toLocaleDateString(undefined, { day: "numeric", month: "short" }))}</span>` : '<span class="pill lib">Ignored</span>') : ""}</h3>
+    return `<div class="item ${i.ignored ? "ign" : i.sev === "bad" ? "bad" : ""}"><h3>${esc(i.title)} <span class="pill lib">${esc(i.library)}</span>${conf}${i.ignored ? (i.snoozed ? `<span class="pill lib" title="Searched, nothing better yet. Searched again by itself on this date.">Snoozed till ${esc(new Date(i.snoozed).toLocaleDateString(undefined, { day: "numeric", month: "short" }))}</span>` : i.learned ? '<span class="pill lib" title="Hidden by a rule under Learned from your Ignores. Show this one brings just this card back.">Hidden by a rule</span>' : '<span class="pill lib">Ignored</span>') : ""}</h3>
       <p class="det">${esc(d.text)}${d.note ? " " + esc(d.note) : ""}${(d.links || 1) > 1 ? " <b>Hardlinked:</b> this file has another link (usually a torrent still seeding), so moving it frees no space until that is removed too." : ""}${path}</p>${(d.examples || []).length ? `<ul class="vers">${d.examples.map(x => `<li><code>${esc(x.old)}</code><code>→ ${esc(x.new)}</code></li>`).join("")}${d.count > d.examples.length ? `<li>…and ${d.count - d.examples.length} more</li>` : ""}</ul>` : ""}${d.kind === "corrupt" && d.deep && (d.deep.first || []).length ? `<p class="det"><small>ffmpeg said: “${esc(d.deep.first[0])}”${d.deep.first.length > 1 ? ` (and ${d.deep.errors > 1 ? (d.deep.errors - 1).toLocaleString("en-GB") + " more" : "more"})` : ""}</small></p>` : ""}${(d.reports || []).map(r => `<p class="det"><b>Also reported in Seerr</b> by ${esc(r.by)} on ${esc(r.at)} (${esc(r.type)} problem)${r.msg ? `: “${esc(r.msg)}”` : "."} <a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--teal);font-weight:600">Open in Seerr</a>${(d.fixes || []).includes("replace") ? " Replace closes it there with a note." : ""}</p>`).join("")}${d.requested ? `<p class="det"><b>Requested by ${esc(d.requested.by)}</b> in Seerr on ${esc(d.requested.at)}.</p>` : ""}${d.copies ? '<ul class="vers">' + d.copies.map(v => `<li class="${esc(v.action)}"><span class="badge ${esc(v.action)}">${LBL[v.action] || esc(v.action)}</span> <code>${esc(v.path)}</code> · ${v.files} file${v.files === 1 ? "" : "s"} · ${human(v.size)} · ${esc(v.q)} <span class="note">(${esc(v.why)})</span></li>`).join("") + "</ul>" : ""}${small && small.id === i.id ? smallHtml() : ""}${i.chk === "quality" && d.eps ? `<details class="eps"><summary>Show the ${d.eps.length} episode${d.eps.length === 1 ? "" : "s"}</summary><div class="epsw"><table>${d.eps.map(e => `<tr><td>${esc(e.se)}</td><td>${esc(e.res)}</td></tr>`).join("")}</table></div></details>` : ""}${i.chk === "unwatched" ? uwHtml(i) : ""}${d.kind === "tdarrmissed" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.name)}">${esc(x.name.split("/").length === 2 ? x.name.split("/")[0] : x.name.split("/").pop())}</td><td class="n">${esc(x.codec.toUpperCase())}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div>${d.count > d.items.length ? `<p class="det">…and ${d.count - d.items.length} smaller.</p>` : ""}</details>` : ""}${d.kind === "incomplete" && d.items ? `<details class="eps" open><summary>Show the ${d.count === 1 ? "leftover" : d.count + " leftovers"}</summary><div class="uww">${d.items.map(x => `<div class="inc"><div title="${esc(x.path)}">${esc(x.title)}<small>${esc(x.why || "untouched for " + x.days + " day" + (x.days === 1 ? "" : "s"))} · ${human(x.size)}${x.files ? " · " + x.files + " file" + (x.files === 1 ? "" : "s") : ""}</small></div>${i.ignored ? "" : `<button class="b-line sm" data-incone="${esc(i.id)}" data-incpath="${esc(x.path)}">Trash</button>`}</div>`).join("")}</div></details>` : ""}${i.chk === "queue" && d.kind !== "incomplete" && d.items && d.items.length ? `<details class="eps"><summary>Show the ${d.count === 1 ? "download" : d.count + " downloads"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.title)}">${esc(x.ep ? x.ep + " · " : "")}${esc(x.title)}</td><td>${esc((x.protocol || "") + (x.client ? " · " + x.client : ""))}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "lang" && d.files && d.files.length > 1 ? `<details class="eps"><summary>Show the ${d.files.length} episodes</summary><div class="uww"><table class="uw">${d.files.map(x => `<tr><td>${esc(x.se || "")}</td><td title="${esc(x.path)}">${esc(base(x.path))}</td><td class="n">${esc(x.audio || "")}</td></tr>`).join("")}</table></div></details>` : ""}${d.kind === "tdarrfail" ? `<details class="eps"><summary>Show the ${d.count} file${d.count === 1 ? "" : "s"}</summary><div class="uww"><table class="uw">${d.items.map(x => `<tr><td title="${esc(x.path)}">${esc(x.name.split("/").pop())}</td><td>${esc(x.why)}</td><td class="n">${human(x.size)}</td></tr>`).join("")}</table></div></details>` : ""}${eps}${seas}${wanted}${dbl ? `<p class="det">The fix moves the file out for a moment so Plex drops both entries, then puts it straight back so Plex adds it once. The file never leaves the disk. It takes 1–3 minutes; the result shows under Done.</p>` : vers}${loLine}${outWarn}${block}
-      ${advHtml(i)}<div class="acts">${i.chk === "quality" ? links + inline : inline}${hl && d.path && d.kind !== "track" && !i.ignored && !inReview ? `<button class="b-line" data-quick="${esc(d.path)}" title="Play short parts at the start, middle and end (nothing is changed). Takes a few seconds.">Quick test</button><button class="b-line" data-deep="${esc(d.path)}" title="Play the whole file through to look for damage (nothing is changed). A film takes a few minutes.">Deep check</button>` : ""}${reset}${plexBtn}${i.chk === "quality" ? "" : links}${inReview ? "" : `<button class="b-line" data-${i.ignored ? "un" : ""}ign="${esc(i.id)}" data-t="${esc(i.title)}"${i.chk === "dupes" && !i.ignored ? ' title="You want these copies (e.g. a 4K and a 1080p for phones). Hides this card for good; Show ignored brings it back."' : ""}>${i.ignored ? "Stop ignoring" : i.chk === "dupes" ? ((d.versions || []).length > 2 ? "Keep them all" : "Keep both") : "Ignore"}</button>`}</div></div>`;
+      ${advHtml(i)}<div class="acts">${i.chk === "quality" ? links + inline : inline}${hl && d.path && d.kind !== "track" && !i.ignored && !inReview ? `<button class="b-line" data-quick="${esc(d.path)}" title="Play short parts at the start, middle and end (nothing is changed). Takes a few seconds.">Quick test</button><button class="b-line" data-deep="${esc(d.path)}" title="Play the whole file through to look for damage (nothing is changed). A film takes a few minutes.">Deep check</button>` : ""}${reset}${plexBtn}${i.chk === "quality" ? "" : links}${inReview ? "" : `<button class="b-line" data-${i.ignored ? "un" : ""}ign="${esc(i.id)}" data-t="${esc(i.title)}"${i.chk === "dupes" && !i.ignored ? ' title="You want these copies (e.g. a 4K and a 1080p for phones). Hides this card for good; Show ignored brings it back."' : ""}>${i.ignored ? (i.learned ? "Show this one" : "Stop ignoring") : i.chk === "dupes" ? ((d.versions || []).length > 2 ? "Keep them all" : "Keep both") : "Ignore"}</button>`}</div></div>`;
   }
   let deepBr = null;                                   // v0.3 deep check folder picker: { path, dirs, more }
   async function deepBrowse(p) {
@@ -1017,17 +1111,19 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
   function doneHtml() {
     const ds = (S.done || []).filter(x => (x.chk || "dupes") === filter);
     if (!ds.length) return "";
-    const IC = { ok: "✓", warn: "⚠", checking: "⏳", waiting: "⏳" };
+    const IC = { ok: "✓", warn: "⚠", checking: "⏳", waiting: "⏳", monitored: "👁" };
     const waiting = ds.filter(x => x.status === "waiting" || x.status === "checking").length;
-    return `<div class="doneh"><h3>Done (${ds.length})</h3>${(filter === "health" || filter === "quality") && waiting ? `<span class="note">${waiting} waiting · ${filter === "quality" && ds.some(x => x.tdarr && x.status === "waiting") ? "Tdarr checked every 10 minutes, other fixes every hour" : "checked every hour"}, warned after ${S.follow_days} days</span><button class="b-line sm" id="fuNow">Check now</button>` : ""}<button class="b-line sm" id="doneClear">Clear list</button></div><div class="done">` +
+    return `<div class="doneh"><h3>Done (${ds.length})</h3>${(filter === "health" || filter === "quality") && waiting ? `<span class="note">${waiting} waiting · ${filter === "quality" && ds.some(x => x.tdarr && x.status === "waiting") ? "Tdarr checked every 10 minutes, other fixes every hour" : "checked every hour"}, left monitored after ${S.follow_days} days</span><button class="b-line sm" id="fuNow">Check now</button>` : ""}<button class="b-line sm" id="doneClear">Clear list</button></div><div class="done">` +
       ds.map(x => { const plex = (x.links || []).find(l => l.label === "Open in Plex");
         const TI = { done: "✓", converting: "⏳", failed: "⚠", notin: "⚠", queued: "·" };
         const tl = x.tdarr && x.tdarr.length > 1 ? `<details class="tdl"><summary>${x.tdarr.filter(t => t.state === "done").length} of ${x.tdarr.length} films converted</summary><ul>${
           x.tdarr.slice().sort((a, b) => ({ done: 0, converting: 1, failed: 2, notin: 3, queued: 4 }[a.state] ?? 5) - ({ done: 0, converting: 1, failed: 2, notin: 3, queued: 4 }[b.state] ?? 5)).map(t =>
             `<li class="${esc(t.state)}"><span>${TI[t.state] || "·"} ${esc(t.name)}</span><span>${t.state === "done" ? human(t.size) + " → " + human(t.after) : t.state === "converting" ? (t.pct ?? 0) + "%" : t.state === "failed" ? "failed" : t.state === "notin" ? "not in Tdarr" : "waiting"}</span></li>`).join("")}</ul></details>` : "";
-        return `<div class="dn ${esc(x.status)}"><b>${IC[x.status] || ""} ${esc(x.title)}</b><span class="st">${esc(x.note)}</span>${tl}
+        const why = x.lower && !x.fb_done ? `<span class="st">Why: only ${esc(x.lower.best)} copies exist${x.lower.profile ? `, and ${esc(x.fb_arr || "")}'s profile \u201c${esc(x.lower.profile)}\u201d turns them down` : ""}.${x.fb ? "" : ` Pick a fallback for ${esc(x.fb_arr || "it")} in Settings to fix this with one button.`}</span>` : "";
+        const fbb = x.fb && (x.status === "waiting" || x.status === "monitored") ? `<button class="b-teal" data-fallback="${x.id}">Allow lower quality as a last resort</button>` : "";
+        return `<div class="dn ${esc(x.status)}"><b>${IC[x.status] || ""} ${esc(x.title)}</b><span class="st">${esc(x.note)}</span>${why}${tl}
           ${x.kept ? `<small>Kept: ${esc(base(x.kept))}</small>` : ""}${x.moved.map(m => `<small>To the trash: ${esc(base(m))}</small>`).join("")}<small>${fmt(x.at)}</small>
-          <div class="acts">${plex ? `<a class="btn b-line" href="${esc(plex.url)}" target="_blank" rel="noopener">Open in ${SN()}</a>` : ""}${
+          <div class="acts">${fbb}${plex ? `<a class="btn b-line" href="${esc(plex.url)}" target="_blank" rel="noopener">Open in ${SN()}</a>` : ""}${
             x.trash_ids.length ? `<button class="b-line" data-putback="${x.trash_ids.join(",")}">Put back</button>` : x.chk === "meta" ? "" : /recycle bin/.test(x.note || "") ? `<button class="b-line" data-opentrash="1">Put back (in Trash)</button>` : `<span class="note">Put back or emptied</span>`}</div></div>`; }).join("") + "</div>";
   }
   function list() {
@@ -1081,10 +1177,12 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       if (fx.length > 1) top += `<div class="acts"><button class="b-teal" id="subsAll">Fix all ${fx.length} subtitle files</button></div>`;
     }
     if (filter === "meta") {
-      const tl = rows.filter(i => !i.ignored && i.detail.kind === "titles"), n = tl.reduce((a, i) => a + i.detail.eps.length, 0);
+      const tl = rows.filter(i => !i.ignored && i.detail.kind === "titles" && (i.detail.fixes || []).includes("titles")), n = tl.reduce((a, i) => a + i.detail.eps.length, 0);
       if (tl.length > 1) top += `<div class="acts"><button class="b-teal" id="titlesAll" data-ids="${tl.map(i => esc(i.id)).join(",")}">Use Sonarr's titles for all ${tl.length} shows (${n} episodes)</button></div>`;
-      const sp = rows.filter(i => !i.ignored && i.detail.kind === "seasonposters"), ns = sp.reduce((a, i) => a + i.detail.seasons.length, 0);
+      const sp = rows.filter(i => !i.ignored && i.detail.kind === "seasonposters" && (i.detail.fixes || []).includes("posters")) /* v0.4.0: Plex only */, ns = sp.reduce((a, i) => a + i.detail.seasons.length, 0);
       if (sp.length > 1) top += `<div class="acts"><button class="b-teal" id="postersAll" data-ids="${sp.map(i => esc(i.id)).join(",")}">Pick posters for all ${sp.length} shows (${ns} seasons)</button></div>`;
+      const so = rows.filter(i => !i.ignored && i.detail.kind === "seasonposters" && (i.detail.fixes || []).includes("showposter")) /* v0.4.0-pre8: Jellyfin/Emby */, nso = so.reduce((a, i) => a + i.detail.seasons.length, 0);
+      if (so.length > 1) top += `<div class="acts"><button class="b-teal" id="showPostersAll" data-ids="${so.map(i => esc(i.id)).join(",")}">Use the show's poster for all ${so.length} shows (${nso} seasons)</button></div>`;
     }
     const RO = !S.has_arrs;   // v0.2.2 report-only mode
     const EMPTY = { missing: RO ? "Every file " + SN() + " lists is on the disk." : "Every file " + SN() + ", Radarr and Sonarr" + (S.has_lidarr ? " and Lidarr" : "") + " list is on the disk.", dupes: "No duplicates found.",
@@ -1112,7 +1210,10 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     L.querySelectorAll("[data-howto]").forEach(b => b.onclick = () => { howto = b.dataset.howto; list(); });
     L.querySelectorAll("[data-howclose]").forEach(b => b.onclick = () => { howto = null; list(); });
     L.querySelectorAll("[data-copycmd]").forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.copycmd); b.textContent = "Copied ✓"; } catch (e) { b.textContent = "Select and copy the text above"; } });
-    L.querySelectorAll("[data-appfix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.appfix.split("|"); b.disabled = true; b.textContent = how === "skipver" ? "Skipping…" : how === "idxoff" ? "Turning off…" : "Asking…";
+    L.querySelectorAll("[data-appfix]").forEach(b => b.onclick = async () => { const [id, how] = b.dataset.appfix.split("|");
+      const ci = S.issues.find(x => x.id === id);   // v0.4.0: a Prowlarr indexer is switched off in Prowlarr: say what changes first
+      if (how === "idxoff" && ci && ci.detail.via === "prowlarr" && !confirm(ci.detail.note + "\n\nGo ahead?")) return;
+      b.disabled = true; b.textContent = how === "skipver" ? "Skipping…" : how === "idxoff" ? "Turning off…" : "Asking…";
       const r = await api("/api/appsfix", { id, how }); howto = null;
       flash = { err: !r.ok, text: r.ok ? r.text : r.error || "That didn't work." }; load(); });
     L.querySelectorAll("[data-yes]").forEach(b => b.onclick = () => doClean([b.dataset.yes], b));
@@ -1123,16 +1224,26 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       const r = await api("/api/fixdouble", { id: b.dataset.fixdouble });
       flash = { err: !r.ok, text: r.ok ? "Fixing Plex's listing. This takes 1–3 minutes; watch the Done list below." : r.error }; load(); });
     L.querySelectorAll("[data-opentrash]").forEach(b => b.onclick = () => { binMsg = null; setView("trash"); window.scrollTo(0, 0); });
+    L.querySelectorAll("[data-fallback]").forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = "Changing the profile\u2026";
+      let r = await api("/api/fallback", { id: +b.dataset.fallback });
+      if (!r.ok && r.confirm) { if (confirm(r.error)) r = await api("/api/fallback", { id: +b.dataset.fallback, confirm: true }); else { b.disabled = false; b.textContent = "Allow lower quality as a last resort"; return; } }
+      flash = { err: !r.ok, text: r.ok ? r.text : (r.error || "That didn't work.") }; load(); });
     L.querySelectorAll("[data-putback]").forEach(b => b.onclick = async () => { b.disabled = true;
       const r = await api("/api/restore", { ids: b.dataset.putback.split(",").map(Number) });
       flash = { err: !r.ok, text: r.ok ? `Put back ${r.restored} file${r.restored === 1 ? "" : "s"}. ${SN()} is rescanning; press Scan now to see the duplicate again.` : r.errors.join(" ") }; load(); });
     const metaGo = async (ids, how, b) => { if (b) { b.disabled = true; b.textContent = "Working…"; }
       const r = await api("/api/metafix", { ids, how });
-      flash = { err: !r.ok, text: r.ok ? (how === "titles" ? "Copying titles into Plex. " : how === "posters" ? "Picking season posters. " : how === "rename" ? "Renaming. " : "Asked " + SN() + " to refresh. ") + "The result shows under Done below." : r.errors.join(" ") };
+      flash = { err: !r.ok, text: r.ok ? (how === "titles" ? "Copying titles into Plex. " : how === "posters" ? "Picking season posters. " : how === "showposter" ? "Putting the show's poster on the seasons. " : how === "mainposter" ? "Copying the poster from " + MAINN() + ". " : how === "rename" ? "Renaming. " : "Asked " + SN() + " to refresh. ") + "The result shows under Done below." : r.errors.join(" ") };
       load(); setTimeout(load, 8000); setTimeout(load, 30000); setTimeout(load, 120000); };
     L.querySelectorAll("[data-meta]").forEach(b => b.onclick = () => { const [id, how] = b.dataset.meta.split("|"); metaGo([id], how, b); });
     const replaceGo = async (ids, b) => { if (b) { b.disabled = true; b.textContent = "Replacing…"; }
-      const r = await api("/api/replace", { ids }); confirmId = null; confirmAll = false;
+      ids.forEach(id => REPL[id] = Date.now());
+      let r; try { r = await api("/api/replace", { ids }); }
+      catch (e) { confirmId = null; confirmAll = false;
+        flash = { err: false, text: `Still working on ${ids.length === 1 ? "it" : "these " + ids.length} in the background, no need to press Replace again. Progress shows under Done below.` };
+        load(); setTimeout(load, 15000); setTimeout(load, 70000); return; }
+      r.errors = r.errors || []; (r.ok ? (r.failed || []) : ids).forEach(id => delete REPL[id]);   // failed ones get their button back
+      confirmId = null; confirmAll = false;
       flash = { err: !r.ok, text: r.ok ? `Moved ${r.started} file${r.started === 1 ? "" : "s"} to the trash and asked for new copies. Progress shows under Done below.` + (r.errors.length ? " Problems: " + r.errors.join(" ") : "") : r.errors.join(" ") };
       load(); setTimeout(load, 15000); setTimeout(load, 70000); };
     L.querySelectorAll("[data-replace]").forEach(b => b.onclick = () => replaceGo([b.dataset.replace], b));
@@ -1207,6 +1318,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     L.querySelectorAll("[data-uwshow]").forEach(b => b.onclick = () => uw(b, "/api/unignore", { id: b.dataset.uwshow }, b.dataset.t + " is back on the list."));
     on("titlesAll", () => backupGate(() => metaGo($("titlesAll").dataset.ids.split(","), "titles", $("titlesAll"))));
     on("postersAll", () => backupGate(() => metaGo($("postersAll").dataset.ids.split(","), "posters", $("postersAll"))));
+    on("showPostersAll", () => metaGo($("showPostersAll").dataset.ids.split(","), "showposter", $("showPostersAll")));
     L.querySelectorAll("[data-added]").forEach(a => a.addEventListener("click", () => { addedAway = true; }));
     on("fuNow", async () => { const b = $("fuNow"); b.disabled = true; b.textContent = "Checking…"; await api("/api/followup", {}); setTimeout(load, 6000); setTimeout(load, 20000); });
     on("doneClear", async () => { await api("/api/done/clear", { chk: filter }); load(); });
@@ -1329,7 +1441,12 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
   }
   let view = "scan", binSel = new Set(), binAsk = null, binMsg = null;
   function setView(v) {
-    view = v; $("scanView").hidden = v !== "scan"; $("trashView").hidden = v !== "trash"; $("setView").hidden = v !== "settings"; $("anaView").hidden = v !== "analysis";
+    if (v !== view && matchMedia("(max-width:720px)").matches) window.scrollTo(0, 0);   // v0.3.6: a new tab starts at the top on phones
+    view = v; $("scanView").hidden = v !== "scan" || allMode(); $("allView").hidden = !(v === "scan" && allMode()); $("trashView").hidden = v !== "trash"; $("setView").hidden = v !== "settings"; $("anaView").hidden = v !== "analysis";
+    const mainName = (SERVERS[0] && SERVERS[0].name) || SN();
+    $("allNote").hidden = !(allMode() && (v === "trash" || v === "analysis"));
+    if (!$("allNote").hidden) $("allNote").textContent = `Showing ${mainName} (your main server). Pick another server at the top to see its ${v === "trash" ? "trash" : "analysis"}.`;
+    if (v === "scan" && allMode()) renderAll();
     for (const [id, k] of [["tabScan", "scan"], ["tabAna", "analysis"], ["tabTrash", "trash"], ["tabSet", "settings"]]) { $(id).classList.toggle("on", v === k); $(id).setAttribute("aria-selected", v === k); }
     try { history.replaceState(null, "", v === "trash" ? "#trash" : v === "settings" ? "#settings" : v === "analysis" ? "#analysis" : location.pathname); } catch (e) {}
     if (v === "settings") settingsOpen();
@@ -1403,7 +1520,15 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     binMsg = { err: !r.ok, text: r.ok ? `Put back ${r.restored} item${r.restored === 1 ? "" : "s"}. ${SN()} and Radarr/Sonarr are rescanning those folders.` + ((r.notes || []).length ? " " + r.notes.join(" ") : "") + (r.errors.length ? " " + r.errors.join(" ") : "") : r.errors.join(" ") };
     binSel.clear(); binAsk = null; load();
   };
-  window.addEventListener("hashchange", () => setView(location.hash === "#trash" ? "trash" : "scan"));
+  // v0.3.6: pages you can link to: #trash, #settings, #analysis, #check-<check>
+  let jump = false;
+  function fromHash() {
+    const h = location.hash, m = h.match(/^#check-([a-z]+)$/);
+    if (m && CHECKS.some(k => k.live && k.id === m[1])) { filter = m[1]; jump = true; setView("scan"); if (S) { render(); jumpNow(); } return; }
+    setView({ "#trash": "trash", "#settings": "settings", "#analysis": "analysis" }[h] || "scan");
+  }
+  function jumpNow() { if (!jump) return; jump = false; setTimeout(() => $("listTitle").scrollIntoView({ block: "start" }), 60); }
+  window.addEventListener("hashchange", fromHash);
   // ---------------- Settings ----------------
   let SC = null, SCmsg = null, SCbusy = false; const TR = {};      // SC = settings being edited; TR[key] = last Test/Detect result
   /* v0.1.13 app logos (dashboard-icons by homarr-labs, Apache-2.0; the logos are their owners' trademarks) */
@@ -1434,7 +1559,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     webhook: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHJlY3Qgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByeD0iNSIgZmlsbD0iIzViNmY4YyIvPjxwYXRoIGQ9Ik05IDcuNWEzIDMgMCAxIDEgNC42IDIuNWwyLjQgNC4yTTguMiAxNy41YTMgMyAwIDEgMSAuMy02bDIuNC00LjJNMTguNSAxNWEzIDMgMCAxIDEtMi45IDMuNUgxMSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjEuNyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+",
     email: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHJlY3Qgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByeD0iNSIgZmlsbD0iIzViNmY4YyIvPjxyZWN0IHg9IjUiIHk9IjciIHdpZHRoPSIxNCIgaGVpZ2h0PSIxMCIgcng9IjEuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjEuNyIvPjxwYXRoIGQ9Im01LjUgOCA2LjUgNSA2LjUtNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjEuNyIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvc3ZnPg=="
   };
-  const logoOf = (kind, e) => LOGO[kind === "arrs" ? ((e && e.kind) || "radarr") : kind === "plex" ? ((e && e.kind) || "plex") : kind] || "";
+  const logoOf = (kind, e) => LOGO[kind === "arrs" ? ((e && e.kind) || "radarr") : kind === "plex" || kind === "servers" ? ((e && e.kind) || "plex") : kind] || "";
   // v0.2: the "plex" entry is the media server: Plex, Jellyfin or Emby
   const MSN = e => ({ jellyfin: "Jellyfin", emby: "Emby" })[(e && e.kind) || ""] || "Plex";
   const MSHELP = {
@@ -1445,6 +1570,9 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
   const APPS = {
     plex: { t: "Plex", need: true, files: true, secret: ["token", "Plex token"], url: "http://192.168.1.10:32400",
       help: 'Library Doctor reads your libraries from Plex. <a href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/" target="_blank" rel="noopener">How to find your Plex token</a>.' },
+    phone: { t: "Phone app", notify: true },                     // v0.4.0: only for the "Summary via …" line
+    servers: { t: "Media server", list: true, files: true, secret: ["token", "Plex token"], url: "http://192.168.1.10:32400",
+      help: "Another Plex, Jellyfin or Emby to check as well. It gets its own cards, history, trash and score; pick it at the top of the page. Radarr, Sonarr and the other apps are shared." },
     arrs: { t: "Radarr / Sonarr", need: true, files: true, list: true, secret: ["key", "API key"], url: "http://192.168.1.10:7878",
       help: "Add each Radarr and Sonarr you have (a 4K copy counts as its own). The API key is in each app under Settings → General." },
     bazarr: { t: "Bazarr", list: true, files: true, secret: ["key", "API key"], url: "http://192.168.1.10:6767", help: "For the Subtitles check. API key: Bazarr → Settings → General." },
@@ -1579,7 +1707,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     document.querySelectorAll("#setView .sec").forEach(s => NAVOBS.observe(s));
   }
   async function testAll() {
-    const L = [["plex", null, SC.plex]].concat(SC.arrs.map((e, i) => ["arrs", i, e]), SC.bazarr.map((e, i) => ["bazarr", i, e]), ["lidarr", "tautulli", "tracearr", "tdarr", "seerr", "sportarr", "prowlarr", "jackett", "qbit", "transmission", "sabnzbd", "nzbget"].filter(k => SC[k]).map(k => [k, null, SC[k]]))
+    const L = [["plex", null, SC.plex]].concat((SC.servers || []).map((e, i) => ["servers", i, e]), SC.arrs.map((e, i) => ["arrs", i, e]), SC.bazarr.map((e, i) => ["bazarr", i, e]), ["lidarr", "tautulli", "tracearr", "tdarr", "seerr", "sportarr", "prowlarr", "jackett", "qbit", "transmission", "sabnzbd", "nzbget"].filter(k => SC[k]).map(k => [k, null, SC[k]]))
       .filter(([, , e]) => e && e.url);
     TA.busy = true; TA.n = L.length; TA.done = 0; settingsDraw();
     await Promise.all(L.map(async ([k, i, e]) => { let r; try { r = await api("/api/settings/test", { kind: k, cfg: e }); } catch (x) { r = { ok: false, msg: String(x.message || x) }; }
@@ -1587,7 +1715,39 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     TA.busy = false; settingsDraw();
   }
   let AUTH = null, PWmsg = null;
-  async function settingsOpen() { if (!SC) { const r = await api("/api/settings"); SC = r.settings; SC.arrs = SC.arrs || []; SC.bazarr = SC.bazarr || []; SC._conf = r.configured; SC._root = r.media_root; SC._savedMs = SC.plex && SC.plex.url ? (SC.plex.kind || "plex") : null; SC._langs = r.languages || []; SC._hints = r.hints || {}; SC0 = null; setTimeout(() => { if (SC && !TA.busy) testAll(); }, 0); }
+  // ---- phone app (v0.4.0): pairing + paired phones ----
+  let DEV = [], PAIR = null, PAIRpoll = null, DEVmsg = null;
+  async function devLoad() { try { DEV = (await api("/api/devices", undefined, "main")).devices || []; } catch (e) { DEV = []; } if (SC) settingsDraw(); }
+  function phoneHtml() {
+    const pl = { ios: "iPhone / iPad", android: "Android", web: "Browser", test: "Test" };
+    const till = PAIR && PAIR.expires ? new Date(PAIR.expires).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";
+    const box = !PAIR ? "" : PAIR.ok
+      ? `<div class="pairbox" role="group" aria-label="Pairing code">${PAIR.qr}<div style="min-width:0;flex:1 1 220px"><p>Scan this with the Library Doctor app, or type the code:</p><p class="paircode">${esc(PAIR.code)}</p>
+         <p class="note">Server: ${esc(PAIR.server || location.origin)}<br>Works once, until ${esc(till)}. This page notices when the phone is paired.</p><div class="acts"><button class="b-line sm" id="pairCancel">Cancel</button></div></div></div>`
+      : `<div class="tres2 bad">${esc(PAIR.error || "Couldn't make a code.")}</div>`;
+    const rows = DEV.length ? `<table class="devl">${DEV.map(d => `<tr><td><b>${esc(d.name)}</b><br><small class="note">${esc(pl[d.platform] || "Phone")} · paired ${esc(fmt(d.created))} · last used ${esc(fmt(d.last_seen))}${d.push ? " · 🔔 notifications on" : ""}</small></td><td><button class="b-line sm" data-devrm="${d.id}" data-devn="${esc(d.name)}">Remove</button></td></tr>`).join("")}</table>`
+      : `<p class="note">No phones paired yet.</p>`;
+    return `<div class="app"><p class="help">The Library Doctor phone app is on its way (it isn't in the app stores yet). Pairing gives a phone its own key, so it never needs your password. A phone can see your cards and use the fix buttons, but it can't open Settings. Remove a phone here and its key stops working straight away.</p>
+      <p class="help">Phones that allow notifications get the same messages as your other notifications (nightly summary, app warnings). They're sent through Expo's push service and Apple or Google, so the message text passes through them. Switch them off in the app's menu.</p>
+      ${box}${DEVmsg ? `<div class="tres2 ${DEVmsg.ok ? "ok" : "bad"}">${esc(DEVmsg.msg)}</div>` : ""}${rows}
+      <div class="acts"><button class="b-teal sm" id="pairGo" ${PAIR && PAIR.ok ? "disabled" : ""}>Pair a phone</button></div></div>`;
+  }
+  function phoneWire() {
+    const go = $("pairGo"); if (go) go.onclick = async () => { go.disabled = true; DEVmsg = null;
+      try { PAIR = await api("/api/devices/pair", { origin: location.origin }, "main"); } catch (e) { PAIR = { ok: false, error: e.message }; }
+      settingsDraw(); clearInterval(PAIRpoll);
+      if (PAIR.ok) { const n0 = DEV.length, until = new Date(PAIR.expires).getTime();
+        PAIRpoll = setInterval(async () => {
+          if (Date.now() > until) { clearInterval(PAIRpoll); PAIR = null; DEVmsg = { ok: false, msg: "The code expired. Press Pair a phone for a new one." }; settingsDraw(); return; }
+          try { const d = (await api("/api/devices", undefined, "main")).devices || []; if (d.length > n0) { clearInterval(PAIRpoll); DEV = d; PAIR = null; DEVmsg = { ok: true, msg: "Paired: " + d[d.length - 1].name + "." }; settingsDraw(); } } catch (e) {}
+        }, 4000); } };
+    const ca = $("pairCancel"); if (ca) ca.onclick = () => { clearInterval(PAIRpoll); PAIR = null; settingsDraw(); };
+    document.querySelectorAll("[data-devrm]").forEach(b => b.onclick = async () => {
+      if (!confirm(`Remove ${b.dataset.devn}?\n\nIts key stops working straight away. You can pair it again any time.`)) return;
+      const r = await api("/api/devices/remove", { id: +b.dataset.devrm }, "main");
+      DEVmsg = r.ok ? { ok: true, msg: b.dataset.devn + " removed." } : { ok: false, msg: r.error || "Couldn't remove it." }; devLoad(); });
+  }
+  async function settingsOpen() { if (!SC) { const r = await api("/api/settings"); SC = r.settings; SC.arrs = SC.arrs || []; SC.bazarr = SC.bazarr || []; SC.servers = SC.servers || []; devLoad(); SC._conf = r.configured; SC._root = r.media_root; SC._savedMs = SC.plex && SC.plex.url ? (SC.plex.kind || "plex") : null; SC._langs = r.languages || []; SC._hints = r.hints || {}; SC._phone = !!r.phone_app; SC0 = null; setTimeout(() => { if (SC && !TA.busy) testAll(); }, 0); }
     try { AUTH = await api("/api/auth"); } catch (e) {} settingsDraw(); }
   function pwHtml() {
     if (!AUTH) return "";
@@ -1608,27 +1768,29 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     const arrNames = SC.arrs.map(a => a.name).filter(Boolean);
     const sel = (f, opts) => `<select data-f="${f}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(e[f] || "") === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
     let fields = "";
-    if (kind === "arrs") fields += `<label>Name<input data-f="name" value="${fv(e, "name")}" placeholder="Radarr 4K"></label><label>Type${sel("kind", [["radarr", "Radarr"], ["sonarr", "Sonarr"]])}</label>`;
+    if (kind === "arrs") fields += `<label>Name<input data-f="name" value="${fv(e, "name")}" placeholder="Radarr 4K"></label><label>Type${sel("kind", [["radarr", "Radarr"], ["sonarr", "Sonarr"]])}</label>`
+      + `<label>Fallback when nothing is found${sel("fallback", [["", "Off"], ["2160-480", "4K \u2192 1080p \u2192 720p \u2192 480p"], ["1080-480", "1080p \u2192 720p \u2192 480p"], ["2160-1080", "4K \u2192 1080p"]])}<small class="help">When a Replace finds nothing because only lower-quality copies exist, a button can move just that film or show to a profile that takes them as a last resort. The best quality stays preferred and upgrades later by itself.</small></label>`;
     if (kind === "bazarr") fields += `<label>Name<input data-f="name" value="${fv(e, "name")}" placeholder="Bazarr"></label>`;
+    if (kind === "servers") fields += `<label>Name<input data-f="name" value="${fv(e, "name")}" placeholder="${esc(MSN(e))}"></label><label>Type${sel("kind", [["plex", "Plex"], ["jellyfin", "Jellyfin"], ["emby", "Emby"]])}</label>`;
     if (A.fixedUrl) e.url = e.url || A.fixedUrl;
-    else fields += `<label>${A.urlLabel || "Address"}<input data-f="url" value="${fv(e, "url")}" placeholder="${kind === "plex" && (e.kind === "jellyfin" || e.kind === "emby") ? "http://192.168.1.10:8096" : A.url}" inputmode="url" autocomplete="off"></label>`;
+    else fields += `<label>${A.urlLabel || "Address"}<input data-f="url" value="${fv(e, "url")}" placeholder="${(kind === "plex" || kind === "servers") && (e.kind === "jellyfin" || e.kind === "emby") ? "http://192.168.1.10:8096" : A.url}" inputmode="url" autocomplete="off"></label>`;
     (A.extra || []).forEach(([f, l, ph]) => { fields += `<label>${l}<input data-f="${f}" value="${fv(e, f)}" placeholder="${esc(ph)}" autocomplete="off"></label>`; });
     if (A.tls) fields += `<label>Security${sel("tls", [["starttls", "STARTTLS (port 587)"], ["ssl", "SSL/TLS (port 465)"], ["none", "None (port 25)"]])}</label>`;
-    fields += `<label>${kind === "plex" && e.kind && e.kind !== "plex" ? MSN(e) + " API key" : sec[1]}<input data-f="${sec[0]}" type="password" autocomplete="new-password" value="${fv(e, sec[0])}" placeholder="${e[sec[0] + "_set"] ? "Saved. Leave empty to keep it" : ""}"></label>`;
+    fields += `<label>${(kind === "plex" || kind === "servers") && e.kind && e.kind !== "plex" ? MSN(e) + " API key" : sec[1]}<input data-f="${sec[0]}" type="password" autocomplete="new-password" value="${fv(e, sec[0])}" placeholder="${e[sec[0] + "_set"] ? "Saved. Leave empty to keep it" : ""}"></label>`;
     if (A.secret2) { const s2 = A.secret2; fields += `<label>${s2[1]}<input data-f="${s2[0]}" type="password" autocomplete="new-password" value="${fv(e, s2[0])}" placeholder="${e[s2[0] + "_set"] ? "Saved. Leave empty to keep it" : ""}"></label>`; }   // v0.2.3 Jackett: API key + admin password
     if (kind === "gotify") fields += `<label>Link in the message (optional)<input data-f="click" value="${fv(e, "click")}" placeholder="https://librarydoctor.example.com"></label>`;
-    else if (kind === "plex" && e.kind && e.kind !== "plex") fields += `<label>Address in your browser (optional)<input data-f="public" value="${fv(e, "public")}" placeholder="for the Open in ${MSN(e)} buttons"></label>`;
-    else if (kind !== "plex" && !A.notify) fields += `<label>Address in your browser (optional)<input data-f="public" value="${fv(e, "public")}" placeholder="for the Open in ${esc(A.t.split(" ")[0])} buttons"></label>`;
+    else if ((kind === "plex" || kind === "servers") && e.kind && e.kind !== "plex") fields += `<label>Address in your browser (optional)<input data-f="public" value="${fv(e, "public")}" placeholder="for the Open in ${MSN(e)} buttons"></label>`;
+    else if (kind !== "plex" && kind !== "servers" && !A.notify) fields += `<label>Address in your browser (optional)<input data-f="public" value="${fv(e, "public")}" placeholder="for the Open in ${esc(A.t.split(" ")[0])} buttons"></label>`;
     if (kind === "bazarr") fields += `<label>Its Radarr${sel("radarr", [["", "None"]].concat(arrNames.map(n => [n, n])))}</label><label>Its Sonarr${sel("sonarr", [["", "None"]].concat(arrNames.map(n => [n, n])))}</label>`;
     const ps = e.paths || [], nm = esc(e.name || (kind === "arrs" ? (e.kind === "sonarr" ? "Sonarr" : "Radarr") : kind === "plex" ? MSN(e) : A.t));
     const pm = A.files ? `<div class="pm"><span class="ph">Folders</span>${ps.length ? ps.map((m, j) => `<div class="pr"><input data-p="${j}" data-pf="from" value="${esc(m.from)}" placeholder="${esc(kind === "plex" ? "/data" : "/movies")}" aria-label="Folder in ${nm}"><span>→</span><input data-p="${j}" data-pf="to" value="${esc(m.to)}" placeholder="${esc(SC._root)}" aria-label="Same folder in Library Doctor"><button class="b-line sm" data-prm="${j}">Remove</button></div>`).join("") + `<p>Left: the folder as ${nm} sees it. Right: the same folder in Library Doctor.</p>`
       : `<p>Same folders as Library Doctor (nothing to change). If ${nm} sees your media somewhere else, press Detect folders.</p>`}<div class="acts"><button class="b-line sm" data-det="1">Detect folders</button><button class="b-line sm" data-padd="1">Add by hand</button></div></div>` : "";
-    const title = esc(kind === "arrs" || kind === "bazarr" ? (e.name || (kind === "arrs" ? (e.kind === "sonarr" ? "Sonarr" : "Radarr") : "Bazarr")) : kind === "plex" ? MSN(e) : A.t), [dot, stx] = entStatus(kind, i, e), di = i == null ? "" : `data-i="${i}"`;
+    const title = esc(kind === "servers" ? (e.name || MSN(e)) : kind === "arrs" || kind === "bazarr" ? (e.name || (kind === "arrs" ? (e.kind === "sonarr" ? "Sonarr" : "Radarr") : "Bazarr")) : kind === "plex" ? MSN(e) : A.t), [dot, stx] = entStatus(kind, i, e), di = i == null ? "" : `data-i="${i}"`;
     const kindTag = kind === "arrs" && e.name && !new RegExp(e.kind || "radarr", "i").test(e.name) ? ` <span class="opt">${e.kind === "sonarr" ? "Sonarr" : "Radarr"}</span>` : "";
     if (!isOpen(kind, i, e)) return `<div class="app row" data-kind="${kind}" ${di}><span class="dot ${dot}" title="${esc(stx)}"></span>${logoImg(kind, e)}<div class="rowt"><b class="nm">${title}</b>${kindTag}<span class="rmeta">${esc(tr && tr.ok && tr.msg && dot === "ok" ? tr.msg.replace(/\.$/, "") : stx)} · ${esc(hostOf(e, A))}</span></div>
       <div class="acts"><button class="b-line sm" data-test="1">Test</button><button class="b-line sm" data-edit="1">Edit</button></div></div>`;
     return `<div class="app" data-kind="${kind}" ${di}><h3><span class="dot ${dot}" title="${esc(stx)}"></span>${logoImg(kind, e)}<span class="nm">${title}</span>${kindTag}${A.need ? "" : '<span class="opt">Optional</span>'}<span class="hst">${esc(stx)}</span></h3>
-      ${i == null || i === 0 ? `<p class="help">${kind === "plex" ? MSHELP[e.kind || "plex"] || A.help : A.help}</p>` : ""}<div class="fl">${fields}</div>${pm}
+      ${i == null || i === 0 ? `<p class="help">${kind === "plex" ? MSHELP[e.kind || "plex"] || A.help : A.help}</p>` : ""}${kind === "servers" && e.kind && e.kind !== "plex" ? `<p class="help">${MSHELP[e.kind]}</p>` : ""}<div class="fl">${fields}</div>${pm}
       ${tr ? `<div class="tres2 ${tr.ok ? "ok" : "bad"}">${esc(tr.msg)}</div>` : ""}
       <div class="acts"><button class="b-teal sm" data-test="1">Test</button>${(e.url || A.fixedUrl) && !(tr && !tr.ok) ? `<button class="b-line sm" data-close="1">Done</button>` : ""}${A.need && !A.list ? "" : `<button class="b-line sm" data-rm="1">Remove</button>`}</div></div>`;
   }
@@ -1645,9 +1807,11 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     const msk = SC.plex.kind || "plex";
     const pick = `<div class="mspick" role="group" aria-label="Your media server">${[["plex", "Plex"], ["jellyfin", "Jellyfin"], ["emby", "Emby"]].map(([k, t]) =>
       `<button type="button" data-ms="${k}" aria-pressed="${msk === k}">${ico("plex", { kind: k })}${t}</button>`).join("")}</div>`;
-    const msWarn = SC._savedMs && SC.plex.url !== undefined && msk !== SC._savedMs ? `<div class="start" role="status"><b>Switching from ${MSN({ kind: SC._savedMs })} to ${MSN(SC.plex)}.</b> Library Doctor checks one media server at a time, so saving replaces your ${MSN({ kind: SC._savedMs })} settings. Click ${MSN({ kind: SC._savedMs })} above to go back without changing anything.</div>` : "";
-    body += sec("media", "Media server", "pick the one you use (one at a time)", pick + msWarn + `<div class="appgrid">${entryHtml("plex", SC.plex, null)}</div>`,
+    const msWarn = SC._savedMs && SC.plex.url !== undefined && msk !== SC._savedMs ? `<div class="start" role="status"><b>Switching from ${MSN({ kind: SC._savedMs })} to ${MSN(SC.plex)}.</b> Saving replaces your ${MSN({ kind: SC._savedMs })} settings. To check both, click ${MSN({ kind: SC._savedMs })} above and add ${MSN(SC.plex)} under More media servers instead.</div>` : "";
+    body += sec("media", "Media server", "your main server", pick + msWarn + `<div class="appgrid">${entryHtml("plex", SC.plex, null)}</div>`,
       `<button class="b-line sm" id="testAll" ${TA.busy ? "disabled" : ""}>${TA.busy ? `Testing ${TA.done} of ${TA.n}…` : "Test all apps"}</button>`);
+    body += sec("servers", "More media servers", "check several at once", (SC.servers.length ? `<div class="appgrid">${SC.servers.map((e, i) => entryHtml("servers", e, i)).join("")}</div>` : `<p class="note">Optional. Add another Plex, Jellyfin or Emby and Library Doctor checks it too, with its own cards, history, trash and score. Pick which one you're looking at at the top of the page, or see them all side by side.</p>`)
+      + `<div class="acts"><button class="b-line" data-add="servers">+ Add another media server</button></div>`);
     const arrCards = SC.arrs.map((e, i) => entryHtml("arrs", e, i)).concat(SC.lidarr ? [entryHtml("lidarr", SC.lidarr, null)] : [], SC.sportarr ? [entryHtml("sportarr", SC.sportarr, null)] : []);
     body += sec("arrs", "Radarr, Sonarr, Lidarr &amp; Sportarr", "the apps that manage your films, shows, music and sport", (arrCards.length ? `<div class="appgrid">${arrCards.join("")}</div>` : `<p class="note">Optional. Without Radarr or Sonarr, Library Doctor still finds missing, duplicate, broken and virus files, metadata problems and space hogs, but it can't replace or search for files, and it doesn't check audio language, cut-short files, subtitles, missing episodes or stuck downloads.</p>`) +
       `<div class="acts"><button class="b-line" data-add="arrs:radarr">${ico("radarr", null).replace('18" height="18"', '16" height="16"')}+ Add Radarr</button><button class="b-line" data-add="arrs:sonarr">${ico("sonarr", null).replace('18" height="18"', '16" height="16"')}+ Add Sonarr</button>${SC.sportarr ? "" : `<button class="b-line" data-add="sportarr">${ico("sportarr", null).replace('18" height="18"', '16" height="16"')}+ Sportarr</button>`}${SC.lidarr ? "" : `<button class="b-line" data-add="lidarr">${ico("lidarr", null).replace('18" height="18"', '16" height="16"')}+ Lidarr</button>`}</div>`);
@@ -1699,25 +1863,27 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     body += sec("general", "General", "", `<div class="app gen"><div class="genf">
       <label>Automatic scan time<input type="time" id="schTime" value="${SCH.hour < 0 ? "" : String(SCH.hour).padStart(2, "0") + ":" + String(SCH.minute).padStart(2, "0")}"><small>Empty = no automatic scan. Pick a quiet time.</small></label>
       <label>Messages<select id="dgSel"><option value="news" ${DG === "news" ? "selected" : ""}>When there's news</option><option value="weekly" ${DG === "weekly" ? "selected" : ""}>Weekly (Sunday) + urgent</option><option value="both" ${DG === "both" ? "selected" : ""}>Both</option></select><small>Goes to every notification above.</small></label>
+      <label>Library Doctor's address<input id="auSel" type="url" inputmode="url" value="${esc(SC.app_url || "")}" placeholder="https://librarydoctor.example.com"><small>Optional. Messages then open the right page. Use the address you open on your phone.</small></label>
       <label>Keep files in the trash for<select id="tdSel">${[3, 7, 14, 30].map(n => `<option value="${n}" ${TD === n ? "selected" : ""}>${n} days</option>`).join("")}</select><small>Then deleted for good (warning the day before).</small></label>
       <label>Your audio language<select id="langSel"><option value="" ${SC.language === "" ? "selected" : ""}>Off (don't check)</option>${LG.map(l => `<option ${SC.language === l ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small>Flags dubbed copies of films made in this language.</small></label></div>
       <div class="days" role="group" aria-label="Scan days"><span class="note">Scan on</span>${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => `<label class="day"><input type="checkbox" data-day="${i}" ${SCH.days.includes(i) ? "checked" : ""}> ${d}</label>`).join("")}</div></div>`);
     body += sec("backup", "Backup", "", `<div class="app"><p class="help">Download everything on this page as a file, to move Library Doctor to another server or keep a copy. Without keys, restoring keeps the keys already saved here (on a new server you type them in again). With keys, the file is encrypted with a passphrase you choose; don't lose it. The login password is never in the file.</p>
       <div class="fl"><label>Passphrase (10+ characters, for a file with keys)<input type="password" id="bkPass" autocomplete="new-password"></label></div>
       <div class="acts"><a class="b-line" href="/api/settings/export" download id="bkExport">Download without API keys</a><button class="b-line" id="bkEnc">Download with API keys (encrypted)</button><label class="b-line" style="cursor:pointer">Restore from a file<input type="file" id="bkImport" accept=".json,application/json" hidden></label></div>${SC._imp ? `<div class="tres2 ${SC._imp.ok ? "ok" : "bad"}">${esc(SC._imp.msg)}</div>` : ""}</div>`);
+    if (SC._phone) body += sec("phone", "Phone app", "pair a phone", phoneHtml());   // v0.4.0: hidden until the app is in the stores (LD_PHONE_APP=1)
     const pw = pwHtml(); if (pw) body += sec("login", "Login", "", pw);
     body += `<div class="savebar"><button class="b-teal" id="setSave" ${SCbusy ? "disabled" : ""}>${SCbusy ? "Saving…" : "Save settings"}</button><button class="b-line" id="setUndo">Undo changes</button><span class="dirty" id="setDirty"></span>${SCmsg ? `<div class="tres2 ${SCmsg.ok ? "ok" : "bad"}">${esc(SCmsg.msg)}</div>` : ""}</div>`;
-    const NAV = [["folders", "Folder check", fcBadge()], ["media", "Media server", stBadge(["plex"])], ["arrs", "Radarr, Sonarr, Lidarr & Sportarr", stBadge(SC.arrs.map((_, i) => "arrs:" + i).concat(SC.sportarr ? ["sportarr"] : []))], ["indexers", "Indexers", stBadge(IDX.filter(k => SC[k]))], ["dl", "Download clients", stBadge(DL.filter(k => SC[k]))], ["optional", "Optional apps", stBadge(SC.bazarr.map((_, i) => "bazarr:" + i).concat(OPT.filter(k => SC[k])))],
-      ["notify", "Notifications", nl.length ? `<i class="nb">${nl.length}</i>` : ""], ["deep", "Quick & deep check", SC.deep && (SC.deep.crawl || SC.deep.imports || SC.deep.quick_nightly) ? '<i class="nb">on</i>' : ""], ["general", "General", ""], ["backup", "Backup", ""]].concat(pw ? [["login", "Login", ""]] : []);
-    el.innerHTML = top + `<div class="setl"><nav class="setnav" aria-label="Settings sections">${NAV.map(([id, t, b]) => `<button data-go="${id}" class="${SECON === id ? "on" : ""}">${t}${b}</button>`).join("")}</nav><div class="setc">${body}</div></div>`;
+    const NAV = [["folders", "Folder check", fcBadge()], ["media", "Media server", stBadge(["plex"])], ["servers", "More media servers", SC.servers.length ? stBadge(SC.servers.map((_, i) => "servers:" + i)) : ""], ["arrs", "Radarr, Sonarr, Lidarr & Sportarr", stBadge(SC.arrs.map((_, i) => "arrs:" + i).concat(SC.sportarr ? ["sportarr"] : []))], ["indexers", "Indexers", stBadge(IDX.filter(k => SC[k]))], ["dl", "Download clients", stBadge(DL.filter(k => SC[k]))], ["optional", "Optional apps", stBadge(SC.bazarr.map((_, i) => "bazarr:" + i).concat(OPT.filter(k => SC[k])))],
+      ["notify", "Notifications", nl.length ? `<i class="nb">${nl.length}</i>` : ""], ["deep", "Quick & deep check", SC.deep && (SC.deep.crawl || SC.deep.imports || SC.deep.quick_nightly) ? '<i class="nb">on</i>' : ""], ["general", "General", ""], ["backup", "Backup", ""], ["phone", "Phone app", DEV.length ? `<i class="nb">${DEV.length}</i>` : ""]].concat(pw ? [["login", "Login", ""]] : []);
+    el.innerHTML = top + `<div class="setl"><nav class="setnav" aria-label="Settings sections">${NAV.filter(([id]) => id !== "phone" || SC._phone).map(([id, t, b]) => `<button data-go="${id}" class="${SECON === id ? "on" : ""}">${t}${b}</button>`).join("")}</nav><div class="setc">${body}</div></div>`;
     if (SC0 == null) SC0 = scSnap();
-    settingsWire(); updDirty(); navWatch();
+    settingsWire(); phoneWire(); updDirty(); navWatch();
     if (window.scrollY !== keepY) window.scrollTo(0, keepY);
   }
   function entryOf(node) { const a = node.closest(".app"), k = a.dataset.kind, i = a.dataset.i; return [k, i == null ? null : +i, i == null ? SC[k] : SC[k][+i]]; }
   function settingsWire() {
     const el = $("setView"), on = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
-    el.querySelectorAll("[data-f]").forEach(n => n.oninput = n.onchange = () => { const [k, i, e] = entryOf(n); e[n.dataset.f] = n.value; if (n.dataset.f === "name" || n.dataset.f === "kind") { const h = n.closest(".app").querySelector("h3"); const nm = h && h.querySelector(".nm"); if (nm && n.dataset.f === "name" && n.value) nm.textContent = n.value; } if (k === "plex" && n.dataset.f === "kind") { delete TR.plex; settingsDraw(); } updDirty(); });
+    el.querySelectorAll("[data-f]").forEach(n => n.oninput = n.onchange = () => { const [k, i, e] = entryOf(n); e[n.dataset.f] = n.value; if (n.dataset.f === "name" || n.dataset.f === "kind") { const h = n.closest(".app").querySelector("h3"); const nm = h && h.querySelector(".nm"); if (nm && n.dataset.f === "name" && n.value) nm.textContent = n.value; } if (k === "plex" && n.dataset.f === "kind") { delete TR.plex; settingsDraw(); } if (k === "servers" && n.dataset.f === "kind") { delete TR["servers:" + i]; settingsDraw(); } updDirty(); });
     el.querySelectorAll("[data-p]").forEach(n => n.oninput = () => { const [, , e] = entryOf(n); e.paths[+n.dataset.p][n.dataset.pf] = n.value; updDirty(); });
     el.querySelectorAll("[data-prm]").forEach(n => n.onclick = () => { const [, , e] = entryOf(n); e.paths.splice(+n.dataset.prm, 1); settingsDraw(); });
     el.querySelectorAll("[data-padd]").forEach(n => n.onclick = () => { const [, , e] = entryOf(n); (e.paths = e.paths || []).push({ from: "", to: SC._root }); settingsDraw(); });
@@ -1741,8 +1907,9 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
     });
     el.querySelectorAll("[data-add]").forEach(n => n.onclick = () => { const [k, sub] = n.dataset.add.split(":");
       if (k === "arrs") SC.arrs.push({ name: sub === "sonarr" ? (SC.arrs.some(a => a.name === "Sonarr") ? "Sonarr 2" : "Sonarr") : (SC.arrs.some(a => a.name === "Radarr") ? "Radarr 2" : "Radarr"), kind: sub, url: "", paths: [] });
+      else if (k === "servers") SC.servers.push({ name: "", kind: (SC.plex && SC.plex.kind === "jellyfin") ? "plex" : "jellyfin", url: "", public: "", paths: [] });
       else if (k === "bazarr") SC.bazarr.push({ name: SC.bazarr.length ? "Bazarr " + (SC.bazarr.length + 1) : "Bazarr", url: "", paths: [] });
-      else SC[k] = { url: APPS[k].fixedUrl || "", paths: [], ...(APPS[k].tls ? { tls: "starttls" } : {}) }; const ne = k === "arrs" ? SC.arrs[SC.arrs.length - 1] : k === "bazarr" ? SC.bazarr[SC.bazarr.length - 1] : SC[k]; if (ne) OPEN.add(ne); settingsDraw(); });
+      else SC[k] = { url: APPS[k].fixedUrl || "", paths: [], ...(APPS[k].tls ? { tls: "starttls" } : {}) }; const ne = k === "servers" ? SC.servers[SC.servers.length - 1] : k === "arrs" ? SC.arrs[SC.arrs.length - 1] : k === "bazarr" ? SC.bazarr[SC.bazarr.length - 1] : SC[k]; if (ne) OPEN.add(ne); settingsDraw(); });
     el.querySelectorAll("[data-test],[data-det]").forEach(n => n.onclick = async () => { const [k, i, e] = entryOf(n), det = !!n.dataset.det, key = k + (i == null ? "" : ":" + i);
       n.disabled = true; n.textContent = det ? "Looking…" : "Testing…";
       const r = await api(det ? "/api/settings/detect" : "/api/settings/test", { kind: k, cfg: e });
@@ -1752,6 +1919,7 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       if (a !== b) { PWmsg = { ok: false, msg: "The new passwords don't match." }; return settingsDraw(); }
       const r = await api("/api/auth/change", { old: o, new: a }); PWmsg = { ok: r.ok, msg: r.ok ? "Password changed. Other browsers are logged out." : r.msg }; settingsDraw(); });
     const lg = $("langSel"); if (lg) lg.onchange = () => { SC.language = lg.value; updDirty(); };
+    const au = $("auSel"); if (au) au.oninput = () => { SC.app_url = au.value.trim(); updDirty(); };
     const dg = $("dgSel"); if (dg) dg.onchange = () => { SC.digest = dg.value; updDirty(); };
     const be = $("bkEnc"); if (be) be.onclick = async () => { const pass = ($("bkPass") || {}).value || "";
       if (pass.length < 10) { SC._imp = { ok: false, msg: "Type a passphrase of at least 10 characters first." }; settingsDraw(); return; }
@@ -1784,28 +1952,81 @@ button, a.btn, a.b-line, label.b-line { transition:background-color .15s, border
       const msNow = SC.plex && SC.plex.url ? (SC.plex.kind || "plex") : null;      // v0.3.4 (#4): never replace a saved media server without asking
       if (SC._savedMs && msNow && msNow !== SC._savedMs) {
         const a = MSN({ kind: SC._savedMs }), b = MSN(SC.plex);
-        if (!confirm(`Replace your ${a} settings with ${b}?\n\nLibrary Doctor checks one media server at a time. After saving, ${a} is no longer checked and its address and token are removed from Library Doctor.`)) {
+        if (!confirm(`Replace your ${a} settings with ${b}?\n\nAfter saving, ${a} is no longer checked and its address and token are removed from Library Doctor. To check both, press Cancel and add ${b} under More media servers instead.`)) {
           SCmsg = { ok: false, msg: `Nothing saved. Your ${a} settings are unchanged; click ${a} under Media server to go back to them.` }; settingsDraw(); return; }
       }
       SCbusy = true; SCmsg = null; settingsDraw();
       const body = {}; for (const k of ["plex", "lidarr", "tautulli", "tracearr", "tdarr", "seerr", "sportarr", "prowlarr", "jackett", "qbit", "transmission", "sabnzbd", "nzbget", "gotify", "discord", "telegram", "ntfy", "webhook", "pushover", "email", "arrs", "bazarr", "schedule", "deep"]) if (SC[k]) body[k] = SC[k];
-      if (SC.trash_days) body.trash_days = SC.trash_days; if (SC.digest) body.digest = SC.digest;
+      if (SC.trash_days) body.trash_days = SC.trash_days; if (SC.digest) body.digest = SC.digest; if (SC.app_url != null) body.app_url = SC.app_url;
       if (SC.language != null) body.language = SC.language;
+      body.servers = SC.servers || [];
       const r = await api("/api/settings/save", { settings: body }); SCbusy = false;
+      if (r.ok) setTimeout(loadServers, 3000);
       if (r.ok) { SCmsg = { ok: true, msg: r.configured ? "Saved. Library Doctor is using the new settings now." : "Saved. Add your media server (Plex, Jellyfin or Emby) to start scanning." }; const keep = SCmsg; SC = null; await settingsOpen(); SCmsg = keep; settingsDraw(); load(); folderCheck(true); }
       else { SCmsg = { ok: false, msg: r.msg || r.error || "Couldn't save." }; settingsDraw(); } });
   }
   $("tabSet").onclick = () => setView("settings");
+  loadServers();
   api("/api/auth").then(a => { if (a && a.on) $("logout").hidden = false; }).catch(() => {});
   $("logout").onclick = async () => { await api("/api/logout", {}); location.href = "/login"; };
+  // ---------------- several media servers (v0.4.0) ----------------
+  function alsoIn(p) {
+    if (!p || SERVERS.length < 2) return "";
+    const me = CUR(), hit = SERVERS.filter(s => s.id !== me && (s.roots || []).some(r => p === r || p.startsWith(r.replace(/\/$/, "") + "/")));
+    return hit.length ? `<span class="alsoin" title="Moving this file to the trash takes it out of ${esc(hit.map(s => s.name).join(" and "))} too.">⚠ also in ${esc(hit.map(s => s.name).join(", "))}</span>` : "";
+  }
+  let srvPoll = null;
+  async function loadServers() {
+    let r; try { r = await api("/api/servers", undefined, "main"); } catch (e) { return; }
+    SERVERS = (r && r.servers) || [];
+    const sel = $("srvSel");
+    if (SERVERS.length < 2) { sel.hidden = true; $("srvName").hidden = true; if (SRV && SRV !== "main") { SRV = ""; S = null; load(); } SRV = ""; setView(view); return; }
+    if (!SRV || !(SRV === "all" || SERVERS.some(s => s.id === SRV))) { const was = SRV; SRV = "all"; if (was && was !== "main") { S = null; load(); } }
+    sel.innerHTML = `<option value="all">All servers</option>` + SERVERS.map(s => `<option value="${esc(s.id)}">${esc(s.name)}${s.main ? " (main)" : ""}</option>`).join("");
+    sel.value = SRV; sel.hidden = false;
+    const cur = SERVERS.find(s => s.id === CUR());
+    $("srvName").hidden = allMode() || !cur; if (cur) $("srvName").textContent = cur.name;
+    setView(view);
+    clearTimeout(srvPoll); srvPoll = setTimeout(loadServers, SERVERS.some(s => s.running) ? 5000 : 60000);
+  }
+  $("srvSel").onchange = () => {
+    SRV = $("srvSel").value; try { localStorage.setItem("ld_srv", SRV); } catch (e) {}
+    S = null; Object.keys(overrides).forEach(k => delete overrides[k]); filter = null;
+    loadServers(); load();
+  };
+  function renderAll() {
+    const el = $("allView"); if (!el) return;
+    const ok = SERVERS.filter(s => s.score && s.last_scan), files = ok.reduce((a, s) => a + ((s.last_scan || {}).files || 0), 0);
+    const avg = files ? ok.reduce((a, s) => a + s.score.overall * ((s.last_scan || {}).files || 0), 0) / files : null;
+    const C = 2 * Math.PI * 50;
+    const cardOf = s => {
+      const sc = s.score && s.score.overall != null ? s.score.overall : null, ls = s.last_scan || {};
+      const low = s.score && s.score.areas ? s.score.areas.slice().sort((a, b) => a.score - b.score).filter(a => a.score < 100).slice(0, 3) : [];
+      return `<div class="srvc"><div class="srvh">${logoImg("plex", { kind: s.kind })}<b>${esc(s.name)}</b><span class="opt">${MSN({ kind: s.kind })}${s.main ? " · main" : ""}</span></div>
+        ${s.error ? `<p class="err">${s.error === "starting" ? "Starting… this takes a few seconds." : "Not running (" + esc(s.error) + ")."}</p>` : `
+        <div class="srvb"><div class="ring sm" aria-hidden="true"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--orange)" stroke-width="12"/><circle cx="60" cy="60" r="50" fill="none" stroke="var(--teal)" stroke-width="12" stroke-linecap="round" stroke-dasharray="${sc == null ? 0 : (C * sc / 100).toFixed(1)} 999" transform="rotate(-90 60 60)"/></svg><b>${sc == null ? "–" : Math.floor(sc)}</b></div>
+          <ul class="srvl"><li><b>${fmtN(s.open)}</b> to look at</li><li><b>${fmtN(ls.items)}</b> items · <b>${fmtN(ls.files)}</b> files</li><li>${ls.finished ? "Last scan " + esc(fmt(ls.finished)) : "Not scanned yet"}</li>${s.trash && s.trash.count ? `<li><b>${s.trash.count}</b> in the trash (${human(s.trash.size)})</li>` : ""}</ul></div>
+        ${low.length ? `<div class="srvar">${low.map(a => `<span>${esc(a.label)} ${Math.floor(a.score)}</span>`).join("")}</div>` : ""}
+        ${s.running ? `<div class="bar"><i style="width:${Math.round((s.progress || 0) * 100)}%"></i></div><small class="note">${esc(s.step || "Scanning")}…</small>` : ""}`}
+        <div class="acts"><button class="b-teal sm" data-srvopen="${esc(s.id)}">Open</button><button class="b-line sm" data-srvscan="${esc(s.id)}" ${s.running || s.error ? "disabled" : ""}>${s.running ? "Scanning…" : "Scan now"}</button></div></div>`;
+    };
+    el.innerHTML = `<div class="panel"><div class="h"><h2>All servers${avg == null ? "" : ` <small>${Math.floor(avg)}% healthy overall</small>`}</h2><div class="acts"><button class="b-teal" id="allScan" ${SERVERS.some(s => s.running) ? "disabled" : ""}>Scan all</button></div></div>
+      <p class="note">Each server has its own cards, scan history, trash and score. Checks about the whole setup (App Health, downloads, viruses, subtitles, missing episodes, the deep check) run once, for ${esc((SERVERS[0] || {}).name || "the main server")}. Files both servers list are only shown once, on the main server.</p>
+      <div class="srvgrid">${SERVERS.map(cardOf).join("")}</div></div>`;
+    el.querySelectorAll("[data-srvopen]").forEach(b => b.onclick = () => { $("srvSel").value = b.dataset.srvopen; $("srvSel").onchange(); });
+    el.querySelectorAll("[data-srvscan]").forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = "Starting…"; try { await api("/api/scan", {}, b.dataset.srvscan); } catch (e) {} setTimeout(loadServers, 1500); });
+    const sa = $("allScan"); if (sa) sa.onclick = async () => { sa.disabled = true; sa.textContent = "Starting…";
+      for (const s of SERVERS) { if (s.error) continue; try { await api("/api/scan", {}, s.id); } catch (e) {} }
+      setTimeout(loadServers, 1500); };
+  }
   async function load() {
-    try { S = await api("/api/state"); if (S && S.configured === false && view === "scan" && !load.sent) { load.sent = true; setView("settings"); } render(); }
+    try { S = await api("/api/state"); if (S && S.configured === false && view === "scan" && !load.sent) { load.sent = true; setView("settings"); } render(); jumpNow(); }
     catch (e) { $("last").textContent = "Can't reach Library Doctor: " + e.message; }
     const checking = S && (S.done || []).some(x => x.status === "checking");
     const deepOn = S && S.deep && (S.deep.cur || S.deep.queue) && filter === "health";
     clearTimeout(poll); poll = setTimeout(load, S && (S.running || checking) ? 1500 : deepOn ? 5000 : 30000);
   }
-  if (location.hash === "#trash") setView("trash"); else if (location.hash === "#settings") setView("settings"); else if (location.hash === "#analysis") setView("analysis");
+  if (location.hash) fromHash();
   $("rSpace").onclick = () => { filter = "quality"; render(); $("checks").scrollIntoView({ behavior: "smooth", block: "start" }); };
   $("rJobs").onclick = () => {     // first check (in tile order) that still has a job; Unwatched isn't a job
     const open = S ? S.issues.filter(i => !i.ignored && i.chk !== "unwatched") : [];
@@ -1847,8 +2068,32 @@ function ldEyes(root) {
     };
   });
 }
+// v0.3.6: on phones "Open in Plex" goes to the Plex app; the normal link stays beside it as "Open in browser"
+(function () {
+  if (!matchMedia("(max-width:720px) and (pointer:coarse)").matches) return;
+  const known = {}, asked = {}; let t = 0;
+  const app = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+  const rk = a => { try { return new URL(a.href, location.href).searchParams.get("rk"); } catch (e) { return null; } };
+  function apply() {
+    const want = new Set();
+    document.querySelectorAll('a[href^="/api/plex-open?"]:not([data-pa])').forEach(a => {
+      const id = rk(a); if (!id) return;
+      if (!known[id]) { if (!asked[id]) want.add(id); return; }
+      const b = a.cloneNode(true); b.textContent = "Open in browser"; b.dataset.pa = a.dataset.pa = "1";
+      a.href = known[id]; if (app) a.removeAttribute("target"); a.after(b);   // in a browser keep the new tab, so closing Plex's page leaves Library Doctor open
+    });
+    const ids = [...want].slice(0, 60); if (!ids.length) return;
+    ids.forEach(i => asked[i] = 1);
+    fetch("/api/plex-app?ids=" + ids.join(","), { cache: "no-store", headers: { "X-LD-Server": CUR() } }).then(r => r.ok ? r.json() : null).then(j => {
+      for (const [k, v] of Object.entries((j && j.urls) || {})) if (/^https:\/\/watch\.plex\.tv\//.test(v)) known[k] = v;
+      apply(); }).catch(() => {});
+  }
+  new MutationObserver(() => { clearTimeout(t); t = setTimeout(apply, 150); }).observe(document.body, { childList: true, subtree: true });
+  apply();
+})();
 ldEyes(document);
 new MutationObserver(() => ldEyes(document)).observe(document.body, { childList: true, subtree: true });
 </script>
+<!--pwa--><script>if ("serviceWorker" in navigator && isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});</script><!--/pwa-->
 </body>
 </html>

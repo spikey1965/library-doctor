@@ -1,6 +1,9 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cmask id='ldp' maskUnits='userSpaceOnUse' x='0' y='0' width='64' height='64'%3E%3Crect width='64' height='64' fill='%23fff'/%3E%3Cpath d='M-2 38h14.8l8.1-9.5 6.9 22.7 8.1-18.6 4.7 5.4H66' fill='none' stroke='%23000' stroke-width='4.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/mask%3E%3Cg mask='url%28%23ldp%29'%3E%3Crect x='4' y='11.4' width='12.3' height='46' rx='4.6' fill='%232bc6b4'/%3E%3Crect x='18.6' y='18.8' width='12.3' height='38.6' rx='4.6' fill='%232bc6b4'/%3E%3Crect x='33.2' y='6.5' width='12.3' height='50.9' rx='4.6' fill='%232bc6b4'/%3E%3Crect x='47.7' y='23.6' width='12.3' height='33.8' rx='4.6' fill='%23ff8b3d'/%3E%3C/g%3E%3C/svg%3E">
+<!--pwa--><link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials"><link rel="apple-touch-icon" href="/pwa/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Library Doctor">
+<meta name="theme-color" content="#0d1830" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#f3f6fb" media="(prefers-color-scheme: light)"><!--/pwa-->
 <title>Library Doctor</title><meta name="robots" content="noindex">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;800&display=swap">
 <style>
@@ -58,7 +61,7 @@ ldEyes(document);
   const $ = id => document.getElementById(id);
   let setup = false;
   try { const a = await (await fetch("/api/auth", { cache: "no-store" })).json();
-    if (a.in) { location.replace("/"); return; }
+    if (a.in) { location.replace(/^#[a-z-]{1,30}$/.test(location.hash) ? "/?in=1" + location.hash : "/");   /* ?in=1: the login page lives at / too, so a new # alone would not reload */ return; }
     setup = a.on && !a.has_password; } catch (e) {}
   if (setup) {
     $("h").textContent = "Create a password"; $("sub").textContent = "This protects Library Doctor, because it can move files. Use at least 10 characters.";
@@ -72,11 +75,12 @@ ldEyes(document);
     try {
       const r = await fetch(setup ? "/api/auth/setup" : "/api/login", { method: "POST", headers: { "Content-Type": "application/json", "X-LD": "1" }, body: JSON.stringify({ password: $("pw").value }) });
       const j = await r.json();
-      if (j.ok) { location.replace("/"); return; }
+      if (j.ok) { location.replace(/^#[a-z-]{1,30}$/.test(location.hash) ? "/?in=1" + location.hash : "/");   /* ?in=1: the login page lives at / too, so a new # alone would not reload */ return; }
       m.textContent = j.msg || "That didn't work."; m.hidden = false;
     } catch (e) { m.textContent = "Can't reach Library Doctor."; m.hidden = false; }
     $("go").disabled = false;
   };
 })();
 </script>
+<!--pwa--><script>if ("serviceWorker" in navigator && isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});</script><!--/pwa-->
 </body></html>

@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.4.0 (beta)
+
+This release also includes everything planned for 0.3.5 and 0.3.6.
+
+### Several media servers
+
+- **Several media servers at once** ([#5](https://github.com/spikey1965/library-doctor/issues/5)). Add more Plex, Jellyfin or Emby servers under **Settings → More media servers**. Each one gets its own cards, scan history, trash list and health score, and the libraries don't have to be the same.
+  - **Server picker** at the top of the page: **All servers** shows each server side by side (health, cards to look at, items, last scan, Scan now / Scan all); pick one to see its usual pages.
+  - Checks about your whole setup (App Health, downloads, viruses, subtitles, missing episodes, the quick test and deep check) run once, for your main server. A file both servers list is shown once, on the main server.
+  - A copy that would go to the trash says **⚠ also in &lt;server&gt;** when another server lists it too.
+  - Extra servers are scanned automatically right after the main nightly scan, one at a time. Works without Radarr or Sonarr.
+  - Tautulli is only used for the main Plex server; Tracearr works for every server.
+- **Jellyfin and Emby right after adding a library:** files the server hasn't measured yet (no length) were reported as broken. Library Doctor now measures them itself (up to 200 a scan) and only reports files that really are broken.
+- **An Ignore counts on every server.** Ignore a card on one server and the same card is hidden on the others: matched by the file, or by the Radarr/Sonarr item for a whole show or film. Each server's own Ignores still work as before.
+- **Jellyfin and Emby: widescreen films are measured properly.** The resolution used to come from the picture height only, so a 1920×800 film counted as 720p and got "far bigger than usual" quality cards. Width counts too now, the way Plex does it (1920×800 is 1080p, 1280×576 is 720p).
+- **Jellyfin and Emby: two poster fixes.** Jellyfin and Emby have no poster picker like Plex, and for many seasons there are no posters online, so Refresh couldn't help.
+  - Blank season posters: **Use the show's poster** puts the show's own poster on those seasons (what Plex shows anyway). With more than one show there's a button for all of them.
+  - No poster at all: **Copy poster from &lt;main server&gt;** takes the poster your main Plex server has for it, matched by its TMDB, TVDB or IMDb id (or exact title and year).
+
+### Learns what you ignore (planned as 0.3.5)
+
+- **Learns what you ignore.** Each Ignore now remembers what kind of card it was. After you ignore 3 cards of the same kind in the same library (for example "Big files in TV"), Library Doctor asks: *Hide cards like these from now on?* Nothing is hidden unless you say yes. Rules are listed under **Learned from your Ignores** with Show them again / Hide them / Forget. "Show this one" brings a single card back. Damaged files, missing files, viruses, download and app warnings are never hidden by a rule. On first start it learns from the Ignores you already made. `LD_LEARN_AFTER` changes the count (default 3).
+
+### Phones (planned as 0.3.6)
+
+- **Phone layout.** On phones the four tabs sit along the bottom, the header is one line and buttons are finger-sized. Wider screens are unchanged.
+- **Home screen app.** Add Library Doctor to your phone's home screen and it opens full screen with its own icon. Over HTTPS it also shows a clear page when your server can't be reached. Only that page and its icon are stored on the phone, never your library. Over plain http it's an icon only.
+- **Open in Plex on phones** opens the film, show or episode in the Plex app (through Plex's public watch.plex.tv site, so Plex sees which title you opened). "Open in browser" beside it is the old link. Computers, Jellyfin, Emby and titles Plex hasn't matched are unchanged.
+- **Notifications can open the right page.** Set **Settings → General → Library Doctor's address**. A link you already set for Gotify is kept.
+- Links to Settings and Analysis no longer land on Scan, and a link opened while logged out still goes to its page after you log in.
+
+### Replace and downloads
+
+- **Quality fallback, per Radarr/Sonarr.** Each Radarr and Sonarr in Settings gets **Fallback when nothing is found** (Off, 4K → 1080p → 720p → 480p, 1080p → 720p → 480p, or 4K → 1080p). When a Replace has found nothing for 2 hours, Library Doctor looks once at what's on offer and tells you if copies exist but your quality profile turned them all down ("Only 480p copies exist"). **Allow lower quality as a last resort** then moves just that film or show to a "Library Doctor fallback" profile, copied from its own (custom formats kept, upgrades on), and searches. A show with other missing episodes asks first.
+- **Replace keeps looking.** Replace makes sure the film or episode is monitored before it searches, so Radarr/Sonarr keep trying after the first search (a show that isn't monitored isn't switched on; the note says so). After the follow-up days with nothing found, the row says it's left monitored instead of showing a warning, and turns into ✓ when a copy arrives.
+- **Replace answers straight away.** A pressed card shows "Replacing…" (kept across reloads for a few minutes), so it isn't pressed twice while the media server is busy.
+- **"Turn it off" works for indexers that come from Prowlarr.** With Prowlarr's Full Sync, switching an indexer off in Radarr/Sonarr didn't last: Prowlarr put it back at the next sync. Library Doctor now does it in Prowlarr with a tag, so only that app stops getting that indexer. If the app already uses tags in a way it can't safely change, the card explains how to do it by hand.
+- **Indexer cards:** an indexer that works again (no failure in the last 24 hours) no longer gets a "keeps failing" card; one that failed recently but works now says so.
+
+### Media server
+
+- **Refresh Plex** on "Plex lists a file that isn't on the disk" cards (for example after Tdarr renamed h264 to h265 while Plex was busy): rescans that one folder and clears the card when the old file is gone.
+- **Safer Plex backups.** If Plex makes its own automatic backup, the backup reminder before bulk clean-ups doesn't appear. A Plex backup that's already running isn't started twice, and bulk clean-ups wait (with a clear message) while one runs or Plex isn't answering. A hung Plex backup once left Plex answering errors for hours.
+- **Fix:** the hourly follow-up could run twice at once, logging every "New copy arrived" twice.
+
+### Under the hood
+
+- Groundwork for the coming Library Doctor phone app (pairing with a QR code, notifications on the phone). It stays hidden until the app is in the stores.
+
 ## 0.3.4 (beta)
 
 - **Naming check (new, under Metadata gaps).** Finds file names that no longer match your Radarr/Sonarr naming format, using Radarr's and Sonarr's own rename preview: a title or year that changed, episodes still called "Episode 1" when Sonarr knows the real title, or a temporary name Tdarr left behind. **Rename** asks Radarr/Sonarr to rename them with your own format (subtitles and other side files move too), then refreshes that folder in Plex, so watch history is kept.
